@@ -124,8 +124,7 @@ def save_state(devices, dry_run=False):
             print(f"warning: no status response from {ip}", file=sys.stderr)
 
     if not states:
-        print("warning: no device answered devStatus; state not saved", file=sys.stderr)
-        return
+        print("warning: no device answered devStatus; writing empty marker", file=sys.stderr)
 
     with open(signal_path, "w") as f:
         json.dump(states, f, indent=2)
@@ -206,7 +205,7 @@ def restore_state(devices, default_cfg=None, dry_run=False):
     """Restore saved state. Returns True if state was restored, False if none."""
     saved = load_saved_state()
 
-    if saved:
+    if saved is not None:
         # Build a map of saved states by IP
         saved_by_ip = {s["ip"]: s for s in saved}
 
@@ -266,13 +265,7 @@ def cmd_needs_input(args):
     signal_cfg = get_signal_config(cfg)
     signal_path = arbiter.signal_file()
 
-    # Fast path: if state already saved, just set the signal colour
-    if signal_path.exists() and not args.dry_run:
-        set_signal_color(devices, signal_cfg, dry_run=args.dry_run)
-        print("signal set")
-        return
-
-    # Acquire lock before saving state
+    # Always acquire lock before saving state (race condition fix)
     if not acquire_lock(dry_run=args.dry_run):
         # Lock timed out, still set the signal colour
         set_signal_color(devices, signal_cfg, dry_run=args.dry_run)

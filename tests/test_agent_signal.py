@@ -190,10 +190,10 @@ class TestSignalNeedsInput(StateDirMixin, unittest.TestCase):
     @mock.patch("agent_signal.govee.turn")
     @mock.patch("agent_signal.govee.brightness")
     @mock.patch("agent_signal.govee.color")
-    def test_needs_input_all_status_none_no_file_saved(
+    def test_needs_input_all_status_none_writes_empty_marker(
         self, mock_color, mock_brightness, mock_turn, mock_status
     ):
-        """needs-input where all devices return None: no file saved, signal still sent."""
+        """needs-input where all devices return None: writes [] marker, signal still sent."""
         # With retry logic, each device gets 3 attempts
         mock_status.side_effect = [None, None, None, None, None, None]
 
@@ -204,8 +204,10 @@ class TestSignalNeedsInput(StateDirMixin, unittest.TestCase):
 
         agent_signal.cmd_needs_input(args)
 
-        # No saved state file should exist
-        self.assertFalse(arbiter.signal_file().exists())
+        # Saved state file should exist with empty array
+        self.assertTrue(arbiter.signal_file().exists())
+        saved = json.loads(arbiter.signal_file().read_text())
+        self.assertEqual(saved, [])
 
         # Signal colour should still be set
         self.assertEqual(mock_color.call_count, 2)
@@ -371,12 +373,16 @@ class TestSignalClear(StateDirMixin, unittest.TestCase):
     @mock.patch("agent_signal.govee.turn")
     @mock.patch("agent_signal.govee.brightness")
     @mock.patch("agent_signal.govee.color")
-    def test_clear_empty_array_file_deleted(
+    def test_clear_empty_array_applies_default_to_all(
         self, mock_color, mock_brightness, mock_turn
     ):
-        """clear with a file containing []: no govee calls, file is deleted."""
+        """clear with a file containing []: applies default config to all devices, file is deleted."""
         arbiter.signal_file().parent.mkdir(parents=True, exist_ok=True)
         arbiter.signal_file().write_text("[]")
+
+        # Add default to config
+        self.config["default"] = {"color": "white", "brightness": 40}
+        self.config_path.write_text(json.dumps(self.config))
 
         args = mock.Mock()
         args.command = "clear"
@@ -385,10 +391,13 @@ class TestSignalClear(StateDirMixin, unittest.TestCase):
 
         agent_signal.cmd_clear(args)
 
-        # No govee commands should have been sent
-        mock_turn.assert_not_called()
-        mock_brightness.assert_not_called()
-        mock_color.assert_not_called()
+        # Should have called govee.color for both devices with default color (white = 255,255,255)
+        self.assertEqual(mock_color.call_count, 2)
+        mock_color.assert_any_call("192.168.1.50", 255, 255, 255, kelvin=0)
+        mock_color.assert_any_call("192.168.1.51", 255, 255, 255, kelvin=0)
+        # Brightness should be 40 for both devices
+        mock_brightness.assert_any_call("192.168.1.50", 40)
+        mock_brightness.assert_any_call("192.168.1.51", 40)
 
         # File should be deleted
         self.assertFalse(arbiter.signal_file().exists())
@@ -593,6 +602,39 @@ class TestLocking(StateDirMixin, unittest.TestCase):
 
         # Status should not have been called (saved state already exists)
         mock_status.assert_not_called()
+
+    @mock.patch("agent_signal.govee.status")
+    @mock.patch("agent_signal.govee.turn")
+    @mock.patch("agent_signal.govee.brightness")
+    @mock.patch("agent_signal.govee.color")
+    @mock.patch("agent_signal.acquire_lock")
+    def test_needs_input_always_acquires_lock(
+        self, mock_lock, mock_color, mock_brightness, mock_turn, mock_status
+    ):
+        """needs-input always acquires the lock, even when saved state already exists."""
+        mock_lock.return_value = True
+        mock_status.side_effect = [
+            {"msg": {"data": {"on": True, "brightness": 50, "color": {"r": 255, "g": 255, "b": 255}}}},
+            {"msg": {"data": {"on": True, "brightness": 60, "color": {"r": 0, "g": 0, "b": 255}}}},
+        ]
+
+        # Create saved state file before calling needs-input
+        arbiter.signal_file().parent.mkdir(parents=True, exist_ok=True)
+        saved_state = [
+            {"ip": "192.168.1.50", "on": True, "brightness": 50, "color": {"r": 255, "g": 255, "b": 255}},
+            {"ip": "192.168.1.51", "on": True, "brightness": 60, "color": {"r": 0, "g": 0, "b": 255}},
+        ]
+        arbiter.signal_file().write_text(json.dumps(saved_state))
+
+        args = mock.Mock()
+        args.command = "needs-input"
+        args.config = str(self.config_path)
+        args.dry_run = False
+
+        agent_signal.cmd_needs_input(args)
+
+        # Lock should have been acquired
+        mock_lock.assert_called_once()
 
     @mock.patch("agent_signal.govee.status")
     @mock.patch("agent_signal.govee.turn")
