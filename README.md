@@ -89,6 +89,12 @@ Add `default` and `games` sections to your `config.json`:
       "exe": "Cyberpunk2077.exe",
       "color": "#ff00aa",
       "brightness": 80
+    },
+    {
+      "name": "Ghost of Tsushima",
+      "exe": "GhostOfTsushima.exe",
+      "color": "#ff4500",
+      "brightness": 70
     }
   ]
 }
@@ -96,6 +102,18 @@ Add `default` and `games` sections to your `config.json`:
 
 The `exe` field is matched case-insensitively against running process names.
 When multiple games match, the first one in config order wins.
+
+### Game profiles
+
+Two game profiles are included out of the box:
+
+| Game | Executable | Colour | Brightness |
+|------|------------|--------|------------|
+| Cyberpunk 2077 | `Cyberpunk2077.exe` | Neon magenta `#ff00aa` | 80% |
+| Ghost of Tsushima | `GhostOfTsushima.exe` | Sunset orange-red `#ff4500` | 70% |
+
+To change a game's colour or brightness, edit its entry in `config.json`.
+To add more games, copy an existing entry and change the `name`, `exe`, `color`, and `brightness` fields.
 
 ### Start at logon (Task Scheduler)
 

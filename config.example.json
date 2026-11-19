@@ -26,9 +26,9 @@
       "brightness": 80
     },
     {
-      "name": "Example",
-      "exe": "example.exe",
-      "color": "cyan",
+      "name": "Ghost of Tsushima",
+      "exe": "GhostOfTsushima.exe",
+      "color": "#ff4500",
       "brightness": 70
     }
   ]

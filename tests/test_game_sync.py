@@ -57,6 +57,53 @@ class TestPickProfile(unittest.TestCase):
         result = game_sync.pick_profile({"game.exe"}, [])
         self.assertIsNone(result)
 
+    def test_cyberpunk_profile_from_config(self):
+        """Loading config.example.json and matching Cyberpunk 2077."""
+        config_path = Path(__file__).parent.parent / "config.example.json"
+        with open(config_path) as f:
+            config = json.load(f)
+        games = config["games"]
+        result = game_sync.pick_profile({"cyberpunk2077.exe"}, games)
+        self.assertIsNotNone(result)
+        self.assertEqual(result["name"], "Cyberpunk 2077")
+        self.assertEqual(result["color"], "#ff00aa")
+        self.assertEqual(result["brightness"], 80)
+
+    def test_ghost_profile_from_config(self):
+        """Loading config.example.json and matching Ghost of Tsushima."""
+        config_path = Path(__file__).parent.parent / "config.example.json"
+        with open(config_path) as f:
+            config = json.load(f)
+        games = config["games"]
+        result = game_sync.pick_profile({"ghostoftsushima.exe"}, games)
+        self.assertIsNotNone(result)
+        self.assertEqual(result["name"], "Ghost of Tsushima")
+        self.assertEqual(result["color"], "#ff4500")
+        self.assertEqual(result["brightness"], 70)
+
+    def test_no_match_notepad(self):
+        """notepad.exe does not match any game profile."""
+        config_path = Path(__file__).parent.parent / "config.example.json"
+        with open(config_path) as f:
+            config = json.load(f)
+        games = config["games"]
+        result = game_sync.pick_profile({"notepad.exe"}, games)
+        self.assertIsNone(result)
+
+    def test_case_insensitive_config_games(self):
+        """Game exe matching from config is case-insensitive."""
+        config_path = Path(__file__).parent.parent / "config.example.json"
+        with open(config_path) as f:
+            config = json.load(f)
+        games = config["games"]
+        # running_processes() returns lowercase names; pick_profile lowercases config exe
+        result = game_sync.pick_profile({"cyberpunk2077.exe"}, games)
+        self.assertIsNotNone(result)
+        self.assertEqual(result["name"], "Cyberpunk 2077")
+        result2 = game_sync.pick_profile({"ghostoftsushima.exe"}, games)
+        self.assertIsNotNone(result2)
+        self.assertEqual(result2["name"], "Ghost of Tsushima")
+
 
 class TestRunOnce(unittest.TestCase):
     """Test run() with once=True and mocked dependencies."""
