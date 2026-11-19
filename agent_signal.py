@@ -141,17 +141,37 @@ def save_state(devices, dry_run=False):
 
 
 def load_saved_state(quiet=False):
-    """Load saved device states from file."""
+    """Load saved device states from file.
+
+    Validates the shape of the loaded data: must be a list of dicts, each with
+    a string "ip" field. Invalid entries are dropped with a warning.
+    """
     signal_path = arbiter.signal_file()
     if not signal_path.exists():
         return None
     try:
         with open(signal_path, "r") as f:
-            return json.load(f)
-    except json.JSONDecodeError as e:
+            data = json.load(f)
+    except (ValueError, OSError) as e:
         if not quiet:
             print(f"warning: failed to parse saved state: {e}", file=sys.stderr)
         return []
+
+    # Validate shape: must be a list
+    if not isinstance(data, list):
+        if not quiet:
+            print("warning: saved state is not a list; ignoring it", file=sys.stderr)
+        return []
+
+    # Filter to only valid entries (dicts with a string "ip" field)
+    valid = []
+    for entry in data:
+        if isinstance(entry, dict) and isinstance(entry.get("ip"), str):
+            valid.append(entry)
+        elif not quiet:
+            print(f"warning: dropping invalid saved state entry: {entry}", file=sys.stderr)
+
+    return valid
 
 
 def delete_saved_state(dry_run=False, quiet=False):

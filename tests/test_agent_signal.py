@@ -958,6 +958,101 @@ class TestSaveStateTimeout(StateDirMixin, unittest.TestCase):
         self.assertEqual(saved, [])
 
 
+class TestLoadSavedStateShapeValidation(StateDirMixin, unittest.TestCase):
+    """Test that load_saved_state validates the shape of saved state data."""
+
+    def setUp(self):
+        super().setUp()
+        self.config_path = self.state_dir / "config.json"
+        self.config = {
+            "devices": [
+                {"name": "left", "ip": "192.168.1.50"},
+                {"name": "right", "ip": "192.168.1.51"},
+            ],
+        }
+        self.config_path.write_text(json.dumps(self.config))
+
+    @mock.patch("agent_signal.govee.turn")
+    @mock.patch("agent_signal.govee.brightness")
+    @mock.patch("agent_signal.govee.color")
+    def test_clear_object_not_list(self, mock_color, mock_brightness, mock_turn):
+        """clear with a file containing an object (not a list): no crash, fallback applied, file deleted."""
+        arbiter.signal_file().parent.mkdir(parents=True, exist_ok=True)
+        arbiter.signal_file().write_text('{"ip": "192.168.1.50"}')
+
+        args = mock.Mock()
+        args.command = "clear"
+        args.config = str(self.config_path)
+        args.dry_run = False
+
+        # Should not raise
+        agent_signal.cmd_clear(args)
+
+        # Not a list -> load_saved_state returns [] -> fallback applied to all devices
+        # Config has no "default" key, so BUILTIN_DEFAULT (white, 40%) is used
+        self.assertEqual(mock_color.call_count, 2)
+        mock_color.assert_any_call("192.168.1.50", 255, 255, 255, kelvin=0)
+        mock_color.assert_any_call("192.168.1.51", 255, 255, 255, kelvin=0)
+        mock_brightness.assert_any_call("192.168.1.50", 40)
+        mock_brightness.assert_any_call("192.168.1.51", 40)
+
+        # File should be deleted
+        self.assertFalse(arbiter.signal_file().exists())
+
+    @mock.patch("agent_signal.govee.turn")
+    @mock.patch("agent_signal.govee.brightness")
+    @mock.patch("agent_signal.govee.color")
+    def test_clear_mixed_valid_invalid_entries(self, mock_color, mock_brightness, mock_turn):
+        """clear with a list containing invalid and valid entries: valid restored, invalid dropped."""
+        arbiter.signal_file().parent.mkdir(parents=True, exist_ok=True)
+        # First entry is invalid (no "ip" field), second is valid
+        arbiter.signal_file().write_text(
+            '[{"on": true}, {"ip": "192.168.1.50", "on": true, "brightness": 50, "color": {"r": 1, "g": 2, "b": 3}}]'
+        )
+
+        args = mock.Mock()
+        args.command = "clear"
+        args.config = str(self.config_path)
+        args.dry_run = False
+
+        # Should not raise
+        agent_signal.cmd_clear(args)
+
+        # Valid entry for .50 should be restored with its color (1, 2, 3)
+        mock_color.assert_any_call("192.168.1.50", 1, 2, 3, kelvin=0)
+        # .51 has no saved state, gets fallback (white, 40%)
+        mock_color.assert_any_call("192.168.1.51", 255, 255, 255, kelvin=0)
+
+        # File should be deleted
+        self.assertFalse(arbiter.signal_file().exists())
+
+    @mock.patch("agent_signal.govee.turn")
+    @mock.patch("agent_signal.govee.brightness")
+    @mock.patch("agent_signal.govee.color")
+    def test_clear_null_json(self, mock_color, mock_brightness, mock_turn):
+        """clear with a file containing 'null': fallback applied to all devices, file deleted."""
+        arbiter.signal_file().parent.mkdir(parents=True, exist_ok=True)
+        arbiter.signal_file().write_text("null")
+
+        args = mock.Mock()
+        args.command = "clear"
+        args.config = str(self.config_path)
+        args.dry_run = False
+
+        # Should not raise
+        agent_signal.cmd_clear(args)
+
+        # null -> json.load returns None -> not a list -> [] -> fallback applied to all devices
+        self.assertEqual(mock_color.call_count, 2)
+        mock_color.assert_any_call("192.168.1.50", 255, 255, 255, kelvin=0)
+        mock_color.assert_any_call("192.168.1.51", 255, 255, 255, kelvin=0)
+        mock_brightness.assert_any_call("192.168.1.50", 40)
+        mock_brightness.assert_any_call("192.168.1.51", 40)
+
+        # File should be deleted
+        self.assertFalse(arbiter.signal_file().exists())
+
+
 class TestClearWithNullDefault(StateDirMixin, unittest.TestCase):
     """Test that clear with "default": null uses built-in default."""
 
