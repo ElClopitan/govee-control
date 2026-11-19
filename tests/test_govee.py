@@ -259,6 +259,83 @@ class TestScan(unittest.TestCase):
         self.assertEqual(devices[0]["ip"], "192.168.1.100")
 
 
+class TestStatus(unittest.TestCase):
+    """Tests for govee.status() — IP filtering, JSON errors, timeout."""
+
+    def _make_sock(self, recvfrom_side_effect):
+        """Create a mock socket with the given recvfrom behavior."""
+        mock_sock = mock.MagicMock()
+        mock_sock.recvfrom.side_effect = recvfrom_side_effect
+        return mock_sock
+
+    @mock.patch("govee.socket.socket")
+    @mock.patch("govee.send")
+    def test_status_sends_correct_request(self, mock_send, mock_socket_cls):
+        """status() sends the devStatus request to the given IP."""
+        mock_sock = self._make_sock([socket.timeout()])
+        mock_socket_cls.return_value = mock_sock
+
+        govee.status("10.0.0.5", timeout=0.1)
+
+        mock_send.assert_called_once_with(
+            "10.0.0.5",
+            {"msg": {"cmd": "devStatus", "data": {}}},
+        )
+
+    @mock.patch("govee.socket.socket")
+    @mock.patch("govee.send")
+    def test_status_filters_by_ip(self, mock_send, mock_socket_cls):
+        """status() skips replies from other IPs and returns the correct one."""
+        reply_wrong_ip = json.dumps({
+            "msg": {"cmd": "devStatus", "data": {"ip": "10.0.0.9", "state": "wrong"}}
+        }).encode("utf-8")
+        reply_right_ip = json.dumps({
+            "msg": {"cmd": "devStatus", "data": {"ip": "10.0.0.5", "state": "right"}}
+        }).encode("utf-8")
+
+        mock_sock = self._make_sock([
+            (reply_wrong_ip, ("10.0.0.9", 4002)),
+            (reply_right_ip, ("10.0.0.5", 4002)),
+        ])
+        mock_socket_cls.return_value = mock_sock
+
+        result = govee.status("10.0.0.5", timeout=0.5)
+
+        self.assertIsNotNone(result)
+        self.assertEqual(result["msg"]["data"]["ip"], "10.0.0.5")
+        self.assertEqual(result["msg"]["data"]["state"], "right")
+
+    @mock.patch("govee.socket.socket")
+    @mock.patch("govee.send")
+    def test_status_skips_non_json(self, mock_send, mock_socket_cls):
+        """status() skips non-JSON packets and returns the valid reply."""
+        valid_reply = json.dumps({
+            "msg": {"cmd": "devStatus", "data": {"ip": "10.0.0.5", "state": "ok"}}
+        }).encode("utf-8")
+
+        mock_sock = self._make_sock([
+            (b"not json", ("10.0.0.5", 4002)),
+            (valid_reply, ("10.0.0.5", 4002)),
+        ])
+        mock_socket_cls.return_value = mock_sock
+
+        result = govee.status("10.0.0.5", timeout=0.5)
+
+        self.assertIsNotNone(result)
+        self.assertEqual(result["msg"]["data"]["state"], "ok")
+
+    @mock.patch("govee.socket.socket")
+    @mock.patch("govee.send")
+    def test_status_timeout_returns_none(self, mock_send, mock_socket_cls):
+        """status() returns None when recvfrom times out."""
+        mock_sock = self._make_sock([socket.timeout()])
+        mock_socket_cls.return_value = mock_sock
+
+        result = govee.status("10.0.0.5", timeout=0.1)
+
+        self.assertIsNone(result)
+
+
 class TestCLI(unittest.TestCase):
     def test_help(self):
         """--help exits 0."""

@@ -200,20 +200,34 @@ def color(ip, r, g, b, kelvin=0):
 
 
 def status(ip, timeout=2):
-    """Query device status. Returns the parsed response dict."""
+    """Query device status. Returns the parsed response dict, or None on timeout.
+
+    Only accepts the reply from the queried IP; skips packets from other
+    devices, non-JSON packets, and packets with the wrong cmd.
+    """
     sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM, socket.IPPROTO_UDP)
     try:
         sock.bind(("", REPLY_PORT))
-        sock.settimeout(timeout)
         send(ip, {"msg": {"cmd": "devStatus", "data": {}}})
+        deadline = time.time() + timeout
         while True:
+            remaining = deadline - time.time()
+            if remaining <= 0:
+                return None
+            sock.settimeout(max(0.05, remaining))
             try:
                 data, addr = sock.recvfrom(4096)
-                resp = json.loads(data.decode("utf-8"))
-                if resp.get("msg", {}).get("cmd") == "devStatus":
-                    return resp
             except socket.timeout:
                 return None
+            if addr[0] != ip:
+                continue
+            try:
+                resp = json.loads(data.decode("utf-8"))
+            except (json.JSONDecodeError, UnicodeDecodeError):
+                continue
+            if resp.get("msg", {}).get("cmd") != "devStatus":
+                continue
+            return resp
     finally:
         sock.close()
 
