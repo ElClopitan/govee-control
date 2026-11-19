@@ -292,7 +292,11 @@ def cmd_needs_input(args):
         if not signal_path.exists() or args.dry_run:
             save_state(devices, dry_run=args.dry_run)
 
-        set_signal_color(devices, signal_cfg, dry_run=args.dry_run)
+        try:
+            set_signal_color(devices, signal_cfg, dry_run=args.dry_run)
+        except OSError as e:
+            print(f"warning: could not set signal colour: {e}", file=sys.stderr)
+            return
         print("signal set")
     finally:
         release_lock(dry_run=args.dry_run)
@@ -329,7 +333,11 @@ def cmd_clear(args):
         saved = load_saved_state(quiet=True)
         was_corrupt = saved == []
 
-        restore_state(devices, default_cfg=default_cfg, dry_run=args.dry_run, quiet=was_corrupt)
+        try:
+            restore_state(devices, default_cfg=default_cfg, dry_run=args.dry_run, quiet=was_corrupt)
+        except OSError as e:
+            print(f"warning: could not restore lights: {e}", file=sys.stderr)
+            return
         delete_saved_state(dry_run=args.dry_run, quiet=was_corrupt)
         print("signal cleared")
     finally:

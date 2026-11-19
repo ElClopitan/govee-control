@@ -471,6 +471,82 @@ class TestSignalClear(StateDirMixin, unittest.TestCase):
         self.assertNotIn("deleted", stdout)
 
 
+class TestOSErrorHandling(StateDirMixin, unittest.TestCase):
+    """Test that OSError from govee.send() does not crash the hooks."""
+
+    def setUp(self):
+        super().setUp()
+        self.config_path = self.state_dir / "config.json"
+        self.config = {
+            "devices": [
+                {"name": "left", "ip": "192.168.1.50"},
+            ],
+            "signal": {
+                "color": "#ff6a00",
+                "brightness": 100,
+                "blink": False,
+            },
+        }
+        self.config_path.write_text(json.dumps(self.config))
+
+    @mock.patch("agent_signal.govee.turn")
+    @mock.patch("agent_signal.govee.brightness")
+    @mock.patch("agent_signal.govee.color")
+    def test_clear_oserror_does_not_crash(self, mock_color, mock_brightness, mock_turn):
+        """clear with govee.turn raising OSError: no crash, saved state kept, lock released."""
+        # Create a saved state file
+        arbiter.signal_file().parent.mkdir(parents=True, exist_ok=True)
+        saved_state = [
+            {"ip": "192.168.1.50", "on": True, "brightness": 50, "color": {"r": 255, "g": 255, "b": 255}},
+        ]
+        arbiter.signal_file().write_text(json.dumps(saved_state))
+
+        # Make govee.turn raise OSError
+        mock_turn.side_effect = OSError("[WinError 10051] network unreachable")
+
+        args = mock.Mock()
+        args.command = "clear"
+        args.config = str(self.config_path)
+        args.dry_run = False
+
+        # Should not raise
+        agent_signal.cmd_clear(args)
+
+        # Saved state should still exist (not deleted on error)
+        self.assertTrue(arbiter.signal_file().exists())
+        # Lock file should not exist (released)
+        self.assertFalse(agent_signal.LOCK_FILE.exists())
+
+    @mock.patch("agent_signal.govee.status")
+    @mock.patch("agent_signal.govee.turn")
+    @mock.patch("agent_signal.govee.brightness")
+    @mock.patch("agent_signal.govee.color")
+    def test_needs_input_oserror_does_not_crash(
+        self, mock_color, mock_brightness, mock_turn, mock_status
+    ):
+        """needs-input with govee.color raising OSError: no crash, saved state kept, lock released."""
+        # Mock status to answer
+        mock_status.return_value = {
+            "msg": {"data": {"on": True, "brightness": 50, "color": {"r": 255, "g": 255, "b": 255}}}
+        }
+
+        # Make govee.color raise OSError
+        mock_color.side_effect = OSError("[WinError 10051] network unreachable")
+
+        args = mock.Mock()
+        args.command = "needs-input"
+        args.config = str(self.config_path)
+        args.dry_run = False
+
+        # Should not raise
+        agent_signal.cmd_needs_input(args)
+
+        # Saved state should exist
+        self.assertTrue(arbiter.signal_file().exists())
+        # Lock file should not exist (released)
+        self.assertFalse(agent_signal.LOCK_FILE.exists())
+
+
 class TestSignalDryRun(StateDirMixin, unittest.TestCase):
     """Test dry-run mode."""
 
