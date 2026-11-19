@@ -291,6 +291,9 @@ def main():
         except FileNotFoundError:
             print(f"Config not found: {args.config}", file=sys.stderr)
             sys.exit(1)
+        except json.JSONDecodeError as e:
+            print(f"Invalid JSON in config: {e}", file=sys.stderr)
+            sys.exit(1)
 
     if args.command == "scan":
         iface_ip = args.iface_ip
@@ -300,6 +303,9 @@ def main():
                 iface_ip = cfg.get("iface_ip")
             except FileNotFoundError:
                 pass
+            except json.JSONDecodeError as e:
+                print(f"Invalid JSON in config: {e}", file=sys.stderr)
+                sys.exit(1)
         devices = scan(timeout=args.timeout, iface_ip=iface_ip)
         if not devices:
             print("no devices found")
@@ -311,7 +317,12 @@ def main():
     if args.command == "brightness":
         if not args.value:
             parser.error("brightness requires a value (1-100)")
-        pct = int(args.value)
+        try:
+            pct = int(args.value)
+        except ValueError:
+            parser.error("brightness must be an integer 1-100")
+        if not 1 <= pct <= 100:
+            parser.error("brightness must be an integer 1-100")
         for ip in target_ips:
             brightness(ip, pct)
             print(f"brightness {pct}% -> {ip}")
@@ -320,7 +331,10 @@ def main():
     if args.command == "color":
         if not args.value:
             parser.error("color requires a value")
-        r, g, b = parse_color(args.value)
+        try:
+            r, g, b = parse_color(args.value)
+        except ValueError as e:
+            parser.error(str(e))
         for ip in target_ips:
             color(ip, r, g, b)
             print(f"color #{r:02x}{g:02x}{b:02x} -> {ip}")

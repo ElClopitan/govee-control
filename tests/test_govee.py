@@ -378,6 +378,80 @@ class TestCLI(unittest.TestCase):
         finally:
             Path(config_path).unlink()
 
+    def test_cli_brightness_non_integer(self):
+        """brightness with non-integer value exits 2 with clean error."""
+        import subprocess
+        result = subprocess.run(
+            [sys.executable, "govee.py", "brightness", "abc", "--ip", "10.0.0.5"],
+            capture_output=True,
+            text=True,
+            cwd=str(Path(__file__).parent.parent),
+        )
+        self.assertEqual(result.returncode, 2)
+        self.assertNotIn("Traceback", result.stderr)
+        self.assertIn("brightness must be an integer 1-100", result.stderr)
+
+    def test_cli_brightness_zero(self):
+        """brightness 0 exits 2 with clean error."""
+        import subprocess
+        result = subprocess.run(
+            [sys.executable, "govee.py", "brightness", "0", "--ip", "10.0.0.5"],
+            capture_output=True,
+            text=True,
+            cwd=str(Path(__file__).parent.parent),
+        )
+        self.assertEqual(result.returncode, 2)
+        self.assertNotIn("Traceback", result.stderr)
+        self.assertIn("brightness must be an integer 1-100", result.stderr)
+
+    def test_cli_brightness_over_100(self):
+        """brightness 101 exits 2 with clean error."""
+        import subprocess
+        result = subprocess.run(
+            [sys.executable, "govee.py", "brightness", "101", "--ip", "10.0.0.5"],
+            capture_output=True,
+            text=True,
+            cwd=str(Path(__file__).parent.parent),
+        )
+        self.assertEqual(result.returncode, 2)
+        self.assertNotIn("Traceback", result.stderr)
+        self.assertIn("brightness must be an integer 1-100", result.stderr)
+
+    def test_cli_color_invalid(self):
+        """color with invalid hex exits 2 with clean error."""
+        import subprocess
+        result = subprocess.run(
+            [sys.executable, "govee.py", "color", "zzzzzz", "--ip", "10.0.0.5"],
+            capture_output=True,
+            text=True,
+            cwd=str(Path(__file__).parent.parent),
+        )
+        self.assertEqual(result.returncode, 2)
+        self.assertNotIn("Traceback", result.stderr)
+        self.assertIn("invalid colour", result.stderr)
+
+    def test_cli_invalid_json_config(self):
+        """on with invalid JSON config exits 1 with clean error."""
+        import subprocess
+        with tempfile.NamedTemporaryFile(
+            mode="w", suffix=".json", delete=False
+        ) as f:
+            f.write("{")
+            config_path = f.name
+
+        try:
+            result = subprocess.run(
+                [sys.executable, "govee.py", "on", "--config", config_path],
+                capture_output=True,
+                text=True,
+                cwd=str(Path(__file__).parent.parent),
+            )
+            self.assertEqual(result.returncode, 1)
+            self.assertIn("Invalid JSON", result.stderr)
+            self.assertNotIn("Traceback", result.stderr)
+        finally:
+            Path(config_path).unlink()
+
 
 if __name__ == "__main__":
     unittest.main()
