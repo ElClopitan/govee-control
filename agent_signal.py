@@ -17,10 +17,10 @@ import time
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent))
+import arbiter
 import govee
 
 STATE_DIR = Path(__file__).parent / "state"
-SAVED_STATE_FILE = STATE_DIR / "saved_state.json"
 LOCK_FILE = STATE_DIR / "agent_signal.lock"
 LOCK_TIMEOUT = 10.0
 LOCK_STALE = 30.0
@@ -90,11 +90,12 @@ def get_signal_config(cfg):
 
 def save_state(devices, dry_run=False):
     """Save current device states to file."""
+    signal_path = arbiter.signal_file()
     if dry_run:
-        print(f"[dry-run] would save state to {SAVED_STATE_FILE}")
+        print(f"[dry-run] would save state to {signal_path}")
         return
 
-    SAVED_STATE_FILE.parent.mkdir(parents=True, exist_ok=True)
+    signal_path.parent.mkdir(parents=True, exist_ok=True)
 
     states = []
     for dev in devices:
@@ -126,17 +127,18 @@ def save_state(devices, dry_run=False):
         print("warning: no device answered devStatus; state not saved", file=sys.stderr)
         return
 
-    with open(SAVED_STATE_FILE, "w") as f:
+    with open(signal_path, "w") as f:
         json.dump(states, f, indent=2)
-    print(f"saved state to {SAVED_STATE_FILE}")
+    print(f"saved state to {signal_path}")
 
 
 def load_saved_state():
     """Load saved device states from file."""
-    if not SAVED_STATE_FILE.exists():
+    signal_path = arbiter.signal_file()
+    if not signal_path.exists():
         return None
     try:
-        with open(SAVED_STATE_FILE, "r") as f:
+        with open(signal_path, "r") as f:
             return json.load(f)
     except json.JSONDecodeError as e:
         print(f"warning: failed to parse saved state: {e}", file=sys.stderr)
@@ -145,12 +147,13 @@ def load_saved_state():
 
 def delete_saved_state(dry_run=False):
     """Delete the saved state file."""
+    signal_path = arbiter.signal_file()
     if dry_run:
-        print(f"[dry-run] would delete {SAVED_STATE_FILE}")
+        print(f"[dry-run] would delete {signal_path}")
         return
-    if SAVED_STATE_FILE.exists():
-        SAVED_STATE_FILE.unlink()
-        print(f"deleted {SAVED_STATE_FILE}")
+    if signal_path.exists():
+        signal_path.unlink()
+        print(f"deleted {signal_path}")
 
 
 def set_signal_color(devices, signal_cfg, dry_run=False):
@@ -261,9 +264,10 @@ def cmd_needs_input(args):
         sys.exit(1)
 
     signal_cfg = get_signal_config(cfg)
+    signal_path = arbiter.signal_file()
 
     # Fast path: if state already saved, just set the signal colour
-    if SAVED_STATE_FILE.exists() and not args.dry_run:
+    if signal_path.exists() and not args.dry_run:
         set_signal_color(devices, signal_cfg, dry_run=args.dry_run)
         print("signal set")
         return
@@ -277,7 +281,7 @@ def cmd_needs_input(args):
 
     try:
         # Re-check under the lock (race condition fix)
-        if not SAVED_STATE_FILE.exists() or args.dry_run:
+        if not signal_path.exists() or args.dry_run:
             save_state(devices, dry_run=args.dry_run)
 
         set_signal_color(devices, signal_cfg, dry_run=args.dry_run)
@@ -288,8 +292,9 @@ def cmd_needs_input(args):
 
 def cmd_clear(args):
     """Handle the clear command."""
+    signal_path = arbiter.signal_file()
     # Fast path: if no saved state, nothing to do (no lock needed)
-    if not SAVED_STATE_FILE.exists():
+    if not signal_path.exists():
         print("no active signal; nothing to do")
         return
 
@@ -308,7 +313,7 @@ def cmd_clear(args):
 
     try:
         # Re-check under the lock
-        if not SAVED_STATE_FILE.exists():
+        if not signal_path.exists():
             print("no active signal; nothing to do")
             return
 

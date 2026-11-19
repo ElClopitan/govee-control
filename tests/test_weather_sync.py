@@ -596,5 +596,70 @@ class TestPriority(StateDirMixin, unittest.TestCase):
         self.assertEqual(mock_color.call_count, 2)
 
 
+class TestPriorityRecheckBeforeSend(StateDirMixin, unittest.TestCase):
+    """Test that weather sync re-checks priority just before sending."""
+
+    def _make_config(self):
+        return {
+            "devices": [{"name": "left", "ip": "192.168.1.50"}],
+            "weather": {"latitude": 51.5, "longitude": -0.1, "brightness": 50},
+        }
+
+    @mock.patch("weather_sync.fetch_weather")
+    @mock.patch("govee.color")
+    @mock.patch("govee.brightness")
+    def test_signal_during_fetch_skips_send(self, mock_brightness, mock_color, mock_fetch):
+        """If signal becomes active during weather fetch, skip sending.
+
+        This tests the re-check just before the send loop. The signal file
+        is created as a side effect of fetch_weather, simulating a race
+        where the signal is raised while weather is being fetched.
+        """
+        import arbiter
+
+        def fetch_with_signal(*args, **kwargs):
+            # Simulate signal being raised during the fetch
+            (arbiter.STATE_DIR / "saved_state.json").write_text("[]")
+            return {
+                "temperature_2m": 20.0,
+                "weather_code": 0,
+                "is_day": 1,
+            }
+
+        mock_fetch.side_effect = fetch_with_signal
+        config = self._make_config()
+
+        weather_sync.run(config, once=True)
+
+        # Should NOT have called govee functions because signal became active
+        mock_color.assert_not_called()
+        mock_brightness.assert_not_called()
+
+    @mock.patch("weather_sync.fetch_weather")
+    @mock.patch("govee.color")
+    @mock.patch("govee.brightness")
+    def test_game_during_fetch_skips_send(self, mock_brightness, mock_color, mock_fetch):
+        """If game becomes active during weather fetch, skip sending."""
+        import arbiter
+
+        def fetch_with_game(*args, **kwargs):
+            # Simulate game becoming active during the fetch
+            arbiter.set_game_active("Test Game")
+            return {
+                "temperature_2m": 20.0,
+                "weather_code": 0,
+                "is_day": 1,
+            }
+
+        mock_fetch.side_effect = fetch_with_game
+        config = self._make_config()
+
+        weather_sync.run(config, once=True)
+
+        # Should NOT have called govee functions because game became active
+        mock_color.assert_not_called()
+        mock_brightness.assert_not_called()
+
+
 if __name__ == "__main__":
     unittest.main()

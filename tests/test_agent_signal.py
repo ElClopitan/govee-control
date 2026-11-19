@@ -13,6 +13,7 @@ from unittest import mock
 sys.path.insert(0, str(Path(__file__).parent.parent))
 sys.path.insert(0, str(Path(__file__).parent))
 import agent_signal
+import arbiter
 import govee
 from helpers import StateDirMixin
 
@@ -59,8 +60,8 @@ class TestSignalNeedsInput(StateDirMixin, unittest.TestCase):
         agent_signal.cmd_needs_input(args)
 
         # Verify state was saved
-        self.assertTrue(agent_signal.SAVED_STATE_FILE.exists())
-        saved = json.loads(agent_signal.SAVED_STATE_FILE.read_text())
+        self.assertTrue(arbiter.signal_file().exists())
+        saved = json.loads(arbiter.signal_file().read_text())
         self.assertEqual(len(saved), 2)
         self.assertEqual(saved[0]["ip"], "192.168.1.50")
         self.assertEqual(saved[0]["brightness"], 50)
@@ -107,7 +108,7 @@ class TestSignalNeedsInput(StateDirMixin, unittest.TestCase):
         mock_status.assert_not_called()
 
         # Saved state should still have original values
-        saved = json.loads(agent_signal.SAVED_STATE_FILE.read_text())
+        saved = json.loads(arbiter.signal_file().read_text())
         self.assertEqual(saved[0]["brightness"], 50)
 
     @mock.patch("agent_signal.govee.status")
@@ -157,7 +158,7 @@ class TestSignalNeedsInput(StateDirMixin, unittest.TestCase):
 
         agent_signal.cmd_needs_input(args)
 
-        saved = json.loads(agent_signal.SAVED_STATE_FILE.read_text())
+        saved = json.loads(arbiter.signal_file().read_text())
         self.assertEqual(saved[0]["on"], False)
         self.assertEqual(saved[1]["on"], True)
 
@@ -181,7 +182,7 @@ class TestSignalNeedsInput(StateDirMixin, unittest.TestCase):
 
         agent_signal.cmd_needs_input(args)
 
-        saved = json.loads(agent_signal.SAVED_STATE_FILE.read_text())
+        saved = json.loads(arbiter.signal_file().read_text())
         self.assertEqual(saved[0]["colorTemInKelvin"], 4000)
         self.assertEqual(saved[1]["colorTemInKelvin"], 0)
 
@@ -204,7 +205,7 @@ class TestSignalNeedsInput(StateDirMixin, unittest.TestCase):
         agent_signal.cmd_needs_input(args)
 
         # No saved state file should exist
-        self.assertFalse(agent_signal.SAVED_STATE_FILE.exists())
+        self.assertFalse(arbiter.signal_file().exists())
 
         # Signal colour should still be set
         self.assertEqual(mock_color.call_count, 2)
@@ -231,12 +232,12 @@ class TestSignalClear(StateDirMixin, unittest.TestCase):
     def test_clear_restores_and_deletes_file(self, mock_color, mock_brightness, mock_turn):
         """clear restores saved state and deletes the file."""
         # Create a saved state file
-        agent_signal.SAVED_STATE_FILE.parent.mkdir(parents=True, exist_ok=True)
+        arbiter.signal_file().parent.mkdir(parents=True, exist_ok=True)
         saved_state = [
             {"ip": "192.168.1.50", "on": True, "brightness": 50, "color": {"r": 255, "g": 255, "b": 255}},
             {"ip": "192.168.1.51", "on": True, "brightness": 60, "color": {"r": 0, "g": 0, "b": 255}},
         ]
-        agent_signal.SAVED_STATE_FILE.write_text(json.dumps(saved_state))
+        arbiter.signal_file().write_text(json.dumps(saved_state))
 
         args = mock.Mock()
         args.command = "clear"
@@ -251,7 +252,7 @@ class TestSignalClear(StateDirMixin, unittest.TestCase):
         self.assertEqual(mock_brightness.call_args_list[1][0][1], 60)
 
         # Verify file was deleted
-        self.assertFalse(agent_signal.SAVED_STATE_FILE.exists())
+        self.assertFalse(arbiter.signal_file().exists())
 
     @mock.patch("agent_signal.govee.turn")
     @mock.patch("agent_signal.govee.brightness")
@@ -312,11 +313,11 @@ class TestSignalClear(StateDirMixin, unittest.TestCase):
         self, mock_color, mock_brightness, mock_turn
     ):
         """clear with a saved 'on': false device sends turn(ip, False) LAST."""
-        agent_signal.SAVED_STATE_FILE.parent.mkdir(parents=True, exist_ok=True)
+        arbiter.signal_file().parent.mkdir(parents=True, exist_ok=True)
         saved_state = [
             {"ip": "192.168.1.50", "on": False, "brightness": 50, "color": {"r": 255, "g": 255, "b": 255}},
         ]
-        agent_signal.SAVED_STATE_FILE.write_text(json.dumps(saved_state))
+        arbiter.signal_file().write_text(json.dumps(saved_state))
 
         # Use attach_mock to track actual call order
         parent = mock.Mock()
@@ -343,11 +344,11 @@ class TestSignalClear(StateDirMixin, unittest.TestCase):
         self, mock_color, mock_brightness, mock_turn
     ):
         """clear with a saved 'on': true device sends turn(ip, True) FIRST."""
-        agent_signal.SAVED_STATE_FILE.parent.mkdir(parents=True, exist_ok=True)
+        arbiter.signal_file().parent.mkdir(parents=True, exist_ok=True)
         saved_state = [
             {"ip": "192.168.1.50", "on": True, "brightness": 50, "color": {"r": 255, "g": 255, "b": 255}},
         ]
-        agent_signal.SAVED_STATE_FILE.write_text(json.dumps(saved_state))
+        arbiter.signal_file().write_text(json.dumps(saved_state))
 
         # Use attach_mock to track actual call order
         parent = mock.Mock()
@@ -374,8 +375,8 @@ class TestSignalClear(StateDirMixin, unittest.TestCase):
         self, mock_color, mock_brightness, mock_turn
     ):
         """clear with a file containing []: no govee calls, file is deleted."""
-        agent_signal.SAVED_STATE_FILE.parent.mkdir(parents=True, exist_ok=True)
-        agent_signal.SAVED_STATE_FILE.write_text("[]")
+        arbiter.signal_file().parent.mkdir(parents=True, exist_ok=True)
+        arbiter.signal_file().write_text("[]")
 
         args = mock.Mock()
         args.command = "clear"
@@ -390,7 +391,7 @@ class TestSignalClear(StateDirMixin, unittest.TestCase):
         mock_color.assert_not_called()
 
         # File should be deleted
-        self.assertFalse(agent_signal.SAVED_STATE_FILE.exists())
+        self.assertFalse(arbiter.signal_file().exists())
 
     @mock.patch("agent_signal.govee.turn")
     @mock.patch("agent_signal.govee.brightness")
@@ -399,8 +400,8 @@ class TestSignalClear(StateDirMixin, unittest.TestCase):
         self, mock_color, mock_brightness, mock_turn
     ):
         """clear with a file containing invalid JSON: no exception, no govee calls, file deleted."""
-        agent_signal.SAVED_STATE_FILE.parent.mkdir(parents=True, exist_ok=True)
-        agent_signal.SAVED_STATE_FILE.write_text("{")
+        arbiter.signal_file().parent.mkdir(parents=True, exist_ok=True)
+        arbiter.signal_file().write_text("{")
 
         args = mock.Mock()
         args.command = "clear"
@@ -416,7 +417,7 @@ class TestSignalClear(StateDirMixin, unittest.TestCase):
         mock_color.assert_not_called()
 
         # File should be deleted
-        self.assertFalse(agent_signal.SAVED_STATE_FILE.exists())
+        self.assertFalse(arbiter.signal_file().exists())
 
 
 class TestSignalDryRun(StateDirMixin, unittest.TestCase):
@@ -503,11 +504,11 @@ class TestLocking(StateDirMixin, unittest.TestCase):
     def test_lock_timeout_exits_0(self, mock_color, mock_brightness, mock_turn):
         """Lock timeout exits 0 without calling govee.color."""
         # Create a saved state file
-        agent_signal.SAVED_STATE_FILE.parent.mkdir(parents=True, exist_ok=True)
+        arbiter.signal_file().parent.mkdir(parents=True, exist_ok=True)
         saved_state = [
             {"ip": "192.168.1.50", "on": True, "brightness": 50, "color": {"r": 255, "g": 255, "b": 255}},
         ]
-        agent_signal.SAVED_STATE_FILE.write_text(json.dumps(saved_state))
+        arbiter.signal_file().write_text(json.dumps(saved_state))
 
         # Create a fresh lock file
         agent_signal.LOCK_FILE.parent.mkdir(parents=True, exist_ok=True)
@@ -527,7 +528,7 @@ class TestLocking(StateDirMixin, unittest.TestCase):
 
         mock_color.assert_not_called()
         # Saved state should still exist
-        self.assertTrue(agent_signal.SAVED_STATE_FILE.exists())
+        self.assertTrue(arbiter.signal_file().exists())
 
         agent_signal.LOCK_TIMEOUT = original_timeout
 
@@ -537,11 +538,11 @@ class TestLocking(StateDirMixin, unittest.TestCase):
     def test_stale_lock_is_removed(self, mock_color, mock_brightness, mock_turn):
         """Stale lock file (older than 30s) is removed and clear proceeds."""
         # Create a saved state file
-        agent_signal.SAVED_STATE_FILE.parent.mkdir(parents=True, exist_ok=True)
+        arbiter.signal_file().parent.mkdir(parents=True, exist_ok=True)
         saved_state = [
             {"ip": "192.168.1.50", "on": True, "brightness": 50, "color": {"r": 255, "g": 255, "b": 255}},
         ]
-        agent_signal.SAVED_STATE_FILE.write_text(json.dumps(saved_state))
+        arbiter.signal_file().write_text(json.dumps(saved_state))
 
         # Create a stale lock file (60s old)
         agent_signal.LOCK_FILE.parent.mkdir(parents=True, exist_ok=True)
@@ -576,12 +577,12 @@ class TestLocking(StateDirMixin, unittest.TestCase):
         ]
 
         # Create saved state file before calling needs-input
-        agent_signal.SAVED_STATE_FILE.parent.mkdir(parents=True, exist_ok=True)
+        arbiter.signal_file().parent.mkdir(parents=True, exist_ok=True)
         saved_state = [
             {"ip": "192.168.1.50", "on": True, "brightness": 50, "color": {"r": 255, "g": 255, "b": 255}},
             {"ip": "192.168.1.51", "on": True, "brightness": 60, "color": {"r": 0, "g": 0, "b": 255}},
         ]
-        agent_signal.SAVED_STATE_FILE.write_text(json.dumps(saved_state))
+        arbiter.signal_file().write_text(json.dumps(saved_state))
 
         args = mock.Mock()
         args.command = "needs-input"
@@ -619,7 +620,7 @@ class TestLocking(StateDirMixin, unittest.TestCase):
         # Status should have been called 4 times (3 for first device, 1 for second)
         self.assertEqual(mock_status.call_count, 4)
         # Saved state should have both devices
-        saved = json.loads(agent_signal.SAVED_STATE_FILE.read_text())
+        saved = json.loads(arbiter.signal_file().read_text())
         self.assertEqual(len(saved), 2)
 
     @mock.patch("agent_signal.govee.turn")
@@ -630,11 +631,11 @@ class TestLocking(StateDirMixin, unittest.TestCase):
     ):
         """restore_state applies default config for devices missing from saved state."""
         # Create a saved state file with only one device
-        agent_signal.SAVED_STATE_FILE.parent.mkdir(parents=True, exist_ok=True)
+        arbiter.signal_file().parent.mkdir(parents=True, exist_ok=True)
         saved_state = [
             {"ip": "192.168.1.50", "on": True, "brightness": 50, "color": {"r": 255, "g": 255, "b": 255}},
         ]
-        agent_signal.SAVED_STATE_FILE.write_text(json.dumps(saved_state))
+        arbiter.signal_file().write_text(json.dumps(saved_state))
 
         # Config has default
         self.config["default"] = {"color": "white", "brightness": 40}
@@ -653,6 +654,75 @@ class TestLocking(StateDirMixin, unittest.TestCase):
         mock_color.assert_any_call("192.168.1.51", 255, 255, 255, kelvin=0)
         # Brightness should be 40 for the missing device
         mock_brightness.assert_any_call("192.168.1.51", 40)
+
+
+class TestSignalArbiterIntegration(StateDirMixin, unittest.TestCase):
+    """Test that agent_signal and arbiter are tied together via signal_file()."""
+
+    def setUp(self):
+        super().setUp()
+        self.config_path = self.state_dir / "config.json"
+        self.config = {
+            "devices": [{"name": "left", "ip": "192.168.1.50"}],
+            "signal": {"color": "#ff6a00", "brightness": 100, "blink": False},
+        }
+        self.config_path.write_text(json.dumps(self.config))
+
+    @mock.patch("agent_signal.govee.status")
+    @mock.patch("agent_signal.govee.turn")
+    @mock.patch("agent_signal.govee.brightness")
+    @mock.patch("agent_signal.govee.color")
+    def test_needs_input_makes_arbiter_signal_active(
+        self, mock_color, mock_brightness, mock_turn, mock_status
+    ):
+        """needs-input creates the signal file that arbiter.signal_active() checks."""
+        mock_status.return_value = {
+            "msg": {"data": {"on": True, "brightness": 50, "color": {"r": 255, "g": 255, "b": 255}}}
+        }
+
+        # Before: arbiter should not see signal as active
+        self.assertFalse(arbiter.signal_active())
+
+        args = mock.Mock()
+        args.command = "needs-input"
+        args.config = str(self.config_path)
+        args.dry_run = False
+
+        agent_signal.cmd_needs_input(args)
+
+        # After needs-input: arbiter should see signal as active
+        self.assertTrue(arbiter.signal_active())
+
+    @mock.patch("agent_signal.govee.status")
+    @mock.patch("agent_signal.govee.turn")
+    @mock.patch("agent_signal.govee.brightness")
+    @mock.patch("agent_signal.govee.color")
+    def test_clear_makes_arbiter_signal_inactive(
+        self, mock_color, mock_brightness, mock_turn, mock_status
+    ):
+        """clear deletes the signal file that arbiter.signal_active() checks."""
+        mock_status.return_value = {
+            "msg": {"data": {"on": True, "brightness": 50, "color": {"r": 255, "g": 255, "b": 255}}}
+        }
+
+        # Create signal state
+        args1 = mock.Mock()
+        args1.command = "needs-input"
+        args1.config = str(self.config_path)
+        args1.dry_run = False
+        agent_signal.cmd_needs_input(args1)
+
+        self.assertTrue(arbiter.signal_active())
+
+        # Clear signal
+        args2 = mock.Mock()
+        args2.command = "clear"
+        args2.config = str(self.config_path)
+        args2.dry_run = False
+        agent_signal.cmd_clear(args2)
+
+        # After clear: arbiter should not see signal as active
+        self.assertFalse(arbiter.signal_active())
 
 
 if __name__ == "__main__":

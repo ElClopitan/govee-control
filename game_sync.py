@@ -144,13 +144,19 @@ def run(config, interval=5, once=False, dry_run=False):
             else:
                 signal_was_active = False
                 if profile_name != last_profile_name:
-                    print(f"Switching to: {profile_name}")
-                    try:
-                        apply_profile(config, profile, dry_run=dry_run)
-                    except OSError as e:
-                        print(f"warning: failed to apply {profile_name}: {e}", file=sys.stderr)
+                    # Re-check signal just before applying (race condition fix).
+                    # A signal could have become active since we last checked.
+                    if arbiter.signal_active():
+                        print("signal active; skipping game sync")
+                        last_profile_name = None
                     else:
-                        last_profile_name = profile_name
+                        print(f"Switching to: {profile_name}")
+                        try:
+                            apply_profile(config, profile, dry_run=dry_run)
+                        except OSError as e:
+                            print(f"warning: failed to apply {profile_name}: {e}", file=sys.stderr)
+                        else:
+                            last_profile_name = profile_name
 
             if once:
                 break

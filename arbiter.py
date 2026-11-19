@@ -23,12 +23,21 @@ STATE_DIR = Path(__file__).parent / "state"
 GAME_STALE_SECONDS = 60
 
 
+def signal_file():
+    """Return the path to the signal state file.
+
+    This is the single source of truth for the signal file path,
+    used by both arbiter and agent_signal.
+    """
+    return STATE_DIR / "saved_state.json"
+
+
 def signal_active():
     """Check if agent signal is active.
 
     Returns True if state/saved_state.json exists.
     """
-    return (STATE_DIR / "saved_state.json").exists()
+    return signal_file().exists()
 
 
 def game_active():

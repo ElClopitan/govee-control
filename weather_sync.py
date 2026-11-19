@@ -184,6 +184,16 @@ def run(config, once=False, interval=900, dry_run=False):
         logger.info("Weather: code=%d temp=%.1f°C day=%d -> color=%s",
                     code, temp, is_day, color_hex)
 
+        # Re-check priority just before sending (race condition fix).
+        # A signal or game could have become active during the weather fetch.
+        if arbiter.signal_active() or arbiter.game_active():
+            logger.info("skipped: signal/game became active during fetch")
+            last_color = None
+            if once:
+                break
+            time.sleep(interval)
+            continue
+
         if color_hex != last_color or dry_run:
             r, g, b = govee.parse_color(color_hex)
             try:
