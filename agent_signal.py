@@ -90,7 +90,28 @@ def get_signal_config(cfg):
     return cfg.get("signal", DEFAULT_SIGNAL)
 
 
-def save_state(devices, dry_run=False):
+def is_signal_state(entry, signal_cfg):
+    """Check if a device state entry matches the signal colour.
+
+    Returns True when the entry's color r/g/b equals the signal colour
+    and the entry is on. Brightness does not matter.
+    """
+    if not entry.get("on", True):
+        return False
+    color_str = signal_cfg.get("color", DEFAULT_SIGNAL["color"])
+    try:
+        r, g, b = govee.parse_color(color_str)
+    except ValueError:
+        return False
+    entry_color = entry.get("color", {})
+    return (
+        entry_color.get("r") == r
+        and entry_color.get("g") == g
+        and entry_color.get("b") == b
+    )
+
+
+def save_state(devices, signal_cfg, dry_run=False):
     """Save current device states to file."""
     signal_path = arbiter.signal_file()
     if dry_run:
@@ -122,13 +143,16 @@ def save_state(devices, dry_run=False):
 
         if resp:
             data = resp.get("msg", {}).get("data", {})
-            states.append({
+            entry = {
                 "ip": ip,
                 "on": bool(data.get("onOff", 1)),
                 "brightness": data.get("brightness", 100),
                 "color": data.get("color", {"r": 255, "g": 255, "b": 255}),
                 "colorTemInKelvin": data.get("colorTemInKelvin", 0),
-            })
+            }
+            # Skip saving if the device is already showing the signal colour
+            if not is_signal_state(entry, signal_cfg):
+                states.append(entry)
         else:
             print(f"warning: no status response from {ip}", file=sys.stderr)
 
@@ -200,7 +224,9 @@ def set_signal_color(devices, signal_cfg, dry_run=False):
             if not dry_run:
                 for dev in devices:
                     govee.turn(dev["ip"], True)
+                    time.sleep(0.1)
                     govee.brightness(dev["ip"], brightness)
+                    time.sleep(0.1)
                     govee.color(dev["ip"], r, g, b)
             else:
                 print(f"[dry-run] blink {i+1}: on {color_str} at {brightness}%")
@@ -217,7 +243,9 @@ def set_signal_color(devices, signal_cfg, dry_run=False):
         if not dry_run:
             for dev in devices:
                 govee.turn(dev["ip"], True)
+                time.sleep(0.1)
                 govee.brightness(dev["ip"], brightness)
+                time.sleep(0.1)
                 govee.color(dev["ip"], r, g, b)
         else:
             print(f"[dry-run] staying on {color_str} at {brightness}%")
@@ -226,13 +254,15 @@ def set_signal_color(devices, signal_cfg, dry_run=False):
         if not dry_run:
             for dev in devices:
                 govee.turn(dev["ip"], True)
+                time.sleep(0.1)
                 govee.brightness(dev["ip"], brightness)
+                time.sleep(0.1)
                 govee.color(dev["ip"], r, g, b)
         else:
             print(f"[dry-run] set {color_str} at {brightness}% on all devices")
 
 
-def restore_state(devices, default_cfg=None, dry_run=False, quiet=False):
+def restore_state(devices, signal_cfg, default_cfg=None, dry_run=False, quiet=False):
     """Restore saved state. Returns True if state was restored, False if none."""
     saved = load_saved_state(quiet=quiet)
 
@@ -240,9 +270,17 @@ def restore_state(devices, default_cfg=None, dry_run=False, quiet=False):
         # Build a map of saved states by IP
         saved_by_ip = {s["ip"]: s for s in saved}
 
+        # Track which devices were skipped (signal colour) so they get fallback
+        skipped_ips = set()
+
         # Restore from saved state for devices that have it
         for dev_state in saved:
             ip = dev_state["ip"]
+            # Skip restoring if the saved state matches the signal colour
+            # (it was saved while the signal was active)
+            if is_signal_state(dev_state, signal_cfg):
+                skipped_ips.add(ip)
+                continue
             was_on = dev_state.get("on", True)
             brightness = dev_state.get("brightness", 100)
             color = dev_state.get("color", {"r": 255, "g": 255, "b": 255})
@@ -252,29 +290,36 @@ def restore_state(devices, default_cfg=None, dry_run=False, quiet=False):
                 if was_on:
                     # If it was on: turn on first, then brightness, then color
                     govee.turn(ip, True)
+                    time.sleep(0.1)
                     govee.brightness(ip, brightness)
+                    time.sleep(0.1)
                     govee.color(ip, color.get("r", 255), color.get("g", 255), color.get("b", 255), kelvin=kelvin)
                 else:
                     # If it was off: set brightness and color first, then turn off LAST
                     # (color command can switch the light back on)
                     govee.brightness(ip, brightness)
+                    time.sleep(0.1)
                     govee.color(ip, color.get("r", 255), color.get("g", 255), color.get("b", 255), kelvin=kelvin)
+                    time.sleep(0.1)
                     govee.turn(ip, False)
             else:
                 print(f"[dry-run] restore {ip}: on={was_on}, brightness={brightness}")
 
-        # Fallback: for devices in config but not in saved state, apply default.
+        # Fallback: for devices in config but not in saved state, or skipped
+        # (signal colour), apply default.
         # If default_cfg is None (config had "default": null), use the built-in default.
         fallback = default_cfg if default_cfg is not None else arbiter.BUILTIN_DEFAULT
         for dev in devices:
             ip = dev["ip"]
-            if ip not in saved_by_ip:
+            if ip not in saved_by_ip or ip in skipped_ips:
                 color_str = fallback.get("color", "white")
                 brightness = fallback.get("brightness", 40)
                 r, g, b = govee.parse_color(color_str)
                 if not dry_run:
                     govee.turn(ip, True)
+                    time.sleep(0.1)
                     govee.brightness(ip, brightness)
+                    time.sleep(0.1)
                     govee.color(ip, r, g, b, kelvin=0)
                 else:
                     print(f"[dry-run] fallback {ip}: {color_str} at {brightness}%")
@@ -314,7 +359,7 @@ def cmd_needs_input(args):
     try:
         # Re-check under the lock (race condition fix)
         if not signal_path.exists() or args.dry_run:
-            save_state(devices, dry_run=args.dry_run)
+            save_state(devices, signal_cfg, dry_run=args.dry_run)
 
         try:
             set_signal_color(devices, signal_cfg, dry_run=args.dry_run)
@@ -340,6 +385,7 @@ def cmd_clear(args):
         print("no devices in config", file=sys.stderr)
         sys.exit(1)
 
+    signal_cfg = get_signal_config(cfg)
     default_cfg = cfg.get("default")
 
     # Acquire lock before restoring state
@@ -358,7 +404,7 @@ def cmd_clear(args):
         was_corrupt = saved == []
 
         try:
-            restore_state(devices, default_cfg=default_cfg, dry_run=args.dry_run, quiet=was_corrupt)
+            restore_state(devices, signal_cfg, default_cfg=default_cfg, dry_run=args.dry_run, quiet=was_corrupt)
         except OSError as e:
             print(f"warning: could not restore lights: {e}", file=sys.stderr)
             return

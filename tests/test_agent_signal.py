@@ -1078,6 +1078,85 @@ class TestLoadSavedStateShapeValidation(StateDirMixin, unittest.TestCase):
         self.assertFalse(arbiter.signal_file().exists())
 
 
+class TestSignalStateFiltering(StateDirMixin, unittest.TestCase):
+    """Test that signal colour is not saved or restored as previous state."""
+
+    def setUp(self):
+        super().setUp()
+        self.config_path = self.state_dir / "config.json"
+        self.config = {
+            "devices": [
+                {"name": "left", "ip": "192.168.1.50"},
+                {"name": "right", "ip": "192.168.1.51"},
+            ],
+            "signal": {
+                "color": "#ff6a00",
+                "brightness": 100,
+                "blink": False,
+            },
+        }
+        self.config_path.write_text(json.dumps(self.config))
+
+    @mock.patch("agent_signal.govee.status")
+    @mock.patch("agent_signal.govee.turn")
+    @mock.patch("agent_signal.govee.brightness")
+    @mock.patch("agent_signal.govee.color")
+    def test_save_state_skips_signal_color(
+        self, mock_color, mock_brightness, mock_turn, mock_status
+    ):
+        """save_state skips devices showing the signal colour."""
+        # First device shows signal colour (#ff6a00 = 255, 106, 0)
+        # Second device shows a different colour (#b0bec5 = 176, 190, 197)
+        mock_status.side_effect = [
+            {"msg": {"data": {"onOff": 1, "brightness": 100, "color": {"r": 255, "g": 106, "b": 0}}}},
+            {"msg": {"data": {"onOff": 1, "brightness": 50, "color": {"r": 176, "g": 190, "b": 197}}}},
+        ]
+
+        args = mock.Mock()
+        args.command = "needs-input"
+        args.config = str(self.config_path)
+        args.dry_run = False
+
+        agent_signal.cmd_needs_input(args)
+
+        # Only the non-signal device should be saved
+        saved = json.loads(arbiter.signal_file().read_text())
+        self.assertEqual(len(saved), 1)
+        self.assertEqual(saved[0]["ip"], "192.168.1.51")
+        self.assertEqual(saved[0]["color"]["r"], 176)
+
+    @mock.patch("agent_signal.govee.turn")
+    @mock.patch("agent_signal.govee.brightness")
+    @mock.patch("agent_signal.govee.color")
+    def test_restore_state_skips_signal_color(
+        self, mock_color, mock_brightness, mock_turn
+    ):
+        """restore_state skips saved entries matching the signal colour."""
+        # Create a saved state where one device has the signal colour
+        arbiter.signal_file().parent.mkdir(parents=True, exist_ok=True)
+        saved_state = [
+            {"ip": "192.168.1.50", "on": True, "brightness": 100, "color": {"r": 255, "g": 106, "b": 0}},
+            {"ip": "192.168.1.51", "on": True, "brightness": 50, "color": {"r": 176, "g": 190, "b": 197}},
+        ]
+        arbiter.signal_file().write_text(json.dumps(saved_state))
+
+        # Config has no "default" key, so BUILTIN_DEFAULT (white, 40%) is used
+        args = mock.Mock()
+        args.command = "clear"
+        args.config = str(self.config_path)
+        args.dry_run = False
+
+        agent_signal.cmd_clear(args)
+
+        # Device 1 (signal colour) should get fallback (white, 40%)
+        mock_color.assert_any_call("192.168.1.50", 255, 255, 255, kelvin=0)
+        mock_brightness.assert_any_call("192.168.1.50", 40)
+
+        # Device 2 (non-signal colour) should be restored
+        mock_color.assert_any_call("192.168.1.51", 176, 190, 197, kelvin=0)
+        mock_brightness.assert_any_call("192.168.1.51", 50)
+
+
 class TestClearWithNullDefault(StateDirMixin, unittest.TestCase):
     """Test that clear with "default": null uses built-in default."""
 
