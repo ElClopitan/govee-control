@@ -329,6 +329,12 @@ class TestSignalClear(unittest.TestCase):
         ]
         agent_signal.SAVED_STATE_FILE.write_text(json.dumps(saved_state))
 
+        # Use attach_mock to track actual call order
+        parent = mock.Mock()
+        parent.attach_mock(mock_turn, "turn")
+        parent.attach_mock(mock_brightness, "brightness")
+        parent.attach_mock(mock_color, "color")
+
         args = mock.Mock()
         args.command = "clear"
         args.config = str(self.config_path)
@@ -336,30 +342,10 @@ class TestSignalClear(unittest.TestCase):
 
         agent_signal.cmd_clear(args)
 
-        # For the off device, turn(False) must be the last call for that IP
-        # Check that brightness and color were called before turn(False)
-        brightness_calls = [c for c in mock_brightness.call_args_list if c[0][0] == "192.168.1.50"]
-        color_calls = [c for c in mock_color.call_args_list if c[0][0] == "192.168.1.50"]
-        turn_off_calls = [c for c in mock_turn.call_args_list if c[0][0] == "192.168.1.50" and c[0][1] is False]
-
-        self.assertEqual(len(brightness_calls), 1)
-        self.assertEqual(len(color_calls), 1)
-        self.assertEqual(len(turn_off_calls), 1)
-
-        # Verify order: brightness and color before turn off
-        all_calls = []
-        for c in mock_brightness.call_args_list:
-            if c[0][0] == "192.168.1.50":
-                all_calls.append(("brightness", c))
-        for c in mock_color.call_args_list:
-            if c[0][0] == "192.168.1.50":
-                all_calls.append(("color", c))
-        for c in mock_turn.call_args_list:
-            if c[0][0] == "192.168.1.50" and c[0][1] is False:
-                all_calls.append(("turn_off", c))
-
-        # turn_off should be last
-        self.assertEqual(all_calls[-1][0], "turn_off")
+        # Check actual call order for this IP
+        names = [c[0] for c in parent.mock_calls if c[1] and c[1][0] == "192.168.1.50"]
+        self.assertEqual(names, ["brightness", "color", "turn"])
+        self.assertEqual(mock_turn.call_args, mock.call("192.168.1.50", False))
 
     @mock.patch("agent_signal.govee.turn")
     @mock.patch("agent_signal.govee.brightness")
@@ -367,12 +353,18 @@ class TestSignalClear(unittest.TestCase):
     def test_clear_on_device_turn_on_first(
         self, mock_color, mock_brightness, mock_turn
     ):
-        """clear with a saved 'on': true device sends turn(ip, True) and never turn(ip, False)."""
+        """clear with a saved 'on': true device sends turn(ip, True) FIRST."""
         agent_signal.SAVED_STATE_FILE.parent.mkdir(parents=True, exist_ok=True)
         saved_state = [
             {"ip": "192.168.1.50", "on": True, "brightness": 50, "color": {"r": 255, "g": 255, "b": 255}},
         ]
         agent_signal.SAVED_STATE_FILE.write_text(json.dumps(saved_state))
+
+        # Use attach_mock to track actual call order
+        parent = mock.Mock()
+        parent.attach_mock(mock_turn, "turn")
+        parent.attach_mock(mock_brightness, "brightness")
+        parent.attach_mock(mock_color, "color")
 
         args = mock.Mock()
         args.command = "clear"
@@ -381,12 +373,10 @@ class TestSignalClear(unittest.TestCase):
 
         agent_signal.cmd_clear(args)
 
-        # turn(True) should be called
-        turn_on_calls = [c for c in mock_turn.call_args_list if c[0][0] == "192.168.1.50" and c[0][1] is True]
-        turn_off_calls = [c for c in mock_turn.call_args_list if c[0][0] == "192.168.1.50" and c[0][1] is False]
-
-        self.assertEqual(len(turn_on_calls), 1)
-        self.assertEqual(len(turn_off_calls), 0)
+        # Check actual call order for this IP
+        names = [c[0] for c in parent.mock_calls if c[1] and c[1][0] == "192.168.1.50"]
+        self.assertEqual(names, ["turn", "brightness", "color"])
+        self.assertEqual(mock_turn.call_args, mock.call("192.168.1.50", True))
 
     @mock.patch("agent_signal.govee.turn")
     @mock.patch("agent_signal.govee.brightness")
