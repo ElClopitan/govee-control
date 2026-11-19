@@ -24,6 +24,8 @@ STATE_DIR = Path(__file__).parent / "state"
 LOCK_FILE = STATE_DIR / "agent_signal.lock"
 LOCK_TIMEOUT = 10.0
 LOCK_STALE = 30.0
+STATUS_TIMEOUT = 1.0
+SAVE_STATE_BUDGET = 5.0
 
 DEFAULT_SIGNAL = {
     "color": "#ff6a00",
@@ -97,19 +99,26 @@ def save_state(devices, dry_run=False):
 
     signal_path.parent.mkdir(parents=True, exist_ok=True)
 
+    deadline = time.time() + SAVE_STATE_BUDGET
     states = []
     for dev in devices:
         ip = dev["ip"]
         resp = None
         for attempt in range(3):
+            remaining = deadline - time.time()
+            if remaining <= 0:
+                break
             try:
-                resp = govee.status(ip)
+                resp = govee.status(ip, timeout=min(STATUS_TIMEOUT, remaining))
                 if resp:
                     break
             except OSError:
                 pass
             if attempt < 2:
-                time.sleep(0.3)
+                sleep_time = 0.3
+                if time.time() + sleep_time >= deadline:
+                    break
+                time.sleep(sleep_time)
 
         if resp:
             data = resp.get("msg", {}).get("data", {})

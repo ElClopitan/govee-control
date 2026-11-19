@@ -809,6 +809,79 @@ class TestSignalArbiterIntegration(StateDirMixin, unittest.TestCase):
         self.assertFalse(arbiter.signal_active())
 
 
+class TestSaveStateTimeout(StateDirMixin, unittest.TestCase):
+    """Test that save_state respects the SAVE_STATE_BUDGET deadline."""
+
+    def setUp(self):
+        super().setUp()
+        self.config_path = self.state_dir / "config.json"
+        self.config = {
+            "devices": [
+                {"name": "left", "ip": "192.168.1.50"},
+                {"name": "right", "ip": "192.168.1.51"},
+            ],
+            "signal": {
+                "color": "#ff6a00",
+                "brightness": 100,
+                "blink": False,
+            },
+        }
+        self.config_path.write_text(json.dumps(self.config))
+
+    @mock.patch("agent_signal.govee.status")
+    @mock.patch("agent_signal.govee.turn")
+    @mock.patch("agent_signal.govee.brightness")
+    @mock.patch("agent_signal.govee.color")
+    def test_save_state_respects_budget(
+        self, mock_color, mock_brightness, mock_turn, mock_status
+    ):
+        """save_state stops trying when SAVE_STATE_BUDGET is exceeded."""
+        # Fake clock: track elapsed time
+        elapsed = [0.0]
+
+        def fake_time():
+            return elapsed[0]
+
+        def fake_sleep(seconds):
+            elapsed[0] += seconds
+
+        def fake_status(ip, timeout=2):
+            # Simulate a slow device that takes the full timeout
+            elapsed[0] += timeout
+            return None
+
+        with mock.patch("agent_signal.time.time", fake_time):
+            with mock.patch("agent_signal.time.sleep", fake_sleep):
+                mock_status.side_effect = fake_status
+
+                args = mock.Mock()
+                args.command = "needs-input"
+                args.config = str(self.config_path)
+                args.dry_run = False
+
+                agent_signal.cmd_needs_input(args)
+
+        # Elapsed time should be within budget (plus small tolerance)
+        self.assertLessEqual(
+            elapsed[0],
+            agent_signal.SAVE_STATE_BUDGET + 0.5,
+            f"save_state took {elapsed[0]}s, exceeding budget of {agent_signal.SAVE_STATE_BUDGET}s"
+        )
+
+        # Every status call should have had timeout <= STATUS_TIMEOUT
+        for call in mock_status.call_args_list:
+            timeout = call[1].get("timeout", 2)
+            self.assertLessEqual(
+                timeout,
+                agent_signal.STATUS_TIMEOUT,
+                f"status call had timeout {timeout}s, exceeding STATUS_TIMEOUT of {agent_signal.STATUS_TIMEOUT}s"
+            )
+
+        # Saved state should be empty (no devices responded)
+        saved = json.loads(arbiter.signal_file().read_text())
+        self.assertEqual(saved, [])
+
+
 class TestClearWithNullDefault(StateDirMixin, unittest.TestCase):
     """Test that clear with "default": null uses built-in default."""
 
