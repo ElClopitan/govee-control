@@ -56,7 +56,9 @@ python govee.py scan --iface-ip 192.168.1.10
 ## Game sync
 
 `game_sync.py` watches for running game processes and sets the lights to each
-game's configured colour. When no game is running, it restores a default.
+game's configured colour. When no game is running, it restores a default,
+unless config has `"default": null`, in which case it sends nothing and leaves
+the lights to weather_sync or manual control.
 
 ```bash
 # Run once and exit (useful for testing)
@@ -180,6 +182,10 @@ Add a `weather` section to your `config.json`:
 
 The script refuses to run (exit code 2) if both latitude and longitude are 0.0.
 
+While a signal or game is active, weather_sync re-checks every 10 seconds
+(`weather_sync.BLOCKED_POLL_SECONDS`) and resumes as soon as the higher-priority
+source clears.
+
 ### Colour mapping
 
 Weather conditions are mapped to colours using WMO weather codes:
@@ -212,3 +218,7 @@ The priority system uses file-based state in the `state/` directory:
 Concurrent `needs-input` and `clear` hooks are serialised with `state/agent_signal.lock` to prevent race conditions where multiple Claude sessions run the hooks simultaneously.
 
 When a higher-priority source becomes inactive, the next source in the priority chain re-applies its colour on the next sync cycle.
+
+### Clear fallback
+
+When `agent_signal.py clear` runs, it restores each strip that has saved state. For any configured strip that has no saved state — for example, a strip that did not answer `devStatus` when the signal was raised, or every strip when the saved-state marker is `[]` — it applies the config's `"default"` profile. If `"default"` is missing or `null`, it falls back to white at 40%. The lights never stay in the signal colour after `clear`.

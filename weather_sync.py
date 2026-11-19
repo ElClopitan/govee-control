@@ -199,6 +199,7 @@ def run(config, once=False, interval=900, dry_run=False):
         # A signal or game could have become active during the weather fetch.
         if arbiter.signal_active() or arbiter.game_active():
             logger.info("skipped: signal/game became active during fetch")
+            priority_was_active = True
             last_color = None
             if once:
                 break

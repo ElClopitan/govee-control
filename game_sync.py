@@ -2,7 +2,9 @@
 """Game-aware lighting: detect running games and set Govee lights accordingly.
 
 When a known game is running, set the lights to that game's colour.
-When no game is running, restore a default colour/brightness.
+When no game is running, restore a default colour/brightness, unless config
+has "default": null, in which case it sends nothing and leaves the lights to
+weather_sync or manual control.
 
 Stdlib only. Uses govee.py for device control.
 """

@@ -766,6 +766,54 @@ class TestPriorityRecheckBeforeSend(StateDirMixin, unittest.TestCase):
         mock_color.assert_not_called()
         mock_brightness.assert_not_called()
 
+    @mock.patch("weather_sync.fetch_weather")
+    @mock.patch("govee.color")
+    @mock.patch("govee.brightness")
+    @mock.patch("time.sleep")
+    def test_one_skip_log_per_block(self, mock_sleep, mock_brightness, mock_color, mock_fetch):
+        """Only one 'skipped:' log line per blocked period, not two.
+
+        When the re-check branch fires (signal/game became active during
+        fetch), it must set priority_was_active = True so the next loop
+        pass does not also log 'skipped: signal/game active'.
+        """
+        import arbiter
+
+        def fetch_with_signal(*args, **kwargs):
+            # Simulate signal being raised during the fetch
+            (arbiter.STATE_DIR / "saved_state.json").write_text("[]")
+            return {
+                "temperature_2m": 20.0,
+                "weather_code": 0,
+                "is_day": 1,
+            }
+
+        mock_fetch.side_effect = fetch_with_signal
+
+        # Exit the loop after the 3rd sleep call
+        sleep_count = [0]
+        def sleep_side_effect(seconds):
+            sleep_count[0] += 1
+            if sleep_count[0] >= 3:
+                raise _StopLoop()
+
+        mock_sleep.side_effect = sleep_side_effect
+        config = self._make_config()
+
+        with self.assertLogs("weather_sync", "INFO") as cm:
+            try:
+                weather_sync.run(config, once=False, interval=900)
+            except _StopLoop:
+                pass
+
+        # Count how many log records contain "skipped:"
+        skipped_records = [r for r in cm.records if "skipped:" in r.getMessage()]
+        # First pass: "skipped: signal/game became active during fetch"
+        # Subsequent passes: no additional "skipped:" because priority_was_active is True
+        self.assertEqual(len(skipped_records), 1,
+                         f"Expected 1 skipped log, got {len(skipped_records)}: "
+                         + "; ".join(r.getMessage() for r in skipped_records))
+
 
 if __name__ == "__main__":
     unittest.main()
