@@ -20,27 +20,24 @@ for global, or `.claude/settings.json` for project-specific):
   "hooks": {
     "Notification": [
       {
-        "type": "command",
-        "command": "python",
-        "args": [
-          "C:/path/to/govee-control/agent_signal.py",
-          "needs-input"
+        "matcher": "",
+        "hooks": [
+          { "type": "command", "command": "python C:/path/to/govee-control/agent_signal.py needs-input" }
         ]
       }
     ],
     "UserPromptSubmit": [
       {
-        "type": "command",
-        "command": "python",
-        "args": [
-          "C:/path/to/govee-control/agent_signal.py",
-          "clear"
+        "hooks": [
+          { "type": "command", "command": "python C:/path/to/govee-control/agent_signal.py clear" }
         ]
       }
     ]
   }
 }
 ```
+
+If your settings.json already has a `hooks` key, merge these two events into it instead of adding a second `hooks` key.
 
 ## How It Works
 
