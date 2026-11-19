@@ -215,10 +215,10 @@ class TestSignalClear(unittest.TestCase):
     @mock.patch("agent_signal.govee.turn")
     @mock.patch("agent_signal.govee.brightness")
     @mock.patch("agent_signal.govee.color")
-    def test_clear_applies_default_when_no_saved_state(
+    def test_clear_no_saved_state_with_default_config_sends_nothing(
         self, mock_color, mock_brightness, mock_turn
     ):
-        """clear applies default config when no saved state exists."""
+        """clear with no saved state and a config that HAS a default key sends nothing."""
         # Add default to config
         self.config["default"] = {"color": "white", "brightness": 40}
         self.config_path.write_text(json.dumps(self.config))
@@ -230,9 +230,20 @@ class TestSignalClear(unittest.TestCase):
 
         agent_signal.cmd_clear(args)
 
-        # Default should be applied
-        self.assertEqual(mock_brightness.call_count, 2)
-        self.assertEqual(mock_brightness.call_args_list[0][0][1], 40)
+        # No govee commands should have been sent (default fallback removed)
+        mock_turn.assert_not_called()
+        mock_brightness.assert_not_called()
+        mock_color.assert_not_called()
+
+    def test_clear_no_saved_state_no_config_file(self):
+        """clear with no saved state and a non-existent config path exits normally."""
+        args = mock.Mock()
+        args.command = "clear"
+        args.config = str(Path(self.temp_dir.name) / "nonexistent.json")
+        args.dry_run = False
+
+        # Should not raise an exception
+        agent_signal.cmd_clear(args)
 
 
 class TestSignalDryRun(unittest.TestCase):

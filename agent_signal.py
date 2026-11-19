@@ -134,8 +134,8 @@ def set_signal_color(devices, signal_cfg, dry_run=False):
             print(f"[dry-run] set {color_str} at {brightness}% on all devices")
 
 
-def restore_state(devices, cfg, dry_run=False):
-    """Restore saved state or apply default."""
+def restore_state(devices, dry_run=False):
+    """Restore saved state. Returns True if state was restored, False if none."""
     saved = load_saved_state()
 
     if saved:
@@ -150,24 +150,10 @@ def restore_state(devices, cfg, dry_run=False):
             else:
                 print(f"[dry-run] restore {ip}: on={dev_state.get('on')}, brightness={dev_state.get('brightness')}")
         print("restored saved state")
-    elif "default" in cfg:
-        # Apply default config
-        default = cfg["default"]
-        color_str = default.get("color", "white")
-        brightness = default.get("brightness", 100)
-        r, g, b = govee.parse_color(color_str)
-        if not dry_run:
-            for dev in devices:
-                govee.turn(dev["ip"], True)
-                govee.brightness(dev["ip"], brightness)
-                govee.color(dev["ip"], r, g, b)
-        else:
-            print(f"[dry-run] apply default: {color_str} at {brightness}%")
-        print("applied default config")
+        return True
     else:
-        print("no saved state and no default config; nothing to restore")
+        print("no active signal; nothing to do")
         return False
-    return True
 
 
 def cmd_needs_input(args):
@@ -190,13 +176,19 @@ def cmd_needs_input(args):
 
 def cmd_clear(args):
     """Handle the clear command."""
+    # Check for saved state BEFORE loading config so we don't need the network
+    # or a valid config when no signal is active.
+    if not SAVED_STATE_FILE.exists():
+        print("no active signal; nothing to do")
+        return
+
     cfg = load_config(args.config)
     devices = cfg.get("devices", [])
     if not devices:
         print("no devices in config", file=sys.stderr)
         sys.exit(1)
 
-    restored = restore_state(devices, cfg, dry_run=args.dry_run)
+    restored = restore_state(devices, dry_run=args.dry_run)
     if restored:
         delete_saved_state(dry_run=args.dry_run)
     print("signal cleared")
