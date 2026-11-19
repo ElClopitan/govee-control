@@ -96,9 +96,10 @@ class TestSendBytes(unittest.TestCase):
         govee.turn("1.2.3.4", True)
 
         self.assertEqual(captured["addr"], ("1.2.3.4", govee.CONTROL_PORT))
-        msg = json.loads(captured["data"])
-        self.assertEqual(msg["msg"]["cmd"], "turn")
-        self.assertEqual(msg["msg"]["data"]["value"], 1)
+        self.assertEqual(
+            json.loads(captured["data"]),
+            {"msg": {"cmd": "turn", "data": {"value": 1}}},
+        )
 
     @mock.patch("govee.socket.socket")
     def test_turn_off(self, mock_socket_cls):
@@ -107,9 +108,10 @@ class TestSendBytes(unittest.TestCase):
 
         govee.turn("1.2.3.4", False)
 
-        msg = json.loads(captured["data"])
-        self.assertEqual(msg["msg"]["cmd"], "turn")
-        self.assertEqual(msg["msg"]["data"]["value"], 0)
+        self.assertEqual(
+            json.loads(captured["data"]),
+            {"msg": {"cmd": "turn", "data": {"value": 0}}},
+        )
 
     @mock.patch("govee.socket.socket")
     def test_brightness(self, mock_socket_cls):
@@ -119,9 +121,10 @@ class TestSendBytes(unittest.TestCase):
         govee.brightness("1.2.3.4", 75)
 
         self.assertEqual(captured["addr"], ("1.2.3.4", govee.CONTROL_PORT))
-        msg = json.loads(captured["data"])
-        self.assertEqual(msg["msg"]["cmd"], "brightness")
-        self.assertEqual(msg["msg"]["data"]["value"], 75)
+        self.assertEqual(
+            json.loads(captured["data"]),
+            {"msg": {"cmd": "brightness", "data": {"value": 75}}},
+        )
 
     @mock.patch("govee.socket.socket")
     def test_color(self, mock_socket_cls):
@@ -131,12 +134,18 @@ class TestSendBytes(unittest.TestCase):
         govee.color("1.2.3.4", 255, 128, 0)
 
         self.assertEqual(captured["addr"], ("1.2.3.4", govee.CONTROL_PORT))
-        msg = json.loads(captured["data"])
-        self.assertEqual(msg["msg"]["cmd"], "colorwc")
-        self.assertEqual(msg["msg"]["data"]["color"]["r"], 255)
-        self.assertEqual(msg["msg"]["data"]["color"]["g"], 128)
-        self.assertEqual(msg["msg"]["data"]["color"]["b"], 0)
-        self.assertEqual(msg["msg"]["data"]["colorTemInKelvin"], 0)
+        self.assertEqual(
+            json.loads(captured["data"]),
+            {
+                "msg": {
+                    "cmd": "colorwc",
+                    "data": {
+                        "color": {"r": 255, "g": 128, "b": 0},
+                        "colorTemInKelvin": 0,
+                    },
+                }
+            },
+        )
 
     @mock.patch("govee.socket.socket")
     def test_color_with_kelvin(self, mock_socket_cls):
@@ -146,9 +155,18 @@ class TestSendBytes(unittest.TestCase):
         govee.color("1.2.3.4", 255, 255, 255, kelvin=4000)
 
         self.assertEqual(captured["addr"], ("1.2.3.4", govee.CONTROL_PORT))
-        msg = json.loads(captured["data"])
-        self.assertEqual(msg["msg"]["cmd"], "colorwc")
-        self.assertEqual(msg["msg"]["data"]["colorTemInKelvin"], 4000)
+        self.assertEqual(
+            json.loads(captured["data"]),
+            {
+                "msg": {
+                    "cmd": "colorwc",
+                    "data": {
+                        "color": {"r": 255, "g": 255, "b": 255},
+                        "colorTemInKelvin": 4000,
+                    },
+                }
+            },
+        )
 
 
 class TestGetInterfaceIPs(unittest.TestCase):
@@ -182,8 +200,9 @@ class TestGetInterfaceIPs(unittest.TestCase):
 
 
 class TestScan(unittest.TestCase):
+    @mock.patch("govee.get_interface_ips", return_value=["10.0.0.5"])
     @mock.patch("govee.socket.socket")
-    def test_scan_no_devices(self, mock_socket_cls):
+    def test_scan_no_devices(self, mock_socket_cls, mock_get_ips):
         """Scan with no replies returns empty list."""
         mock_sock = mock.MagicMock()
         mock_sock.recvfrom.side_effect = socket.timeout()
@@ -191,6 +210,21 @@ class TestScan(unittest.TestCase):
 
         devices = govee.scan(timeout=0.1)
         self.assertEqual(devices, [])
+
+    @mock.patch("govee.get_interface_ips", return_value=[])
+    @mock.patch("govee.socket.socket")
+    def test_scan_fallback_no_interfaces(self, mock_socket_cls, mock_get_ips):
+        """Scan with no interfaces falls back to OS default (sends once)."""
+        mock_sock = mock.MagicMock()
+        mock_sock.recvfrom.side_effect = socket.timeout()
+        mock_socket_cls.return_value = mock_sock
+
+        devices = govee.scan(timeout=0.1)
+        self.assertEqual(devices, [])
+        # One send socket (fallback) + one recv socket = 2 total
+        self.assertEqual(mock_socket_cls.call_count, 2)
+        # Sent exactly once (on the fallback interface)
+        self.assertEqual(mock_sock.sendto.call_count, 1)
 
     @mock.patch("govee.get_interface_ips", return_value=["192.168.1.10"])
     @mock.patch("govee.socket.socket")
@@ -218,8 +252,10 @@ class TestScan(unittest.TestCase):
         mock_sock.sendto.assert_called_once()
         data, addr = mock_sock.sendto.call_args[0]
         self.assertEqual(addr, (govee.MULTICAST_ADDR, govee.DISCOVERY_PORT))
-        msg = json.loads(data)
-        self.assertEqual(msg["msg"]["cmd"], "scan")
+        self.assertEqual(
+            json.loads(data),
+            {"msg": {"cmd": "scan", "data": {"account_topic": "reserve"}}},
+        )
 
     @mock.patch("govee.get_interface_ips", return_value=["192.168.1.10", "10.0.0.5"])
     @mock.patch("govee.socket.socket")
@@ -236,8 +272,9 @@ class TestScan(unittest.TestCase):
         # Should have sent on both interfaces
         self.assertEqual(mock_sock.sendto.call_count, 2)
 
+    @mock.patch("govee.get_interface_ips", return_value=["10.0.0.5"])
     @mock.patch("govee.socket.socket")
-    def test_scan_deduplicates_replies(self, mock_socket_cls):
+    def test_scan_deduplicates_replies(self, mock_socket_cls, mock_get_ips):
         """Duplicate scan replies from same device are deduped."""
         mock_sock = mock.MagicMock()
         reply = json.dumps({
@@ -368,13 +405,13 @@ class TestCLI(unittest.TestCase):
 
         try:
             with mock.patch("govee.send") as mock_send:
-                sys.argv = ["govee.py", "on", "--config", config_path]
-                govee.main()
+                with mock.patch.object(sys, "argv", ["govee.py", "on", "--config", config_path]):
+                    govee.main()
 
-                self.assertEqual(mock_send.call_count, 2)
-                ips = [call[0][0] for call in mock_send.call_args_list]
-                self.assertIn("192.168.1.50", ips)
-                self.assertIn("192.168.1.51", ips)
+                    self.assertEqual(mock_send.call_count, 2)
+                    ips = [call[0][0] for call in mock_send.call_args_list]
+                    self.assertIn("192.168.1.50", ips)
+                    self.assertIn("192.168.1.51", ips)
         finally:
             Path(config_path).unlink()
 
