@@ -1,6 +1,8 @@
-"""Tests for signal.py using unittest.mock to fake govee functions."""
+"""Tests for agent_signal.py using unittest.mock to fake govee functions."""
 
 import json
+import os
+import subprocess
 import sys
 import tempfile
 import unittest
@@ -8,7 +10,7 @@ from pathlib import Path
 from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
-import signal
+import agent_signal
 import govee
 
 
@@ -33,18 +35,18 @@ class TestSignalNeedsInput(unittest.TestCase):
         self.config_path.write_text(json.dumps(self.config))
 
         # Mock the state file path
-        self.original_state_file = signal.SAVED_STATE_FILE
-        signal.SAVED_STATE_FILE = Path(self.temp_dir.name) / "state" / "saved_state.json"
+        self.original_state_file = agent_signal.SAVED_STATE_FILE
+        agent_signal.SAVED_STATE_FILE = Path(self.temp_dir.name) / "state" / "saved_state.json"
 
     def tearDown(self):
         """Clean up temp directory."""
-        signal.SAVED_STATE_FILE = self.original_state_file
+        agent_signal.SAVED_STATE_FILE = self.original_state_file
         self.temp_dir.cleanup()
 
-    @mock.patch("signal.govee.status")
-    @mock.patch("signal.govee.turn")
-    @mock.patch("signal.govee.brightness")
-    @mock.patch("signal.govee.color")
+    @mock.patch("agent_signal.govee.status")
+    @mock.patch("agent_signal.govee.turn")
+    @mock.patch("agent_signal.govee.brightness")
+    @mock.patch("agent_signal.govee.color")
     def test_needs_input_saves_state_and_sets_color(
         self, mock_color, mock_brightness, mock_turn, mock_status
     ):
@@ -60,11 +62,11 @@ class TestSignalNeedsInput(unittest.TestCase):
         args.config = str(self.config_path)
         args.dry_run = False
 
-        signal.cmd_needs_input(args)
+        agent_signal.cmd_needs_input(args)
 
         # Verify state was saved
-        self.assertTrue(signal.SAVED_STATE_FILE.exists())
-        saved = json.loads(signal.SAVED_STATE_FILE.read_text())
+        self.assertTrue(agent_signal.SAVED_STATE_FILE.exists())
+        saved = json.loads(agent_signal.SAVED_STATE_FILE.read_text())
         self.assertEqual(len(saved), 2)
         self.assertEqual(saved[0]["ip"], "192.168.1.50")
         self.assertEqual(saved[0]["brightness"], 50)
@@ -74,10 +76,10 @@ class TestSignalNeedsInput(unittest.TestCase):
         # Parse #ff6a00 -> (255, 106, 0)
         self.assertEqual(mock_color.call_args_list[0][0][1:], (255, 106, 0))
 
-    @mock.patch("signal.govee.status")
-    @mock.patch("signal.govee.turn")
-    @mock.patch("signal.govee.brightness")
-    @mock.patch("signal.govee.color")
+    @mock.patch("agent_signal.govee.status")
+    @mock.patch("agent_signal.govee.turn")
+    @mock.patch("agent_signal.govee.brightness")
+    @mock.patch("agent_signal.govee.color")
     def test_second_needs_input_keeps_first_saved_state(
         self, mock_color, mock_brightness, mock_turn, mock_status
     ):
@@ -92,7 +94,7 @@ class TestSignalNeedsInput(unittest.TestCase):
         args1.command = "needs-input"
         args1.config = str(self.config_path)
         args1.dry_run = False
-        signal.cmd_needs_input(args1)
+        agent_signal.cmd_needs_input(args1)
 
         # Reset mocks
         mock_status.reset_mock()
@@ -105,19 +107,19 @@ class TestSignalNeedsInput(unittest.TestCase):
         args2.command = "needs-input"
         args2.config = str(self.config_path)
         args2.dry_run = False
-        signal.cmd_needs_input(args2)
+        agent_signal.cmd_needs_input(args2)
 
         # Status should not have been called on second invocation
         mock_status.assert_not_called()
 
         # Saved state should still have original values
-        saved = json.loads(signal.SAVED_STATE_FILE.read_text())
+        saved = json.loads(agent_signal.SAVED_STATE_FILE.read_text())
         self.assertEqual(saved[0]["brightness"], 50)
 
-    @mock.patch("signal.govee.status")
-    @mock.patch("signal.govee.turn")
-    @mock.patch("signal.govee.brightness")
-    @mock.patch("signal.govee.color")
+    @mock.patch("agent_signal.govee.status")
+    @mock.patch("agent_signal.govee.turn")
+    @mock.patch("agent_signal.govee.brightness")
+    @mock.patch("agent_signal.govee.color")
     def test_status_exception_does_not_crash(
         self, mock_color, mock_brightness, mock_turn, mock_status
     ):
@@ -133,7 +135,7 @@ class TestSignalNeedsInput(unittest.TestCase):
         args.dry_run = False
 
         # Should not raise
-        signal.cmd_needs_input(args)
+        agent_signal.cmd_needs_input(args)
 
         # Signal colour should still be set
         self.assertEqual(mock_color.call_count, 2)
@@ -155,33 +157,33 @@ class TestSignalClear(unittest.TestCase):
         self.config_path.write_text(json.dumps(self.config))
 
         # Mock the state file path
-        self.original_state_file = signal.SAVED_STATE_FILE
-        signal.SAVED_STATE_FILE = Path(self.temp_dir.name) / "state" / "saved_state.json"
+        self.original_state_file = agent_signal.SAVED_STATE_FILE
+        agent_signal.SAVED_STATE_FILE = Path(self.temp_dir.name) / "state" / "saved_state.json"
 
     def tearDown(self):
         """Clean up temp directory."""
-        signal.SAVED_STATE_FILE = self.original_state_file
+        agent_signal.SAVED_STATE_FILE = self.original_state_file
         self.temp_dir.cleanup()
 
-    @mock.patch("signal.govee.turn")
-    @mock.patch("signal.govee.brightness")
-    @mock.patch("signal.govee.color")
+    @mock.patch("agent_signal.govee.turn")
+    @mock.patch("agent_signal.govee.brightness")
+    @mock.patch("agent_signal.govee.color")
     def test_clear_restores_and_deletes_file(self, mock_color, mock_brightness, mock_turn):
         """clear restores saved state and deletes the file."""
         # Create a saved state file
-        signal.SAVED_STATE_FILE.parent.mkdir(parents=True, exist_ok=True)
+        agent_signal.SAVED_STATE_FILE.parent.mkdir(parents=True, exist_ok=True)
         saved_state = [
             {"ip": "192.168.1.50", "on": True, "brightness": 50, "color": {"r": 255, "g": 255, "b": 255}},
             {"ip": "192.168.1.51", "on": True, "brightness": 60, "color": {"r": 0, "g": 0, "b": 255}},
         ]
-        signal.SAVED_STATE_FILE.write_text(json.dumps(saved_state))
+        agent_signal.SAVED_STATE_FILE.write_text(json.dumps(saved_state))
 
         args = mock.Mock()
         args.command = "clear"
         args.config = str(self.config_path)
         args.dry_run = False
 
-        signal.cmd_clear(args)
+        agent_signal.cmd_clear(args)
 
         # Verify state was restored
         self.assertEqual(mock_brightness.call_count, 2)
@@ -189,11 +191,11 @@ class TestSignalClear(unittest.TestCase):
         self.assertEqual(mock_brightness.call_args_list[1][0][1], 60)
 
         # Verify file was deleted
-        self.assertFalse(signal.SAVED_STATE_FILE.exists())
+        self.assertFalse(agent_signal.SAVED_STATE_FILE.exists())
 
-    @mock.patch("signal.govee.turn")
-    @mock.patch("signal.govee.brightness")
-    @mock.patch("signal.govee.color")
+    @mock.patch("agent_signal.govee.turn")
+    @mock.patch("agent_signal.govee.brightness")
+    @mock.patch("agent_signal.govee.color")
     def test_clear_no_saved_file_no_default_sends_nothing(
         self, mock_color, mock_brightness, mock_turn
     ):
@@ -203,16 +205,16 @@ class TestSignalClear(unittest.TestCase):
         args.config = str(self.config_path)
         args.dry_run = False
 
-        signal.cmd_clear(args)
+        agent_signal.cmd_clear(args)
 
         # No govee commands should have been sent
         mock_turn.assert_not_called()
         mock_brightness.assert_not_called()
         mock_color.assert_not_called()
 
-    @mock.patch("signal.govee.turn")
-    @mock.patch("signal.govee.brightness")
-    @mock.patch("signal.govee.color")
+    @mock.patch("agent_signal.govee.turn")
+    @mock.patch("agent_signal.govee.brightness")
+    @mock.patch("agent_signal.govee.color")
     def test_clear_applies_default_when_no_saved_state(
         self, mock_color, mock_brightness, mock_turn
     ):
@@ -226,7 +228,7 @@ class TestSignalClear(unittest.TestCase):
         args.config = str(self.config_path)
         args.dry_run = False
 
-        signal.cmd_clear(args)
+        agent_signal.cmd_clear(args)
 
         # Default should be applied
         self.assertEqual(mock_brightness.call_count, 2)
@@ -246,18 +248,18 @@ class TestSignalDryRun(unittest.TestCase):
         }
         self.config_path.write_text(json.dumps(self.config))
 
-        self.original_state_file = signal.SAVED_STATE_FILE
-        signal.SAVED_STATE_FILE = Path(self.temp_dir.name) / "state" / "saved_state.json"
+        self.original_state_file = agent_signal.SAVED_STATE_FILE
+        agent_signal.SAVED_STATE_FILE = Path(self.temp_dir.name) / "state" / "saved_state.json"
 
     def tearDown(self):
         """Clean up temp directory."""
-        signal.SAVED_STATE_FILE = self.original_state_file
+        agent_signal.SAVED_STATE_FILE = self.original_state_file
         self.temp_dir.cleanup()
 
-    @mock.patch("signal.govee.status")
-    @mock.patch("signal.govee.turn")
-    @mock.patch("signal.govee.brightness")
-    @mock.patch("signal.govee.color")
+    @mock.patch("agent_signal.govee.status")
+    @mock.patch("agent_signal.govee.turn")
+    @mock.patch("agent_signal.govee.brightness")
+    @mock.patch("agent_signal.govee.color")
     def test_dry_run_does_not_send_commands(
         self, mock_color, mock_brightness, mock_turn, mock_status
     ):
@@ -269,12 +271,39 @@ class TestSignalDryRun(unittest.TestCase):
         args.config = str(self.config_path)
         args.dry_run = True
 
-        signal.cmd_needs_input(args)
+        agent_signal.cmd_needs_input(args)
 
         # No actual commands sent
         mock_turn.assert_not_called()
         mock_brightness.assert_not_called()
         mock_color.assert_not_called()
+
+
+class TestNoStdlibShadow(unittest.TestCase):
+    """Regression test: ensure no signal.py in repo root that shadows stdlib."""
+
+    def test_no_signal_py_in_repo_root(self):
+        """There should be no signal.py in the repo root."""
+        repo_root = Path(__file__).parent.parent
+        signal_py = repo_root / "signal.py"
+        self.assertFalse(
+            signal_py.exists(),
+            f"signal.py exists in repo root and shadows stdlib signal module: {signal_py}"
+        )
+
+    def test_stdlib_signal_importable_from_repo_dir(self):
+        """import signal should resolve to stdlib, not a local file."""
+        repo_root = Path(__file__).parent.parent
+        result = subprocess.run(
+            [sys.executable, "-c", "import signal,sys; assert 'Govee' not in signal.__file__, signal.__file__"],
+            cwd=str(repo_root),
+            capture_output=True,
+            text=True,
+        )
+        self.assertEqual(
+            result.returncode, 0,
+            f"stdlib signal import failed from repo dir: {result.stderr}"
+        )
 
 
 if __name__ == "__main__":

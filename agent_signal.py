@@ -5,8 +5,8 @@ Turns lights a signal colour when an AI agent needs input, and restores
 them afterwards.
 
 Usage:
-    python signal.py needs-input [--config PATH] [--dry-run]
-    python signal.py clear [--config PATH] [--dry-run]
+    python agent_signal.py needs-input [--config PATH] [--dry-run]
+    python agent_signal.py clear [--config PATH] [--dry-run]
 """
 
 import argparse
@@ -207,9 +207,9 @@ def main():
         description="Agent-needs-input light signal",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""Examples:
-  python signal.py needs-input
-  python signal.py clear
-  python signal.py needs-input --config myconfig.json --dry-run
+  python agent_signal.py needs-input
+  python agent_signal.py clear
+  python agent_signal.py needs-input --config myconfig.json --dry-run
 """,
     )
     parser.add_argument(

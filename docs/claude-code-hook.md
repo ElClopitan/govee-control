@@ -23,7 +23,7 @@ for global, or `.claude/settings.json` for project-specific):
         "type": "command",
         "command": "python",
         "args": [
-          "C:/path/to/govee-control/signal.py",
+          "C:/path/to/govee-control/agent_signal.py",
           "needs-input"
         ]
       }
@@ -33,7 +33,7 @@ for global, or `.claude/settings.json` for project-specific):
         "type": "command",
         "command": "python",
         "args": [
-          "C:/path/to/govee-control/signal.py",
+          "C:/path/to/govee-control/agent_signal.py",
           "clear"
         ]
       }
@@ -45,11 +45,11 @@ for global, or `.claude/settings.json` for project-specific):
 ## How It Works
 
 1. When an agent needs input, Claude Code sends a notification. The `Notification`
-   hook fires and runs `signal.py needs-input`, which turns the lights to the
+   hook fires and runs `agent_signal.py needs-input`, which turns the lights to the
    configured signal colour (default: orange `#ff6a00`).
 
 2. When the user submits a prompt (responding to the agent), the `UserPromptSubmit`
-   hook fires and runs `signal.py clear`, which restores the lights to their
+   hook fires and runs `agent_signal.py clear`, which restores the lights to their
    previous state.
 
 ## Notes
