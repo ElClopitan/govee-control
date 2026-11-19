@@ -192,7 +192,7 @@ When multiple light sources are active, they follow this priority order:
 
 The priority system uses file-based state in the `state/` directory:
 - `state/saved_state.json` — exists when an agent signal is active
-- `state/game_active.json` — exists when game sync is active (contains the profile name)
+- `state/game_active.json` — exists when game sync is active (contains the profile name); game sync rewrites this file every loop iteration as a heartbeat, and if it's older than 60 seconds it's considered stale so weather sync can resume
 - `state/agent_signal.lock` — lock file used to serialise concurrent agent signal hooks
 
 Concurrent `needs-input` and `clear` hooks are serialised with `state/agent_signal.lock` to prevent race conditions where multiple Claude sessions run the hooks simultaneously.

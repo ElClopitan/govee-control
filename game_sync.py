@@ -113,48 +113,56 @@ def run(config, interval=5, once=False, dry_run=False):
     last_profile_name = None
     signal_was_active = False
 
-    while True:
-        processes = running_processes()
-        profile = pick_profile(processes, games)
+    try:
+        while True:
+            processes = running_processes()
+            profile = pick_profile(processes, games)
 
-        if profile is None:
-            profile = default
-            profile_name = "default"
-        else:
-            profile_name = profile.get("name", profile.get("exe", "unknown"))
+            if profile is None:
+                profile = default
+                profile_name = "default"
+            else:
+                profile_name = profile.get("name", profile.get("exe", "unknown"))
 
-        # Manage game_active state (skip in dry-run)
-        if not dry_run:
-            if profile_name != "default":
-                arbiter.set_game_active(profile_name)
-            elif arbiter.game_active():
-                arbiter.clear_game_active()
+            # Manage game_active state (skip in dry-run and once mode).
+            # In loop mode, rewriting the file every iteration is the heartbeat
+            # that keeps game_active() returning True (see arbiter.GAME_STALE_SECONDS).
+            if not dry_run and not once:
+                if profile_name != "default":
+                    arbiter.set_game_active(profile_name)
+                elif arbiter.game_active():
+                    arbiter.clear_game_active()
 
-        # Check signal priority
-        if arbiter.signal_active():
-            if not signal_was_active:
-                print("signal active; skipping game sync")
-            signal_was_active = True
-        else:
-            signal_just_cleared = signal_was_active
-            signal_was_active = False
-            if signal_just_cleared:
-                # Signal just went away; re-apply current profile
-                print(f"signal cleared; re-applying {profile_name}")
-            if profile_name != last_profile_name or signal_just_cleared:
-                if profile_name != last_profile_name:
-                    print(f"Switching to: {profile_name}")
-                try:
-                    apply_profile(config, profile, dry_run=dry_run)
-                except OSError as e:
-                    print(f"warning: failed to apply {profile_name}: {e}", file=sys.stderr)
-                else:
-                    last_profile_name = profile_name
+            # Check signal priority
+            if arbiter.signal_active():
+                if not signal_was_active:
+                    print("signal active; skipping game sync")
+                signal_was_active = True
+            else:
+                signal_just_cleared = signal_was_active
+                signal_was_active = False
+                if signal_just_cleared:
+                    # Signal just went away; re-apply current profile
+                    print(f"signal cleared; re-applying {profile_name}")
+                if profile_name != last_profile_name or signal_just_cleared:
+                    if profile_name != last_profile_name:
+                        print(f"Switching to: {profile_name}")
+                    try:
+                        apply_profile(config, profile, dry_run=dry_run)
+                    except OSError as e:
+                        print(f"warning: failed to apply {profile_name}: {e}", file=sys.stderr)
+                    else:
+                        last_profile_name = profile_name
 
-        if once:
-            break
+            if once:
+                break
 
-        time.sleep(interval)
+            time.sleep(interval)
+    finally:
+        # Clear game_active on exit (loop mode only) so a crashed or
+        # Ctrl+C'd game_sync doesn't leave a stale file blocking weather.
+        if not dry_run and not once:
+            arbiter.clear_game_active()
 
 
 def main():

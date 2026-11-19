@@ -8,12 +8,19 @@ Priority: agent signal > game sync > weather sync.
 State files:
 - state/saved_state.json: exists when agent signal is active
 - state/game_active.json: exists when game sync is active, contains {"profile": "<name>"}
+  The file's mtime is used as a heartbeat; if it's older than GAME_STALE_SECONDS,
+  game_active() returns False so weather sync can resume.
 """
 
 import json
+import time
 from pathlib import Path
 
 STATE_DIR = Path(__file__).parent / "state"
+
+# game_active.json must be rewritten at least this often (by game_sync's loop)
+# or it's considered stale and weather sync takes over.
+GAME_STALE_SECONDS = 60
 
 
 def signal_active():
@@ -27,9 +34,18 @@ def signal_active():
 def game_active():
     """Check if game sync is active.
 
-    Returns True if state/game_active.json exists.
+    Returns True if state/game_active.json exists AND its mtime is within
+    GAME_STALE_SECONDS. A stale file (e.g. left behind by a crashed game_sync)
+    does not block weather sync.
     """
-    return (STATE_DIR / "game_active.json").exists()
+    path = STATE_DIR / "game_active.json"
+    if not path.exists():
+        return False
+    try:
+        mtime = path.stat().st_mtime
+    except OSError:
+        return False
+    return time.time() - mtime <= GAME_STALE_SECONDS
 
 
 def set_game_active(profile_name):

@@ -1,8 +1,10 @@
 """Tests for weather_sync.py."""
 
 import json
+import os
 import sys
 import tempfile
+import time
 import unittest
 from pathlib import Path
 from unittest import mock
@@ -509,6 +511,31 @@ class TestPriority(StateDirMixin, unittest.TestCase):
         weather_sync.run(config, once=True)
 
         # Should have called govee functions
+        self.assertEqual(mock_color.call_count, 1)
+        mock_color.assert_called_with("192.168.1.50", 255, 210, 127)
+
+    @mock.patch("weather_sync.fetch_weather")
+    @mock.patch("govee.color")
+    @mock.patch("govee.brightness")
+    def test_stale_game_active_allows_weather(self, mock_brightness, mock_color, mock_fetch):
+        """A stale game_active.json (mtime > 60s) does not block weather sync."""
+        import arbiter
+        # Create a game_active.json with mtime 120 seconds ago
+        arbiter.set_game_active("Test Game")
+        path = arbiter.STATE_DIR / "game_active.json"
+        old_time = time.time() - 120
+        os.utime(path, (old_time, old_time))
+
+        mock_fetch.return_value = {
+            "temperature_2m": 20.0,
+            "weather_code": 0,
+            "is_day": 1,
+        }
+        config = self._make_config()
+
+        weather_sync.run(config, once=True)
+
+        # Should have called govee functions (stale game_active ignored)
         self.assertEqual(mock_color.call_count, 1)
         mock_color.assert_called_with("192.168.1.50", 255, 210, 127)
 
