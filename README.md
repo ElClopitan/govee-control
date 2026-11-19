@@ -6,8 +6,25 @@ Project board: Govee (epiq), parent ticket Z6KCSBZ.
 Planned pieces: LAN client + CLI (`govee.py`), game-process colour sync,
 Stream Deck wrappers, weather sync, "agent needs input" signal.
 
+Verified on real hardware: H1AB3 (192.168.1.50) and H1AB2 (192.168.1.51).
+
 Setup: copy `config.example.json` to `config.json` and fill in device IPs.
 In the Govee Home app, enable **LAN Control** on each strip (device settings).
+
+## Network interface handling
+
+On multi-homed hosts (e.g., WSL with multiple virtual adapters), `govee.py scan`
+automatically sends the discovery multicast on every non-loopback, non-link-local
+IPv4 interface and merges the replies. If you want to restrict scanning to a
+specific interface, use `--iface-ip`:
+
+```bash
+# Auto-detect all interfaces (default)
+python govee.py scan
+
+# Scan on a specific interface only
+python govee.py scan --iface-ip 192.168.1.10
+```
 
 ## CLI usage
 

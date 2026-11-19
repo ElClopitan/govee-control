@@ -139,6 +139,36 @@ class TestSendBytes(unittest.TestCase):
         self.assertEqual(msg["msg"]["data"]["colorTemInKelvin"], 0)
 
 
+class TestGetInterfaceIPs(unittest.TestCase):
+    @mock.patch("govee.socket.gethostname", return_value="testhost")
+    @mock.patch("govee.socket.getaddrinfo")
+    def test_filters_loopback_and_linklocal(self, mock_getaddrinfo, mock_gethostname):
+        """get_interface_ips filters 127.x and 169.254.x addresses."""
+        # Mock getaddrinfo to return multiple addresses
+        mock_getaddrinfo.return_value = [
+            (socket.AF_INET, socket.SOCK_STREAM, 0, "", ("127.0.0.1", 0)),
+            (socket.AF_INET, socket.SOCK_STREAM, 0, "", ("169.254.1.1", 0)),
+            (socket.AF_INET, socket.SOCK_STREAM, 0, "", ("192.168.1.10", 0)),
+            (socket.AF_INET, socket.SOCK_STREAM, 0, "", ("10.0.0.5", 0)),
+        ]
+
+        ips = govee.get_interface_ips()
+        self.assertEqual(ips, ["10.0.0.5", "192.168.1.10"])
+
+    @mock.patch("govee.socket.gethostname", return_value="testhost")
+    @mock.patch("govee.socket.getaddrinfo")
+    def test_deduplicates(self, mock_getaddrinfo, mock_gethostname):
+        """get_interface_ips deduplicates identical addresses."""
+        mock_getaddrinfo.return_value = [
+            (socket.AF_INET, socket.SOCK_STREAM, 0, "", ("192.168.1.10", 0)),
+            (socket.AF_INET, socket.SOCK_STREAM, 0, "", ("192.168.1.10", 0)),
+            (socket.AF_INET, socket.SOCK_STREAM, 0, "", ("10.0.0.5", 0)),
+        ]
+
+        ips = govee.get_interface_ips()
+        self.assertEqual(ips, ["10.0.0.5", "192.168.1.10"])
+
+
 class TestScan(unittest.TestCase):
     @mock.patch("govee.socket.socket")
     def test_scan_no_devices(self, mock_socket_cls):
@@ -150,8 +180,9 @@ class TestScan(unittest.TestCase):
         devices = govee.scan(timeout=0.1)
         self.assertEqual(devices, [])
 
+    @mock.patch("govee.get_interface_ips", return_value=["192.168.1.10"])
     @mock.patch("govee.socket.socket")
-    def test_scan_finds_device(self, mock_socket_cls):
+    def test_scan_finds_device(self, mock_socket_cls, mock_get_ips):
         """Scan receives a device reply."""
         mock_sock = mock.MagicMock()
         reply = json.dumps({
@@ -177,6 +208,43 @@ class TestScan(unittest.TestCase):
         self.assertEqual(addr, (govee.MULTICAST_ADDR, govee.DISCOVERY_PORT))
         msg = json.loads(data)
         self.assertEqual(msg["msg"]["cmd"], "scan")
+
+    @mock.patch("govee.get_interface_ips", return_value=["192.168.1.10", "10.0.0.5"])
+    @mock.patch("govee.socket.socket")
+    def test_scan_sends_on_all_interfaces(self, mock_socket_cls, mock_get_ips):
+        """Scan without iface_ip sends on all interfaces."""
+        mock_sock = mock.MagicMock()
+        mock_sock.recvfrom.side_effect = socket.timeout()
+        mock_socket_cls.return_value = mock_sock
+
+        govee.scan(timeout=0.1)
+
+        # Should have created 3 sockets: 2 for sending + 1 for receiving
+        self.assertEqual(mock_socket_cls.call_count, 3)
+        # Should have sent on both interfaces
+        self.assertEqual(mock_sock.sendto.call_count, 2)
+
+    @mock.patch("govee.socket.socket")
+    def test_scan_deduplicates_replies(self, mock_socket_cls):
+        """Duplicate scan replies from same device are deduped."""
+        mock_sock = mock.MagicMock()
+        reply = json.dumps({
+            "msg": {
+                "cmd": "scan",
+                "data": {"ip": "192.168.1.100", "device": "test", "sku": "H610A"},
+            }
+        }).encode("utf-8")
+        # Same device replies twice (e.g., from two interfaces)
+        mock_sock.recvfrom.side_effect = [
+            (reply, ("192.168.1.100", 4002)),
+            (reply, ("192.168.1.100", 4002)),
+            socket.timeout(),
+        ]
+        mock_socket_cls.return_value = mock_sock
+
+        devices = govee.scan(timeout=0.1)
+        self.assertEqual(len(devices), 1)
+        self.assertEqual(devices[0]["ip"], "192.168.1.100")
 
 
 class TestCLI(unittest.TestCase):

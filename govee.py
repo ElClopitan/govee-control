@@ -71,27 +71,71 @@ def _make_socket(iface_ip=None):
     return sock
 
 
+def get_interface_ips():
+    """Get all non-loopback, non-link-local IPv4 interface addresses.
+
+    Returns a list of IP address strings.
+    """
+    ips = set()
+    try:
+        hostname = socket.gethostname()
+        addrinfos = socket.getaddrinfo(hostname, None, socket.AF_INET)
+        for info in addrinfos:
+            ip = info[4][0]
+            if ip.startswith("127.") or ip.startswith("169.254."):
+                continue
+            ips.add(ip)
+    except socket.gaierror:
+        pass
+    return sorted(ips)
+
+
 def scan(timeout=3, iface_ip=None):
     """Discover Govee devices on the LAN.
 
+    If iface_ip is not specified, sends the scan packet on every
+    non-loopback, non-link-local IPv4 interface.
+
     Returns a list of dicts with 'ip', 'device', 'sku' keys.
     """
-    sock = _make_socket(iface_ip)
+    # Determine which interfaces to send on
+    if iface_ip:
+        interfaces = [iface_ip]
+    else:
+        interfaces = get_interface_ips()
+        if not interfaces:
+            interfaces = [""]  # fallback: let OS choose
+
+    # Create one socket per interface for sending
+    send_socks = []
+    for ip in interfaces:
+        sock = _make_socket(ip)
+        send_socks.append(sock)
+
+    # One socket for receiving replies
+    recv_sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM, socket.IPPROTO_UDP)
+    recv_sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
     try:
-        sock.bind(("", REPLY_PORT))
-        sock.settimeout(timeout)
+        recv_sock.bind(("", REPLY_PORT))
+        recv_sock.settimeout(timeout)
 
         msg = {"msg": {"cmd": "scan", "data": {"account_topic": "reserve"}}}
         payload = json.dumps(msg).encode("utf-8")
-        sock.sendto(payload, (MULTICAST_ADDR, DISCOVERY_PORT))
+
+        # Send on all interfaces
+        for sock in send_socks:
+            try:
+                sock.sendto(payload, (MULTICAST_ADDR, DISCOVERY_PORT))
+            except OSError:
+                pass  # interface may be down
 
         devices = []
         seen = set()
         deadline = time.time() + timeout
         while time.time() < deadline:
             try:
-                sock.settimeout(max(0.1, deadline - time.time()))
-                data, addr = sock.recvfrom(4096)
+                recv_sock.settimeout(max(0.1, deadline - time.time()))
+                data, addr = recv_sock.recvfrom(4096)
                 try:
                     resp = json.loads(data.decode("utf-8"))
                 except (json.JSONDecodeError, UnicodeDecodeError):
@@ -112,7 +156,9 @@ def scan(timeout=3, iface_ip=None):
                 break
         return devices
     finally:
-        sock.close()
+        recv_sock.close()
+        for sock in send_socks:
+            sock.close()
 
 
 def send(ip, msg):
