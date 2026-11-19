@@ -11,17 +11,19 @@ from pathlib import Path
 from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
+sys.path.insert(0, str(Path(__file__).parent))
 import agent_signal
 import govee
+from helpers import StateDirMixin
 
 
-class TestSignalNeedsInput(unittest.TestCase):
+class TestSignalNeedsInput(StateDirMixin, unittest.TestCase):
     """Test the needs-input command."""
 
     def setUp(self):
         """Create a temp config and state directory for each test."""
-        self.temp_dir = tempfile.TemporaryDirectory()
-        self.config_path = Path(self.temp_dir.name) / "config.json"
+        super().setUp()
+        self.config_path = self.state_dir / "config.json"
         self.config = {
             "devices": [
                 {"name": "left", "ip": "192.168.1.50"},
@@ -34,15 +36,6 @@ class TestSignalNeedsInput(unittest.TestCase):
             },
         }
         self.config_path.write_text(json.dumps(self.config))
-
-        # Mock the state file path
-        self.original_state_file = agent_signal.SAVED_STATE_FILE
-        agent_signal.SAVED_STATE_FILE = Path(self.temp_dir.name) / "state" / "saved_state.json"
-
-    def tearDown(self):
-        """Clean up temp directory."""
-        agent_signal.SAVED_STATE_FILE = self.original_state_file
-        self.temp_dir.cleanup()
 
     @mock.patch("agent_signal.govee.status")
     @mock.patch("agent_signal.govee.turn")
@@ -217,13 +210,13 @@ class TestSignalNeedsInput(unittest.TestCase):
         self.assertEqual(mock_color.call_count, 2)
 
 
-class TestSignalClear(unittest.TestCase):
+class TestSignalClear(StateDirMixin, unittest.TestCase):
     """Test the clear command."""
 
     def setUp(self):
         """Create a temp config and state directory for each test."""
-        self.temp_dir = tempfile.TemporaryDirectory()
-        self.config_path = Path(self.temp_dir.name) / "config.json"
+        super().setUp()
+        self.config_path = self.state_dir / "config.json"
         self.config = {
             "devices": [
                 {"name": "left", "ip": "192.168.1.50"},
@@ -231,15 +224,6 @@ class TestSignalClear(unittest.TestCase):
             ],
         }
         self.config_path.write_text(json.dumps(self.config))
-
-        # Mock the state file path
-        self.original_state_file = agent_signal.SAVED_STATE_FILE
-        agent_signal.SAVED_STATE_FILE = Path(self.temp_dir.name) / "state" / "saved_state.json"
-
-    def tearDown(self):
-        """Clean up temp directory."""
-        agent_signal.SAVED_STATE_FILE = self.original_state_file
-        self.temp_dir.cleanup()
 
     @mock.patch("agent_signal.govee.turn")
     @mock.patch("agent_signal.govee.brightness")
@@ -315,7 +299,7 @@ class TestSignalClear(unittest.TestCase):
         """clear with no saved state and a non-existent config path exits normally."""
         args = mock.Mock()
         args.command = "clear"
-        args.config = str(Path(self.temp_dir.name) / "nonexistent.json")
+        args.config = str(self.state_dir / "nonexistent.json")
         args.dry_run = False
 
         # Should not raise an exception
@@ -435,26 +419,18 @@ class TestSignalClear(unittest.TestCase):
         self.assertFalse(agent_signal.SAVED_STATE_FILE.exists())
 
 
-class TestSignalDryRun(unittest.TestCase):
+class TestSignalDryRun(StateDirMixin, unittest.TestCase):
     """Test dry-run mode."""
 
     def setUp(self):
         """Create a temp config for each test."""
-        self.temp_dir = tempfile.TemporaryDirectory()
-        self.config_path = Path(self.temp_dir.name) / "config.json"
+        super().setUp()
+        self.config_path = self.state_dir / "config.json"
         self.config = {
             "devices": [{"name": "left", "ip": "192.168.1.50"}],
             "signal": {"color": "#ff6a00", "brightness": 100, "blink": False},
         }
         self.config_path.write_text(json.dumps(self.config))
-
-        self.original_state_file = agent_signal.SAVED_STATE_FILE
-        agent_signal.SAVED_STATE_FILE = Path(self.temp_dir.name) / "state" / "saved_state.json"
-
-    def tearDown(self):
-        """Clean up temp directory."""
-        agent_signal.SAVED_STATE_FILE = self.original_state_file
-        self.temp_dir.cleanup()
 
     @mock.patch("agent_signal.govee.status")
     @mock.patch("agent_signal.govee.turn")
@@ -506,13 +482,13 @@ class TestNoStdlibShadow(unittest.TestCase):
         )
 
 
-class TestLocking(unittest.TestCase):
+class TestLocking(StateDirMixin, unittest.TestCase):
     """Test the locking mechanism for concurrent hooks."""
 
     def setUp(self):
         """Create a temp config and state directory for each test."""
-        self.temp_dir = tempfile.TemporaryDirectory()
-        self.config_path = Path(self.temp_dir.name) / "config.json"
+        super().setUp()
+        self.config_path = self.state_dir / "config.json"
         self.config = {
             "devices": [
                 {"name": "left", "ip": "192.168.1.50"},
@@ -520,21 +496,6 @@ class TestLocking(unittest.TestCase):
             ],
         }
         self.config_path.write_text(json.dumps(self.config))
-
-        # Mock the state file path
-        self.original_state_file = agent_signal.SAVED_STATE_FILE
-        agent_signal.SAVED_STATE_FILE = Path(self.temp_dir.name) / "state" / "saved_state.json"
-        self.original_lock_file = agent_signal.LOCK_FILE
-        agent_signal.LOCK_FILE = Path(self.temp_dir.name) / "state" / "agent_signal.lock"
-
-        # Create the state directory
-        agent_signal.SAVED_STATE_FILE.parent.mkdir(parents=True, exist_ok=True)
-
-    def tearDown(self):
-        """Clean up temp directory."""
-        agent_signal.SAVED_STATE_FILE = self.original_state_file
-        agent_signal.LOCK_FILE = self.original_lock_file
-        self.temp_dir.cleanup()
 
     @mock.patch("agent_signal.govee.turn")
     @mock.patch("agent_signal.govee.brightness")

@@ -8,8 +8,10 @@ from pathlib import Path
 from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
+sys.path.insert(0, str(Path(__file__).parent))
 import weather_sync
 import govee
+from helpers import StateDirMixin
 
 
 class TestWeatherToColor(unittest.TestCase):
@@ -122,7 +124,7 @@ class TestFetchWeather(unittest.TestCase):
             weather_sync.fetch_weather(51.5, -0.1)
 
 
-class TestRunOnce(unittest.TestCase):
+class TestRunOnce(StateDirMixin, unittest.TestCase):
     """Test run() with once=True and mocked dependencies."""
 
     def _make_config(self, lat=51.5, lon=-0.1, brightness=50):
@@ -250,7 +252,7 @@ class TestZeroLocation(unittest.TestCase):
             Path(config_path).unlink()
 
 
-class TestNetworkError(unittest.TestCase):
+class TestNetworkError(StateDirMixin, unittest.TestCase):
     """Test network error handling."""
 
     @mock.patch("weather_sync.fetch_weather")
@@ -441,20 +443,8 @@ class TestDryRun(unittest.TestCase):
         mock_brightness.assert_not_called()
 
 
-class TestPriority(unittest.TestCase):
+class TestPriority(StateDirMixin, unittest.TestCase):
     """Test that weather sync respects signal/game priority."""
-
-    def setUp(self):
-        import tempfile
-        from pathlib import Path
-        self.tmpdir = tempfile.mkdtemp()
-        self.state_dir = Path(self.tmpdir)
-        import arbiter
-        arbiter.STATE_DIR = self.state_dir
-
-    def tearDown(self):
-        import shutil
-        shutil.rmtree(self.tmpdir)
 
     def _make_config(self):
         return {

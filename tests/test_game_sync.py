@@ -8,8 +8,10 @@ from pathlib import Path
 from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
+sys.path.insert(0, str(Path(__file__).parent))
 import game_sync
 import govee
+from helpers import StateDirMixin
 
 
 class TestPickProfile(unittest.TestCase):
@@ -105,7 +107,7 @@ class TestPickProfile(unittest.TestCase):
         self.assertEqual(result2["name"], "Ghost of Tsushima")
 
 
-class TestRunOnce(unittest.TestCase):
+class TestRunOnce(StateDirMixin, unittest.TestCase):
     """Test run() with once=True and mocked dependencies."""
 
     def _make_config(self, games=None, default=None):
@@ -260,7 +262,7 @@ class TestDryRun(unittest.TestCase):
         mock_brightness.assert_not_called()
 
 
-class TestNetworkErrorRecovery(unittest.TestCase):
+class TestNetworkErrorRecovery(StateDirMixin, unittest.TestCase):
     """Test that network errors don't kill the watch loop."""
 
     def _make_config(self):
@@ -315,20 +317,8 @@ class TestRunningProcessesEncoding(unittest.TestCase):
         self.assertIn("spielä.exe", processes)
 
 
-class TestSignalPriority(unittest.TestCase):
+class TestSignalPriority(StateDirMixin, unittest.TestCase):
     """Test that game sync respects agent signal priority."""
-
-    def setUp(self):
-        import tempfile
-        from pathlib import Path
-        self.tmpdir = tempfile.mkdtemp()
-        self.state_dir = Path(self.tmpdir)
-        import arbiter
-        arbiter.STATE_DIR = self.state_dir
-
-    def tearDown(self):
-        import shutil
-        shutil.rmtree(self.tmpdir)
 
     def _make_config(self):
         return {
@@ -393,20 +383,8 @@ class TestSignalPriority(unittest.TestCase):
         mock_color.assert_called_with("192.168.1.50", 255, 0, 0)
 
 
-class TestGameActiveState(unittest.TestCase):
+class TestGameActiveState(StateDirMixin, unittest.TestCase):
     """Test that game sync manages game_active.json state."""
-
-    def setUp(self):
-        import tempfile
-        from pathlib import Path
-        self.tmpdir = tempfile.mkdtemp()
-        self.state_dir = Path(self.tmpdir)
-        import arbiter
-        arbiter.STATE_DIR = self.state_dir
-
-    def tearDown(self):
-        import shutil
-        shutil.rmtree(self.tmpdir)
 
     def _make_config(self):
         return {
