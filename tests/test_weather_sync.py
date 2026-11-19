@@ -16,6 +16,11 @@ import govee
 from helpers import StateDirMixin
 
 
+class _StopLoop(Exception):
+    """Raised by test sleep side_effects to exit the sync loop."""
+    pass
+
+
 class TestWeatherToColor(unittest.TestCase):
     """Test the pure weather_to_color function."""
 
@@ -644,19 +649,16 @@ class TestBlockedPollInterval(StateDirMixin, unittest.TestCase):
         config = self._make_config()
 
         # Run with interval=900; should sleep 10s while blocked
-        call_count = [0]
         def sleep_side_effect(seconds):
-            call_count[0] += 1
             # Verify the sleep duration is 10, not 900
             self.assertEqual(seconds, 10)
-            if call_count[0] >= 1:
-                raise KeyboardInterrupt()
+            raise _StopLoop()
 
         mock_sleep.side_effect = sleep_side_effect
 
         try:
             weather_sync.run(config, once=False, interval=900)
-        except KeyboardInterrupt:
+        except _StopLoop:
             pass
 
         # Should have slept once with 10 seconds
@@ -683,19 +685,16 @@ class TestBlockedPollInterval(StateDirMixin, unittest.TestCase):
         mock_fetch.side_effect = fetch_with_game
         config = self._make_config()
 
-        call_count = [0]
         def sleep_side_effect(seconds):
-            call_count[0] += 1
             # Verify the sleep duration is 10, not 900
             self.assertEqual(seconds, 10)
-            if call_count[0] >= 1:
-                raise KeyboardInterrupt()
+            raise _StopLoop()
 
         mock_sleep.side_effect = sleep_side_effect
 
         try:
             weather_sync.run(config, once=False, interval=900)
-        except KeyboardInterrupt:
+        except _StopLoop:
             pass
 
         # Should have slept once with 10 seconds

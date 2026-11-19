@@ -641,23 +641,19 @@ class TestLocking(StateDirMixin, unittest.TestCase):
         agent_signal.LOCK_FILE.parent.mkdir(parents=True, exist_ok=True)
         agent_signal.LOCK_FILE.touch()
 
-        # Patch the timeout to be very short
-        original_timeout = agent_signal.LOCK_TIMEOUT
-        agent_signal.LOCK_TIMEOUT = 0.2
-
         args = mock.Mock()
         args.command = "clear"
         args.config = str(self.config_path)
         args.dry_run = False
 
-        # Should exit 0 without calling govee.color
-        agent_signal.cmd_clear(args)
+        # Patch the timeout to be very short
+        with mock.patch.object(agent_signal, "LOCK_TIMEOUT", 0.2):
+            # Should exit 0 without calling govee.color
+            agent_signal.cmd_clear(args)
 
         mock_color.assert_not_called()
         # Saved state should still exist
         self.assertTrue(arbiter.signal_file().exists())
-
-        agent_signal.LOCK_TIMEOUT = original_timeout
 
     @mock.patch("agent_signal.govee.turn")
     @mock.patch("agent_signal.govee.brightness")
@@ -1073,12 +1069,13 @@ class TestClearWithNullDefault(StateDirMixin, unittest.TestCase):
         }
         self.config_path.write_text(json.dumps(self.config))
 
+    @mock.patch("agent_signal.time.sleep")
     @mock.patch("agent_signal.govee.status")
     @mock.patch("agent_signal.govee.turn")
     @mock.patch("agent_signal.govee.brightness")
     @mock.patch("agent_signal.govee.color")
     def test_clear_with_null_default_uses_builtin(
-        self, mock_color, mock_brightness, mock_turn, mock_status
+        self, mock_color, mock_brightness, mock_turn, mock_status, mock_sleep
     ):
         """With "default": null, clear uses built-in white/40 for devices without saved state."""
         # First, create a signal with saved state for only one device
@@ -1116,6 +1113,8 @@ class TestClearWithNullDefault(StateDirMixin, unittest.TestCase):
         device2_calls = [c for c in mock_brightness.call_args_list if c[0][0] == "192.168.1.51"]
         self.assertEqual(len(device2_calls), 1)
         self.assertEqual(device2_calls[0][0][1], 40)
+        # Device 2 should also get white color (built-in default)
+        mock_color.assert_any_call("192.168.1.51", 255, 255, 255, kelvin=0)
 
 
 if __name__ == "__main__":

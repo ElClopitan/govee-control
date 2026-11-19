@@ -14,6 +14,11 @@ import govee
 from helpers import StateDirMixin
 
 
+class _StopLoop(Exception):
+    """Raised by test sleep side_effects to exit the sync loop."""
+    pass
+
+
 class TestPickProfile(unittest.TestCase):
     """Test the pure pick_profile function."""
 
@@ -462,6 +467,25 @@ class TestSignalPriority(StateDirMixin, unittest.TestCase):
         self.assertEqual(mock_color.call_count, 1)
         mock_color.assert_called_with("192.168.1.50", 255, 0, 0)
 
+    @mock.patch("game_sync.running_processes")
+    @mock.patch("game_sync.apply_profile")
+    @mock.patch("game_sync.arbiter.signal_active")
+    def test_recheck_before_apply_skips_when_signal_becomes_active(
+        self, mock_signal_active, mock_apply, mock_processes
+    ):
+        """Re-check signal just before apply_profile; skip if signal became active."""
+        mock_processes.return_value = {"testgame.exe"}
+        # First check (line 142) passes, second check (line 154) fails
+        mock_signal_active.side_effect = [False, True]
+        config = self._make_config()
+
+        game_sync.run(config, once=True)
+
+        # apply_profile should NOT have been called because signal became active
+        mock_apply.assert_not_called()
+        # signal_active should have been called twice
+        self.assertEqual(mock_signal_active.call_count, 2)
+
 
 class TestGameActiveState(StateDirMixin, unittest.TestCase):
     """Test that game sync manages game_active.json state."""
@@ -485,15 +509,12 @@ class TestGameActiveState(StateDirMixin, unittest.TestCase):
         config = self._make_config()
 
         # Run one iteration in loop mode (not once)
-        call_count = [0]
         def sleep_side_effect(seconds):
-            call_count[0] += 1
-            if call_count[0] >= 1:
-                raise KeyboardInterrupt()
+            raise _StopLoop()
         with mock.patch("time.sleep", side_effect=sleep_side_effect):
             try:
                 game_sync.run(config, interval=1)
-            except KeyboardInterrupt:
+            except _StopLoop:
                 pass
 
         # In loop mode, game_active should be set (and then cleared by finally)
