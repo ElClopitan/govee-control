@@ -260,5 +260,60 @@ class TestDryRun(unittest.TestCase):
         mock_brightness.assert_not_called()
 
 
+class TestNetworkErrorRecovery(unittest.TestCase):
+    """Test that network errors don't kill the watch loop."""
+
+    def _make_config(self):
+        return {
+            "devices": [{"name": "left", "ip": "192.168.1.50"}],
+            "games": [
+                {"name": "Test Game", "exe": "testgame.exe", "color": "red", "brightness": 80},
+            ],
+            "default": {"color": "white", "brightness": 40},
+        }
+
+    @mock.patch("game_sync.running_processes")
+    @mock.patch("govee.color")
+    @mock.patch("govee.brightness")
+    @mock.patch("time.sleep")
+    def test_oserror_retried_next_iteration(self, mock_sleep, mock_brightness, mock_color, mock_processes):
+        """OSError in apply_profile is caught; next iteration retries."""
+        mock_processes.return_value = {"testgame.exe"}
+        config = self._make_config()
+
+        # First call to govee.color raises OSError, second succeeds
+        mock_color.side_effect = [OSError("network unreachable"), None]
+
+        call_count = [0]
+        def sleep_side_effect(seconds):
+            call_count[0] += 1
+            if call_count[0] >= 2:
+                raise KeyboardInterrupt()
+        mock_sleep.side_effect = sleep_side_effect
+
+        try:
+            game_sync.run(config, interval=1)
+        except KeyboardInterrupt:
+            pass
+
+        # govee.color should have been called twice: failed first, then retried
+        self.assertEqual(mock_color.call_count, 2)
+
+
+class TestRunningProcessesEncoding(unittest.TestCase):
+    """Test running_processes handles non-ASCII process names."""
+
+    @mock.patch("subprocess.run")
+    def test_non_ascii_process_name(self, mock_run):
+        """Process names with non-ASCII characters are handled."""
+        mock_result = mock.Mock()
+        mock_result.returncode = 0
+        mock_result.stdout = '"Spielä.exe","1","Console","1","1 K"\n'
+        mock_run.return_value = mock_result
+
+        processes = game_sync.running_processes()
+        self.assertIn("spielä.exe", processes)
+
+
 if __name__ == "__main__":
     unittest.main()

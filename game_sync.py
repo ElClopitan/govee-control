@@ -29,6 +29,8 @@ def running_processes():
             ["tasklist", "/fo", "csv", "/nh"],
             capture_output=True,
             text=True,
+            encoding="utf-8",
+            errors="replace",
             timeout=10,
         )
         if result.returncode != 0:
@@ -106,7 +108,6 @@ def run(config, interval=5, once=False, dry_run=False):
     games = config.get("games", [])
     default = config.get("default", {"color": "white", "brightness": 40})
 
-    last_profile = None
     last_profile_name = None
 
     while True:
@@ -121,9 +122,12 @@ def run(config, interval=5, once=False, dry_run=False):
 
         if profile_name != last_profile_name:
             print(f"Switching to: {profile_name}")
-            apply_profile(config, profile, dry_run=dry_run)
-            last_profile = profile
-            last_profile_name = profile_name
+            try:
+                apply_profile(config, profile, dry_run=dry_run)
+            except OSError as e:
+                print(f"warning: failed to apply {profile_name}: {e}", file=sys.stderr)
+            else:
+                last_profile_name = profile_name
 
         if once:
             break
