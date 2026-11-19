@@ -6,7 +6,7 @@ Project board: Govee (epiq), parent ticket Z6KCSBZ.
 Planned pieces: LAN client + CLI (`govee.py`), game-process colour sync,
 Stream Deck wrappers, weather sync, "agent needs input" signal.
 
-Verified on real hardware: H1AB3 (192.168.1.50) and H1AB2 (192.168.1.51).
+Verified on real hardware: H1AB3 and H1AB2 (LAN Control enabled).
 
 Setup: copy `config.example.json` to `config.json` and fill in device IPs.
 In the Govee Home app, enable **LAN Control** on each strip (device settings).

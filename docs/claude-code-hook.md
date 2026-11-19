@@ -37,6 +37,8 @@ for global, or `.claude/settings.json` for project-specific):
 }
 ```
 
+Replace `C:/path/to/govee-control` with the folder where you cloned this repo (forward slashes).
+
 If your settings.json already has a `hooks` key, merge these two events into it instead of adding a second `hooks` key.
 
 ## How It Works
