@@ -5,6 +5,7 @@ import os
 import subprocess
 import sys
 import tempfile
+import time
 import unittest
 from pathlib import Path
 from unittest import mock
@@ -124,8 +125,11 @@ class TestSignalNeedsInput(unittest.TestCase):
         self, mock_color, mock_brightness, mock_turn, mock_status
     ):
         """govee.status raising an exception does not crash needs-input."""
+        # With retry logic, first device gets 3 OSError attempts, then succeeds
         mock_status.side_effect = [
-            Exception("network error"),
+            OSError("network error"),
+            OSError("network error"),
+            OSError("network error"),
             {"msg": {"data": {"on": True, "brightness": 60, "color": {"r": 0, "g": 0, "b": 255}}}},
         ]
 
@@ -196,7 +200,8 @@ class TestSignalNeedsInput(unittest.TestCase):
         self, mock_color, mock_brightness, mock_turn, mock_status
     ):
         """needs-input where all devices return None: no file saved, signal still sent."""
-        mock_status.side_effect = [None, None]
+        # With retry logic, each device gets 3 attempts
+        mock_status.side_effect = [None, None, None, None, None, None]
 
         args = mock.Mock()
         args.command = "needs-input"
@@ -499,6 +504,194 @@ class TestNoStdlibShadow(unittest.TestCase):
             result.returncode, 0,
             f"stdlib signal import failed from repo dir: {result.stderr}"
         )
+
+
+class TestLocking(unittest.TestCase):
+    """Test the locking mechanism for concurrent hooks."""
+
+    def setUp(self):
+        """Create a temp config and state directory for each test."""
+        self.temp_dir = tempfile.TemporaryDirectory()
+        self.config_path = Path(self.temp_dir.name) / "config.json"
+        self.config = {
+            "devices": [
+                {"name": "left", "ip": "192.168.1.50"},
+                {"name": "right", "ip": "192.168.1.51"},
+            ],
+        }
+        self.config_path.write_text(json.dumps(self.config))
+
+        # Mock the state file path
+        self.original_state_file = agent_signal.SAVED_STATE_FILE
+        agent_signal.SAVED_STATE_FILE = Path(self.temp_dir.name) / "state" / "saved_state.json"
+        self.original_lock_file = agent_signal.LOCK_FILE
+        agent_signal.LOCK_FILE = Path(self.temp_dir.name) / "state" / "agent_signal.lock"
+
+        # Create the state directory
+        agent_signal.SAVED_STATE_FILE.parent.mkdir(parents=True, exist_ok=True)
+
+    def tearDown(self):
+        """Clean up temp directory."""
+        agent_signal.SAVED_STATE_FILE = self.original_state_file
+        agent_signal.LOCK_FILE = self.original_lock_file
+        self.temp_dir.cleanup()
+
+    @mock.patch("agent_signal.govee.turn")
+    @mock.patch("agent_signal.govee.brightness")
+    @mock.patch("agent_signal.govee.color")
+    def test_lock_timeout_exits_0(self, mock_color, mock_brightness, mock_turn):
+        """Lock timeout exits 0 without calling govee.color."""
+        # Create a saved state file
+        agent_signal.SAVED_STATE_FILE.parent.mkdir(parents=True, exist_ok=True)
+        saved_state = [
+            {"ip": "192.168.1.50", "on": True, "brightness": 50, "color": {"r": 255, "g": 255, "b": 255}},
+        ]
+        agent_signal.SAVED_STATE_FILE.write_text(json.dumps(saved_state))
+
+        # Create a fresh lock file
+        agent_signal.LOCK_FILE.parent.mkdir(parents=True, exist_ok=True)
+        agent_signal.LOCK_FILE.touch()
+
+        # Patch the timeout to be very short
+        original_timeout = agent_signal.LOCK_TIMEOUT
+        agent_signal.LOCK_TIMEOUT = 0.2
+
+        args = mock.Mock()
+        args.command = "clear"
+        args.config = str(self.config_path)
+        args.dry_run = False
+
+        # Should exit 0 without calling govee.color
+        agent_signal.cmd_clear(args)
+
+        mock_color.assert_not_called()
+        # Saved state should still exist
+        self.assertTrue(agent_signal.SAVED_STATE_FILE.exists())
+
+        agent_signal.LOCK_TIMEOUT = original_timeout
+
+    @mock.patch("agent_signal.govee.turn")
+    @mock.patch("agent_signal.govee.brightness")
+    @mock.patch("agent_signal.govee.color")
+    def test_stale_lock_is_removed(self, mock_color, mock_brightness, mock_turn):
+        """Stale lock file (older than 30s) is removed and clear proceeds."""
+        # Create a saved state file
+        agent_signal.SAVED_STATE_FILE.parent.mkdir(parents=True, exist_ok=True)
+        saved_state = [
+            {"ip": "192.168.1.50", "on": True, "brightness": 50, "color": {"r": 255, "g": 255, "b": 255}},
+        ]
+        agent_signal.SAVED_STATE_FILE.write_text(json.dumps(saved_state))
+
+        # Create a stale lock file (60s old)
+        agent_signal.LOCK_FILE.parent.mkdir(parents=True, exist_ok=True)
+        agent_signal.LOCK_FILE.touch()
+        old_time = time.time() - 60
+        os.utime(str(agent_signal.LOCK_FILE), (old_time, old_time))
+
+        args = mock.Mock()
+        args.command = "clear"
+        args.config = str(self.config_path)
+        args.dry_run = False
+
+        agent_signal.cmd_clear(args)
+
+        # Should have called govee.color
+        self.assertEqual(mock_color.call_count, 1)
+        # Lock file should be gone
+        self.assertFalse(agent_signal.LOCK_FILE.exists())
+
+    @mock.patch("agent_signal.govee.status")
+    @mock.patch("agent_signal.govee.turn")
+    @mock.patch("agent_signal.govee.brightness")
+    @mock.patch("agent_signal.govee.color")
+    def test_needs_input_recheck_under_lock(
+        self, mock_color, mock_brightness, mock_turn, mock_status
+    ):
+        """needs-input re-checks for saved state under the lock."""
+        # Mock status responses
+        mock_status.side_effect = [
+            {"msg": {"data": {"on": True, "brightness": 50, "color": {"r": 255, "g": 255, "b": 255}}}},
+            {"msg": {"data": {"on": True, "brightness": 60, "color": {"r": 0, "g": 0, "b": 255}}}},
+        ]
+
+        # Create saved state file before calling needs-input
+        agent_signal.SAVED_STATE_FILE.parent.mkdir(parents=True, exist_ok=True)
+        saved_state = [
+            {"ip": "192.168.1.50", "on": True, "brightness": 50, "color": {"r": 255, "g": 255, "b": 255}},
+            {"ip": "192.168.1.51", "on": True, "brightness": 60, "color": {"r": 0, "g": 0, "b": 255}},
+        ]
+        agent_signal.SAVED_STATE_FILE.write_text(json.dumps(saved_state))
+
+        args = mock.Mock()
+        args.command = "needs-input"
+        args.config = str(self.config_path)
+        args.dry_run = False
+
+        agent_signal.cmd_needs_input(args)
+
+        # Status should not have been called (saved state already exists)
+        mock_status.assert_not_called()
+
+    @mock.patch("agent_signal.govee.status")
+    @mock.patch("agent_signal.govee.turn")
+    @mock.patch("agent_signal.govee.brightness")
+    @mock.patch("agent_signal.govee.color")
+    def test_status_retry_on_oserror(
+        self, mock_color, mock_brightness, mock_turn, mock_status
+    ):
+        """save_state retries govee.status on OSError up to 3 times."""
+        # First two calls raise OSError, third succeeds
+        mock_status.side_effect = [
+            OSError("port in use"),
+            OSError("port in use"),
+            {"msg": {"data": {"on": True, "brightness": 50, "color": {"r": 255, "g": 255, "b": 255}}}},
+            {"msg": {"data": {"on": True, "brightness": 60, "color": {"r": 0, "g": 0, "b": 255}}}},
+        ]
+
+        args = mock.Mock()
+        args.command = "needs-input"
+        args.config = str(self.config_path)
+        args.dry_run = False
+
+        agent_signal.cmd_needs_input(args)
+
+        # Status should have been called 4 times (3 for first device, 1 for second)
+        self.assertEqual(mock_status.call_count, 4)
+        # Saved state should have both devices
+        saved = json.loads(agent_signal.SAVED_STATE_FILE.read_text())
+        self.assertEqual(len(saved), 2)
+
+    @mock.patch("agent_signal.govee.turn")
+    @mock.patch("agent_signal.govee.brightness")
+    @mock.patch("agent_signal.govee.color")
+    def test_restore_fallback_for_missing_device(
+        self, mock_color, mock_brightness, mock_turn
+    ):
+        """restore_state applies default config for devices missing from saved state."""
+        # Create a saved state file with only one device
+        agent_signal.SAVED_STATE_FILE.parent.mkdir(parents=True, exist_ok=True)
+        saved_state = [
+            {"ip": "192.168.1.50", "on": True, "brightness": 50, "color": {"r": 255, "g": 255, "b": 255}},
+        ]
+        agent_signal.SAVED_STATE_FILE.write_text(json.dumps(saved_state))
+
+        # Config has default
+        self.config["default"] = {"color": "white", "brightness": 40}
+        self.config_path.write_text(json.dumps(self.config))
+
+        args = mock.Mock()
+        args.command = "clear"
+        args.config = str(self.config_path)
+        args.dry_run = False
+
+        agent_signal.cmd_clear(args)
+
+        # Should have called govee.color for both devices
+        self.assertEqual(mock_color.call_count, 2)
+        # Second call should be for the missing device with default color (white = 255,255,255)
+        mock_color.assert_any_call("192.168.1.51", 255, 255, 255, kelvin=0)
+        # Brightness should be 40 for the missing device
+        mock_brightness.assert_any_call("192.168.1.51", 40)
 
 
 if __name__ == "__main__":

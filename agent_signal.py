@@ -11,6 +11,7 @@ Usage:
 
 import argparse
 import json
+import os
 import sys
 import time
 from pathlib import Path
@@ -20,12 +21,60 @@ import govee
 
 STATE_DIR = Path(__file__).parent / "state"
 SAVED_STATE_FILE = STATE_DIR / "saved_state.json"
+LOCK_FILE = STATE_DIR / "agent_signal.lock"
+LOCK_TIMEOUT = 10.0
+LOCK_STALE = 30.0
 
 DEFAULT_SIGNAL = {
     "color": "#ff6a00",
     "brightness": 100,
     "blink": False,
 }
+
+
+def acquire_lock(dry_run=False):
+    """Acquire an exclusive lock on the state directory.
+
+    Returns True if the lock was acquired, False if it timed out.
+    """
+    if dry_run:
+        return True
+
+    STATE_DIR.mkdir(parents=True, exist_ok=True)
+
+    deadline = time.time() + LOCK_TIMEOUT
+    while True:
+        try:
+            fd = os.open(str(LOCK_FILE), os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+            os.close(fd)
+            return True
+        except FileExistsError:
+            # Check if lock is stale
+            try:
+                mtime = os.path.getmtime(str(LOCK_FILE))
+                if time.time() - mtime > LOCK_STALE:
+                    # Stale lock, remove it
+                    os.unlink(str(LOCK_FILE))
+                    continue
+            except OSError:
+                pass
+
+            if time.time() >= deadline:
+                print(f"warning: could not acquire lock within {LOCK_TIMEOUT}s", file=sys.stderr)
+                return False
+
+            time.sleep(0.1)
+
+
+def release_lock(dry_run=False):
+    """Release the lock."""
+    if dry_run:
+        return
+
+    try:
+        os.unlink(str(LOCK_FILE))
+    except OSError:
+        pass
 
 
 def load_config(path):
@@ -50,21 +99,28 @@ def save_state(devices, dry_run=False):
     states = []
     for dev in devices:
         ip = dev["ip"]
-        try:
-            resp = govee.status(ip)
-            if resp:
-                data = resp.get("msg", {}).get("data", {})
-                states.append({
-                    "ip": ip,
-                    "on": bool(data.get("onOff", 1)),
-                    "brightness": data.get("brightness", 100),
-                    "color": data.get("color", {"r": 255, "g": 255, "b": 255}),
-                    "colorTemInKelvin": data.get("colorTemInKelvin", 0),
-                })
-            else:
-                print(f"warning: no status response from {ip}", file=sys.stderr)
-        except Exception as e:
-            print(f"warning: failed to get status from {ip}: {e}", file=sys.stderr)
+        resp = None
+        for attempt in range(3):
+            try:
+                resp = govee.status(ip)
+                if resp:
+                    break
+            except OSError:
+                pass
+            if attempt < 2:
+                time.sleep(0.3)
+
+        if resp:
+            data = resp.get("msg", {}).get("data", {})
+            states.append({
+                "ip": ip,
+                "on": bool(data.get("onOff", 1)),
+                "brightness": data.get("brightness", 100),
+                "color": data.get("color", {"r": 255, "g": 255, "b": 255}),
+                "colorTemInKelvin": data.get("colorTemInKelvin", 0),
+            })
+        else:
+            print(f"warning: no status response from {ip}", file=sys.stderr)
 
     if not states:
         print("warning: no device answered devStatus; state not saved", file=sys.stderr)
@@ -143,12 +199,15 @@ def set_signal_color(devices, signal_cfg, dry_run=False):
             print(f"[dry-run] set {color_str} at {brightness}% on all devices")
 
 
-def restore_state(devices, dry_run=False):
+def restore_state(devices, default_cfg=None, dry_run=False):
     """Restore saved state. Returns True if state was restored, False if none."""
     saved = load_saved_state()
 
     if saved:
-        # Restore from saved state
+        # Build a map of saved states by IP
+        saved_by_ip = {s["ip"]: s for s in saved}
+
+        # Restore from saved state for devices that have it
         for dev_state in saved:
             ip = dev_state["ip"]
             was_on = dev_state.get("on", True)
@@ -170,6 +229,22 @@ def restore_state(devices, dry_run=False):
                     govee.turn(ip, False)
             else:
                 print(f"[dry-run] restore {ip}: on={was_on}, brightness={brightness}")
+
+        # Fallback: for devices in config but not in saved state, apply default
+        if default_cfg:
+            for dev in devices:
+                ip = dev["ip"]
+                if ip not in saved_by_ip:
+                    color_str = default_cfg.get("color", "white")
+                    brightness = default_cfg.get("brightness", 40)
+                    r, g, b = govee.parse_color(color_str)
+                    if not dry_run:
+                        govee.turn(ip, True)
+                        govee.brightness(ip, brightness)
+                        govee.color(ip, r, g, b, kelvin=0)
+                    else:
+                        print(f"[dry-run] fallback {ip}: {color_str} at {brightness}%")
+
         print("restored saved state")
         return True
     else:
@@ -187,18 +262,33 @@ def cmd_needs_input(args):
 
     signal_cfg = get_signal_config(cfg)
 
-    # Only save state if no saved file exists (idempotent)
-    if not SAVED_STATE_FILE.exists() or args.dry_run:
-        save_state(devices, dry_run=args.dry_run)
+    # Fast path: if state already saved, just set the signal colour
+    if SAVED_STATE_FILE.exists() and not args.dry_run:
+        set_signal_color(devices, signal_cfg, dry_run=args.dry_run)
+        print("signal set")
+        return
 
-    set_signal_color(devices, signal_cfg, dry_run=args.dry_run)
-    print("signal set")
+    # Acquire lock before saving state
+    if not acquire_lock(dry_run=args.dry_run):
+        # Lock timed out, still set the signal colour
+        set_signal_color(devices, signal_cfg, dry_run=args.dry_run)
+        print("signal set")
+        return
+
+    try:
+        # Re-check under the lock (race condition fix)
+        if not SAVED_STATE_FILE.exists() or args.dry_run:
+            save_state(devices, dry_run=args.dry_run)
+
+        set_signal_color(devices, signal_cfg, dry_run=args.dry_run)
+        print("signal set")
+    finally:
+        release_lock(dry_run=args.dry_run)
 
 
 def cmd_clear(args):
     """Handle the clear command."""
-    # Check for saved state BEFORE loading config so we don't need the network
-    # or a valid config when no signal is active.
+    # Fast path: if no saved state, nothing to do (no lock needed)
     if not SAVED_STATE_FILE.exists():
         print("no active signal; nothing to do")
         return
@@ -209,9 +299,24 @@ def cmd_clear(args):
         print("no devices in config", file=sys.stderr)
         sys.exit(1)
 
-    restore_state(devices, dry_run=args.dry_run)
-    delete_saved_state(dry_run=args.dry_run)
-    print("signal cleared")
+    default_cfg = cfg.get("default")
+
+    # Acquire lock before restoring state
+    if not acquire_lock(dry_run=args.dry_run):
+        # Lock timed out, exit 0 without doing anything
+        return
+
+    try:
+        # Re-check under the lock
+        if not SAVED_STATE_FILE.exists():
+            print("no active signal; nothing to do")
+            return
+
+        restore_state(devices, default_cfg=default_cfg, dry_run=args.dry_run)
+        delete_saved_state(dry_run=args.dry_run)
+        print("signal cleared")
+    finally:
+        release_lock(dry_run=args.dry_run)
 
 
 def main():
