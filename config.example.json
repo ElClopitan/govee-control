@@ -8,6 +8,11 @@
     "color": "white",
     "brightness": 40
   },
+  "signal": {
+    "color": "#ff6a00",
+    "brightness": 100,
+    "blink": false
+  },
   "games": [
     {
       "name": "Cyberpunk 2077",
