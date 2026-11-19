@@ -13,6 +13,11 @@
     "brightness": 100,
     "blink": false
   },
+  "weather": {
+    "latitude": 0.0,
+    "longitude": 0.0,
+    "brightness": 50
+  },
   "games": [
     {
       "name": "Cyberpunk 2077",

@@ -94,3 +94,55 @@ task later:
 ```powershell
 schtasks /delete /tn "Govee Game Sync" /f
 ```
+
+## Weather sync
+
+`weather_sync.py` fetches current weather from the free, keyless Open-Meteo API
+and sets the lights to a colour that reflects the conditions.
+
+```bash
+# Run once and exit (useful for testing)
+python weather_sync.py --once
+
+# Dry-run: print what would be sent without sending
+python weather_sync.py --once --dry-run
+
+# Run continuously, checking every 15 minutes (default)
+python weather_sync.py
+
+# Custom interval (in seconds)
+python weather_sync.py --interval 600
+```
+
+### Configuration
+
+Add a `weather` section to your `config.json`:
+
+```json
+{
+  "devices": [...],
+  "weather": {
+    "latitude": 51.5074,
+    "longitude": -0.1278,
+    "brightness": 50
+  }
+}
+```
+
+The script refuses to run (exit code 2) if both latitude and longitude are 0.0.
+
+### Colour mapping
+
+Weather conditions are mapped to colours using WMO weather codes:
+
+| WMO codes | Condition | Day colour | Night colour |
+|-----------|-----------|------------|--------------|
+| 0-1 | Clear sky | Warm yellow `#ffd27f` | Deep blue `#1a237e` |
+| 2-3 | Partly/mostly cloudy | Grey `#b0bec5` | Grey `#b0bec5` |
+| 45-48 | Fog | Light grey `#cfd8dc` | Light grey `#cfd8dc` |
+| 51-67 | Drizzle/rain | Blue `#1e88e5` | Blue `#1e88e5` |
+| 71-77 | Snow | Pale blue `#e3f2fd` | Pale blue `#e3f2fd` |
+| 80-82 | Showers | Blue `#1e88e5` | Blue `#1e88e5` |
+| 85-86 | Snow showers | Pale blue `#e3f2fd` | Pale blue `#e3f2fd` |
+| 95-99 | Thunderstorm | Purple `#7b1fa2` | Purple `#7b1fa2` |
+| Other | Unknown | White `#ffffff` | White `#ffffff` |
