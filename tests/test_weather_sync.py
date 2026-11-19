@@ -539,6 +539,62 @@ class TestPriority(StateDirMixin, unittest.TestCase):
         self.assertEqual(mock_color.call_count, 1)
         mock_color.assert_called_with("192.168.1.50", 255, 210, 127)
 
+    @mock.patch("weather_sync.fetch_weather")
+    @mock.patch("govee.color")
+    @mock.patch("govee.brightness")
+    @mock.patch("time.sleep")
+    def test_reapply_after_priority_clear_survives_failure(self, mock_sleep, mock_brightness, mock_color, mock_fetch):
+        """After priority clears, re-apply even if first attempt fails.
+
+        Pass 1: sends colour X
+        Pass 2: signal active (no send)
+        Pass 3: signal gone but fetch raises OSError
+        Pass 4: signal gone, fetch returns same X -> sends again
+        Total: govee.color called exactly 2 times (pass 1 and pass 4)
+        """
+        import arbiter
+
+        mock_fetch.return_value = {
+            "temperature_2m": 20.0,
+            "weather_code": 0,
+            "is_day": 1,
+        }
+        config = self._make_config()
+
+        # Track sleep calls to control state transitions
+        sleep_count = [0]
+
+        def sleep_side_effect(seconds):
+            sleep_count[0] += 1
+            if sleep_count[0] == 1:
+                # After pass 1, activate signal
+                (arbiter.STATE_DIR / "saved_state.json").write_text("[]")
+            elif sleep_count[0] == 2:
+                # After pass 2 (signal active), remove signal
+                (arbiter.STATE_DIR / "saved_state.json").unlink()
+            elif sleep_count[0] == 4:
+                # After pass 4 (successful re-apply), exit
+                raise KeyboardInterrupt()
+
+        mock_sleep.side_effect = sleep_side_effect
+
+        # Make fetch fail on pass 3 only (when sleep_count is 2, we're in pass 3)
+        def fetch_side_effect(*args, **kwargs):
+            if sleep_count[0] == 2:
+                # Pass 3: signal just cleared, fetch fails
+                raise OSError("network unreachable")
+            return mock_fetch.return_value
+
+        mock_fetch.side_effect = fetch_side_effect
+
+        try:
+            weather_sync.run(config, once=False, interval=1)
+        except KeyboardInterrupt:
+            pass
+
+        # govee.color should be called exactly 2 times: pass 1 and pass 4
+        self.assertEqual(mock_color.call_count, 2)
+
 
 if __name__ == "__main__":
     unittest.main()

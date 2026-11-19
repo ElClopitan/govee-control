@@ -495,6 +495,58 @@ class TestGameActiveState(StateDirMixin, unittest.TestCase):
         # After going to default, game_active should be cleared
         self.assertFalse(arbiter.game_active())
 
+    @mock.patch("game_sync.running_processes")
+    @mock.patch("govee.color")
+    @mock.patch("govee.brightness")
+    @mock.patch("time.sleep")
+    def test_reapply_after_signal_clear_survives_failure(self, mock_sleep, mock_brightness, mock_color, mock_processes):
+        """After signal clears, re-apply even if first attempt fails.
+
+        Pass 1: applies profile
+        Pass 2: signal present (no send)
+        Pass 3: signal gone, apply raises OSError
+        Pass 4: signal gone, apply succeeds
+        Total: apply_profile called 3 times (1, 3, 4)
+        """
+        import arbiter
+
+        mock_processes.return_value = {"testgame.exe"}
+        config = self._make_config()
+
+        # Track sleep calls to control state transitions
+        sleep_count = [0]
+
+        def sleep_side_effect(seconds):
+            sleep_count[0] += 1
+            if sleep_count[0] == 1:
+                # After pass 1, activate signal
+                (arbiter.STATE_DIR / "saved_state.json").write_text("[]")
+            elif sleep_count[0] == 2:
+                # After pass 2 (signal active), remove signal
+                (arbiter.STATE_DIR / "saved_state.json").unlink()
+            elif sleep_count[0] == 4:
+                # After pass 4 (successful re-apply), exit
+                raise KeyboardInterrupt()
+
+        mock_sleep.side_effect = sleep_side_effect
+
+        # Make govee.color fail on pass 3 only (when sleep_count is 2, we're in pass 3)
+        def color_side_effect(ip, r, g, b):
+            if sleep_count[0] == 2:
+                # Pass 3: signal just cleared, apply fails
+                raise OSError("network unreachable")
+
+        mock_color.side_effect = color_side_effect
+
+        try:
+            game_sync.run(config, interval=1)
+        except KeyboardInterrupt:
+            pass
+
+        # apply_profile should be called 3 times: pass 1, pass 3 (failed), pass 4
+        # govee.color is called once per apply_profile, so 3 calls total
+        self.assertEqual(mock_color.call_count, 3)
+
 
 if __name__ == "__main__":
     unittest.main()

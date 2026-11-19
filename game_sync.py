@@ -138,15 +138,13 @@ def run(config, interval=5, once=False, dry_run=False):
                 if not signal_was_active:
                     print("signal active; skipping game sync")
                 signal_was_active = True
+                # Reset last_profile_name so the first successful pass after
+                # the signal clears always sends, even if the profile hasn't changed.
+                last_profile_name = None
             else:
-                signal_just_cleared = signal_was_active
                 signal_was_active = False
-                if signal_just_cleared:
-                    # Signal just went away; re-apply current profile
-                    print(f"signal cleared; re-applying {profile_name}")
-                if profile_name != last_profile_name or signal_just_cleared:
-                    if profile_name != last_profile_name:
-                        print(f"Switching to: {profile_name}")
+                if profile_name != last_profile_name:
+                    print(f"Switching to: {profile_name}")
                     try:
                         apply_profile(config, profile, dry_run=dry_run)
                     except OSError as e:

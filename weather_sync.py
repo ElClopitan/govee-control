@@ -150,12 +150,14 @@ def run(config, once=False, interval=900, dry_run=False):
             if not priority_was_active:
                 logger.info("skipped: signal/game active")
             priority_was_active = True
+            # Reset last_color so the first successful pass after the block
+            # always sends, even if the colour hasn't changed.
+            last_color = None
             if once:
                 break
             time.sleep(interval)
             continue
 
-        priority_just_cleared = priority_was_active
         priority_was_active = False
 
         try:
@@ -182,7 +184,7 @@ def run(config, once=False, interval=900, dry_run=False):
         logger.info("Weather: code=%d temp=%.1f°C day=%d -> color=%s",
                     code, temp, is_day, color_hex)
 
-        if color_hex != last_color or dry_run or priority_just_cleared:
+        if color_hex != last_color or dry_run:
             r, g, b = govee.parse_color(color_hex)
             try:
                 for dev in devices:
