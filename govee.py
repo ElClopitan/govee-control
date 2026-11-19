@@ -71,8 +71,29 @@ def _make_socket(iface_ip=None):
     return sock
 
 
+def _default_route_ip():
+    """Determine the IP address of the interface used for the default route.
+
+    Uses the UDP connect trick: connect() on a UDP socket doesn't send a
+    packet but causes the kernel to select the outgoing interface.
+    Returns the local IP string, or None on failure.
+    """
+    sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    try:
+        sock.connect(("8.8.8.8", 80))
+        return sock.getsockname()[0]
+    except OSError:
+        return None
+    finally:
+        sock.close()
+
+
 def get_interface_ips():
     """Get all non-loopback, non-link-local IPv4 interface addresses.
+
+    Falls back to the default-route interface IP when getaddrinfo returns
+    only loopback addresses (common on Linux/WSL where the hostname
+    resolves to 127.0.1.1).
 
     Returns a list of IP address strings.
     """
@@ -87,6 +108,14 @@ def get_interface_ips():
             ips.add(ip)
     except socket.gaierror:
         pass
+
+    # Fallback: if getaddrinfo gave us nothing usable (e.g., hostname
+    # resolves only to 127.0.1.1), try the default-route interface.
+    if not ips:
+        dr_ip = _default_route_ip()
+        if dr_ip and not dr_ip.startswith("127.") and not dr_ip.startswith("169.254."):
+            ips.add(dr_ip)
+
     return sorted(ips)
 
 

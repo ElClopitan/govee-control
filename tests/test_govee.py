@@ -198,6 +198,45 @@ class TestGetInterfaceIPs(unittest.TestCase):
         ips = govee.get_interface_ips()
         self.assertEqual(ips, ["10.0.0.5", "192.168.1.10"])
 
+    @mock.patch("govee._default_route_ip", return_value="10.0.0.7")
+    @mock.patch("govee.socket.gethostname", return_value="testhost")
+    @mock.patch("govee.socket.getaddrinfo")
+    def test_fallback_to_default_route(self, mock_getaddrinfo, mock_gethostname, mock_dr_ip):
+        """When getaddrinfo returns only loopback, fall back to default-route IP."""
+        mock_getaddrinfo.return_value = [
+            (socket.AF_INET, socket.SOCK_STREAM, 0, "", ("127.0.1.1", 0)),
+        ]
+
+        ips = govee.get_interface_ips()
+        self.assertEqual(ips, ["10.0.0.7"])
+        mock_dr_ip.assert_called_once()
+
+    @mock.patch("govee._default_route_ip", return_value=None)
+    @mock.patch("govee.socket.gethostname", return_value="testhost")
+    @mock.patch("govee.socket.getaddrinfo")
+    def test_fallback_returns_empty_when_no_default_route(self, mock_getaddrinfo, mock_gethostname, mock_dr_ip):
+        """When getaddrinfo returns only loopback and default-route fails, return []."""
+        mock_getaddrinfo.return_value = [
+            (socket.AF_INET, socket.SOCK_STREAM, 0, "", ("127.0.1.1", 0)),
+        ]
+
+        ips = govee.get_interface_ips()
+        self.assertEqual(ips, [])
+        mock_dr_ip.assert_called_once()
+
+    @mock.patch("govee._default_route_ip", return_value="10.0.0.7")
+    @mock.patch("govee.socket.gethostname", return_value="testhost")
+    @mock.patch("govee.socket.getaddrinfo")
+    def test_no_fallback_when_getaddrinfo_works(self, mock_getaddrinfo, mock_gethostname, mock_dr_ip):
+        """_default_route_ip is not called when getaddrinfo already gives usable IPs."""
+        mock_getaddrinfo.return_value = [
+            (socket.AF_INET, socket.SOCK_STREAM, 0, "", ("192.168.1.10", 0)),
+        ]
+
+        ips = govee.get_interface_ips()
+        self.assertEqual(ips, ["192.168.1.10"])
+        mock_dr_ip.assert_not_called()
+
 
 class TestScan(unittest.TestCase):
     @mock.patch("govee.get_interface_ips", return_value=["10.0.0.5"])
