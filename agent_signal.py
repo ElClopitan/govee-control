@@ -56,9 +56,10 @@ def save_state(devices, dry_run=False):
                 data = resp.get("msg", {}).get("data", {})
                 states.append({
                     "ip": ip,
-                    "on": data.get("on", True),
+                    "on": bool(data.get("onOff", 1)),
                     "brightness": data.get("brightness", 100),
                     "color": data.get("color", {"r": 255, "g": 255, "b": 255}),
+                    "colorTemInKelvin": data.get("colorTemInKelvin", 0),
                 })
             else:
                 print(f"warning: no status response from {ip}", file=sys.stderr)
@@ -142,13 +143,25 @@ def restore_state(devices, dry_run=False):
         # Restore from saved state
         for dev_state in saved:
             ip = dev_state["ip"]
+            was_on = dev_state.get("on", True)
+            brightness = dev_state.get("brightness", 100)
+            color = dev_state.get("color", {"r": 255, "g": 255, "b": 255})
+            kelvin = dev_state.get("colorTemInKelvin", 0)
+
             if not dry_run:
-                govee.turn(ip, dev_state.get("on", True))
-                govee.brightness(ip, dev_state.get("brightness", 100))
-                color = dev_state.get("color", {"r": 255, "g": 255, "b": 255})
-                govee.color(ip, color.get("r", 255), color.get("g", 255), color.get("b", 255))
+                if was_on:
+                    # If it was on: turn on first, then brightness, then color
+                    govee.turn(ip, True)
+                    govee.brightness(ip, brightness)
+                    govee.color(ip, color.get("r", 255), color.get("g", 255), color.get("b", 255), kelvin=kelvin)
+                else:
+                    # If it was off: set brightness and color first, then turn off LAST
+                    # (color command can switch the light back on)
+                    govee.brightness(ip, brightness)
+                    govee.color(ip, color.get("r", 255), color.get("g", 255), color.get("b", 255), kelvin=kelvin)
+                    govee.turn(ip, False)
             else:
-                print(f"[dry-run] restore {ip}: on={dev_state.get('on')}, brightness={dev_state.get('brightness')}")
+                print(f"[dry-run] restore {ip}: on={was_on}, brightness={brightness}")
         print("restored saved state")
         return True
     else:

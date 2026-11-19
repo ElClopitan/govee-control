@@ -140,6 +140,54 @@ class TestSignalNeedsInput(unittest.TestCase):
         # Signal colour should still be set
         self.assertEqual(mock_color.call_count, 2)
 
+    @mock.patch("agent_signal.govee.status")
+    @mock.patch("agent_signal.govee.turn")
+    @mock.patch("agent_signal.govee.brightness")
+    @mock.patch("agent_signal.govee.color")
+    def test_needs_input_saves_onoff_false(
+        self, mock_color, mock_brightness, mock_turn, mock_status
+    ):
+        """needs-input with onOff: 0 saves 'on': false."""
+        mock_status.side_effect = [
+            {"msg": {"data": {"onOff": 0, "brightness": 50, "color": {"r": 255, "g": 255, "b": 255}}}},
+            {"msg": {"data": {"onOff": 1, "brightness": 60, "color": {"r": 0, "g": 0, "b": 255}}}},
+        ]
+
+        args = mock.Mock()
+        args.command = "needs-input"
+        args.config = str(self.config_path)
+        args.dry_run = False
+
+        agent_signal.cmd_needs_input(args)
+
+        saved = json.loads(agent_signal.SAVED_STATE_FILE.read_text())
+        self.assertEqual(saved[0]["on"], False)
+        self.assertEqual(saved[1]["on"], True)
+
+    @mock.patch("agent_signal.govee.status")
+    @mock.patch("agent_signal.govee.turn")
+    @mock.patch("agent_signal.govee.brightness")
+    @mock.patch("agent_signal.govee.color")
+    def test_needs_input_saves_color_tem_in_kelvin(
+        self, mock_color, mock_brightness, mock_turn, mock_status
+    ):
+        """needs-input saves colorTemInKelvin from status."""
+        mock_status.side_effect = [
+            {"msg": {"data": {"onOff": 1, "brightness": 50, "color": {"r": 255, "g": 255, "b": 255}, "colorTemInKelvin": 4000}}},
+            {"msg": {"data": {"onOff": 1, "brightness": 60, "color": {"r": 0, "g": 0, "b": 255}}}},
+        ]
+
+        args = mock.Mock()
+        args.command = "needs-input"
+        args.config = str(self.config_path)
+        args.dry_run = False
+
+        agent_signal.cmd_needs_input(args)
+
+        saved = json.loads(agent_signal.SAVED_STATE_FILE.read_text())
+        self.assertEqual(saved[0]["colorTemInKelvin"], 4000)
+        self.assertEqual(saved[1]["colorTemInKelvin"], 0)
+
 
 class TestSignalClear(unittest.TestCase):
     """Test the clear command."""
@@ -244,6 +292,78 @@ class TestSignalClear(unittest.TestCase):
 
         # Should not raise an exception
         agent_signal.cmd_clear(args)
+
+    @mock.patch("agent_signal.govee.turn")
+    @mock.patch("agent_signal.govee.brightness")
+    @mock.patch("agent_signal.govee.color")
+    def test_clear_off_device_turn_off_last(
+        self, mock_color, mock_brightness, mock_turn
+    ):
+        """clear with a saved 'on': false device sends turn(ip, False) LAST."""
+        agent_signal.SAVED_STATE_FILE.parent.mkdir(parents=True, exist_ok=True)
+        saved_state = [
+            {"ip": "192.168.1.50", "on": False, "brightness": 50, "color": {"r": 255, "g": 255, "b": 255}},
+        ]
+        agent_signal.SAVED_STATE_FILE.write_text(json.dumps(saved_state))
+
+        args = mock.Mock()
+        args.command = "clear"
+        args.config = str(self.config_path)
+        args.dry_run = False
+
+        agent_signal.cmd_clear(args)
+
+        # For the off device, turn(False) must be the last call for that IP
+        # Check that brightness and color were called before turn(False)
+        brightness_calls = [c for c in mock_brightness.call_args_list if c[0][0] == "192.168.1.50"]
+        color_calls = [c for c in mock_color.call_args_list if c[0][0] == "192.168.1.50"]
+        turn_off_calls = [c for c in mock_turn.call_args_list if c[0][0] == "192.168.1.50" and c[0][1] is False]
+
+        self.assertEqual(len(brightness_calls), 1)
+        self.assertEqual(len(color_calls), 1)
+        self.assertEqual(len(turn_off_calls), 1)
+
+        # Verify order: brightness and color before turn off
+        all_calls = []
+        for c in mock_brightness.call_args_list:
+            if c[0][0] == "192.168.1.50":
+                all_calls.append(("brightness", c))
+        for c in mock_color.call_args_list:
+            if c[0][0] == "192.168.1.50":
+                all_calls.append(("color", c))
+        for c in mock_turn.call_args_list:
+            if c[0][0] == "192.168.1.50" and c[0][1] is False:
+                all_calls.append(("turn_off", c))
+
+        # turn_off should be last
+        self.assertEqual(all_calls[-1][0], "turn_off")
+
+    @mock.patch("agent_signal.govee.turn")
+    @mock.patch("agent_signal.govee.brightness")
+    @mock.patch("agent_signal.govee.color")
+    def test_clear_on_device_turn_on_first(
+        self, mock_color, mock_brightness, mock_turn
+    ):
+        """clear with a saved 'on': true device sends turn(ip, True) and never turn(ip, False)."""
+        agent_signal.SAVED_STATE_FILE.parent.mkdir(parents=True, exist_ok=True)
+        saved_state = [
+            {"ip": "192.168.1.50", "on": True, "brightness": 50, "color": {"r": 255, "g": 255, "b": 255}},
+        ]
+        agent_signal.SAVED_STATE_FILE.write_text(json.dumps(saved_state))
+
+        args = mock.Mock()
+        args.command = "clear"
+        args.config = str(self.config_path)
+        args.dry_run = False
+
+        agent_signal.cmd_clear(args)
+
+        # turn(True) should be called
+        turn_on_calls = [c for c in mock_turn.call_args_list if c[0][0] == "192.168.1.50" and c[0][1] is True]
+        turn_off_calls = [c for c in mock_turn.call_args_list if c[0][0] == "192.168.1.50" and c[0][1] is False]
+
+        self.assertEqual(len(turn_on_calls), 1)
+        self.assertEqual(len(turn_off_calls), 0)
 
 
 class TestSignalDryRun(unittest.TestCase):

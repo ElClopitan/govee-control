@@ -138,6 +138,18 @@ class TestSendBytes(unittest.TestCase):
         self.assertEqual(msg["msg"]["data"]["color"]["b"], 0)
         self.assertEqual(msg["msg"]["data"]["colorTemInKelvin"], 0)
 
+    @mock.patch("govee.socket.socket")
+    def test_color_with_kelvin(self, mock_socket_cls):
+        mock_sock, captured = self._capture_sendto("1.2.3.4", govee.CONTROL_PORT)
+        mock_socket_cls.return_value = mock_sock
+
+        govee.color("1.2.3.4", 255, 255, 255, kelvin=4000)
+
+        self.assertEqual(captured["addr"], ("1.2.3.4", govee.CONTROL_PORT))
+        msg = json.loads(captured["data"])
+        self.assertEqual(msg["msg"]["cmd"], "colorwc")
+        self.assertEqual(msg["msg"]["data"]["colorTemInKelvin"], 4000)
+
 
 class TestGetInterfaceIPs(unittest.TestCase):
     @mock.patch("govee.socket.gethostname", return_value="testhost")

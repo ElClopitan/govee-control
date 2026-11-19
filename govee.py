@@ -183,8 +183,8 @@ def brightness(ip, pct):
     send(ip, {"msg": {"cmd": "brightness", "data": {"value": pct}}})
 
 
-def color(ip, r, g, b):
-    """Set colour (RGB 0-255)."""
+def color(ip, r, g, b, kelvin=0):
+    """Set colour (RGB 0-255). Optional kelvin for white-temperature mode."""
     for ch, val in [("r", r), ("g", g), ("b", b)]:
         if not 0 <= val <= 255:
             raise ValueError(f"{ch} must be 0-255, got {val}")
@@ -193,7 +193,7 @@ def color(ip, r, g, b):
             "cmd": "colorwc",
             "data": {
                 "color": {"r": r, "g": g, "b": b},
-                "colorTemInKelvin": 0,
+                "colorTemInKelvin": kelvin,
             },
         }
     })
