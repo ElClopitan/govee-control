@@ -66,6 +66,10 @@ def save_state(devices, dry_run=False):
         except Exception as e:
             print(f"warning: failed to get status from {ip}: {e}", file=sys.stderr)
 
+    if not states:
+        print("warning: no device answered devStatus; state not saved", file=sys.stderr)
+        return
+
     with open(SAVED_STATE_FILE, "w") as f:
         json.dump(states, f, indent=2)
     print(f"saved state to {SAVED_STATE_FILE}")
@@ -75,8 +79,12 @@ def load_saved_state():
     """Load saved device states from file."""
     if not SAVED_STATE_FILE.exists():
         return None
-    with open(SAVED_STATE_FILE, "r") as f:
-        return json.load(f)
+    try:
+        with open(SAVED_STATE_FILE, "r") as f:
+            return json.load(f)
+    except json.JSONDecodeError as e:
+        print(f"warning: failed to parse saved state: {e}", file=sys.stderr)
+        return []
 
 
 def delete_saved_state(dry_run=False):
@@ -201,9 +209,8 @@ def cmd_clear(args):
         print("no devices in config", file=sys.stderr)
         sys.exit(1)
 
-    restored = restore_state(devices, dry_run=args.dry_run)
-    if restored:
-        delete_saved_state(dry_run=args.dry_run)
+    restore_state(devices, dry_run=args.dry_run)
+    delete_saved_state(dry_run=args.dry_run)
     print("signal cleared")
 
 

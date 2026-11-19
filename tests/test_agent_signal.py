@@ -188,6 +188,29 @@ class TestSignalNeedsInput(unittest.TestCase):
         self.assertEqual(saved[0]["colorTemInKelvin"], 4000)
         self.assertEqual(saved[1]["colorTemInKelvin"], 0)
 
+    @mock.patch("agent_signal.govee.status")
+    @mock.patch("agent_signal.govee.turn")
+    @mock.patch("agent_signal.govee.brightness")
+    @mock.patch("agent_signal.govee.color")
+    def test_needs_input_all_status_none_no_file_saved(
+        self, mock_color, mock_brightness, mock_turn, mock_status
+    ):
+        """needs-input where all devices return None: no file saved, signal still sent."""
+        mock_status.side_effect = [None, None]
+
+        args = mock.Mock()
+        args.command = "needs-input"
+        args.config = str(self.config_path)
+        args.dry_run = False
+
+        agent_signal.cmd_needs_input(args)
+
+        # No saved state file should exist
+        self.assertFalse(agent_signal.SAVED_STATE_FILE.exists())
+
+        # Signal colour should still be set
+        self.assertEqual(mock_color.call_count, 2)
+
 
 class TestSignalClear(unittest.TestCase):
     """Test the clear command."""
@@ -364,6 +387,57 @@ class TestSignalClear(unittest.TestCase):
 
         self.assertEqual(len(turn_on_calls), 1)
         self.assertEqual(len(turn_off_calls), 0)
+
+    @mock.patch("agent_signal.govee.turn")
+    @mock.patch("agent_signal.govee.brightness")
+    @mock.patch("agent_signal.govee.color")
+    def test_clear_empty_array_file_deleted(
+        self, mock_color, mock_brightness, mock_turn
+    ):
+        """clear with a file containing []: no govee calls, file is deleted."""
+        agent_signal.SAVED_STATE_FILE.parent.mkdir(parents=True, exist_ok=True)
+        agent_signal.SAVED_STATE_FILE.write_text("[]")
+
+        args = mock.Mock()
+        args.command = "clear"
+        args.config = str(self.config_path)
+        args.dry_run = False
+
+        agent_signal.cmd_clear(args)
+
+        # No govee commands should have been sent
+        mock_turn.assert_not_called()
+        mock_brightness.assert_not_called()
+        mock_color.assert_not_called()
+
+        # File should be deleted
+        self.assertFalse(agent_signal.SAVED_STATE_FILE.exists())
+
+    @mock.patch("agent_signal.govee.turn")
+    @mock.patch("agent_signal.govee.brightness")
+    @mock.patch("agent_signal.govee.color")
+    def test_clear_invalid_json_file_deleted(
+        self, mock_color, mock_brightness, mock_turn
+    ):
+        """clear with a file containing invalid JSON: no exception, no govee calls, file deleted."""
+        agent_signal.SAVED_STATE_FILE.parent.mkdir(parents=True, exist_ok=True)
+        agent_signal.SAVED_STATE_FILE.write_text("{")
+
+        args = mock.Mock()
+        args.command = "clear"
+        args.config = str(self.config_path)
+        args.dry_run = False
+
+        # Should not raise
+        agent_signal.cmd_clear(args)
+
+        # No govee commands should have been sent
+        mock_turn.assert_not_called()
+        mock_brightness.assert_not_called()
+        mock_color.assert_not_called()
+
+        # File should be deleted
+        self.assertFalse(agent_signal.SAVED_STATE_FILE.exists())
 
 
 class TestSignalDryRun(unittest.TestCase):
