@@ -3,5 +3,23 @@
   "devices": [
     {"name": "left", "ip": "192.168.1.50"},
     {"name": "right", "ip": "192.168.1.51"}
+  ],
+  "default": {
+    "color": "white",
+    "brightness": 40
+  },
+  "games": [
+    {
+      "name": "Cyberpunk 2077",
+      "exe": "Cyberpunk2077.exe",
+      "color": "#ff00aa",
+      "brightness": 80
+    },
+    {
+      "name": "Example",
+      "exe": "example.exe",
+      "color": "cyan",
+      "brightness": 70
+    }
   ]
 }
