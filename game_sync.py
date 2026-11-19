@@ -30,7 +30,7 @@ def running_processes():
             ["tasklist", "/fo", "csv", "/nh"],
             capture_output=True,
             text=True,
-            encoding="utf-8",
+            encoding="oem",
             errors="replace",
             timeout=10,
         )

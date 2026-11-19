@@ -182,6 +182,13 @@ def run(config, once=False, interval=900, dry_run=False):
             continue
 
         temp = weather["temperature_2m"]
+        if temp is None:
+            logger.warning("temperature_2m is null; skipping this iteration")
+            if once:
+                sys.exit(1)
+            time.sleep(interval)
+            continue
+
         is_day = weather["is_day"]
 
         color_hex = weather_to_color(code, temp, is_day)

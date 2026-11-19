@@ -386,6 +386,27 @@ class TestNetworkError(StateDirMixin, unittest.TestCase):
             weather_sync.run(config, once=True)
         self.assertEqual(ctx.exception.code, 1)
 
+    @mock.patch("weather_sync.fetch_weather")
+    @mock.patch("govee.color")
+    @mock.patch("govee.brightness")
+    @mock.patch("time.sleep")
+    def test_null_temperature_once_mode(self, mock_sleep, mock_brightness, mock_color, mock_fetch):
+        """Null temperature_2m in --once mode exits non-zero and does not send color."""
+        mock_fetch.return_value = {
+            "temperature_2m": None,
+            "weather_code": 0,
+            "is_day": 1,
+        }
+        config = {
+            "devices": [{"name": "left", "ip": "192.168.1.50"}],
+            "weather": {"latitude": 51.5, "longitude": -0.1, "brightness": 50},
+        }
+        with self.assertRaises(SystemExit) as ctx:
+            weather_sync.run(config, once=True)
+        self.assertEqual(ctx.exception.code, 1)
+        # Should not have sent any color
+        mock_color.assert_not_called()
+
 
 class TestFetchWeatherUrl(unittest.TestCase):
     """Test fetch_weather URL construction."""

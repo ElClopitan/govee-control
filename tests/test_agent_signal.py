@@ -437,6 +437,39 @@ class TestSignalClear(StateDirMixin, unittest.TestCase):
         # File should be deleted
         self.assertFalse(arbiter.signal_file().exists())
 
+    @mock.patch("agent_signal.govee.turn")
+    @mock.patch("agent_signal.govee.brightness")
+    @mock.patch("agent_signal.govee.color")
+    def test_clear_corrupt_json_prints_only_signal_cleared(
+        self, mock_color, mock_brightness, mock_turn
+    ):
+        """clear with corrupt JSON prints only 'signal cleared' (no 'no active signal' message)."""
+        import io
+        from contextlib import redirect_stdout
+
+        arbiter.signal_file().parent.mkdir(parents=True, exist_ok=True)
+        arbiter.signal_file().write_text("{")
+
+        args = mock.Mock()
+        args.command = "clear"
+        args.config = str(self.config_path)
+        args.dry_run = False
+
+        # Capture stdout
+        output = io.StringIO()
+        with redirect_stdout(output):
+            agent_signal.cmd_clear(args)
+
+        stdout = output.getvalue()
+        # Should print "signal cleared" exactly once
+        self.assertEqual(stdout.count("signal cleared"), 1)
+        # Should NOT print "no active signal; nothing to do"
+        self.assertNotIn("no active signal; nothing to do", stdout)
+        # Should NOT print "restored saved state"
+        self.assertNotIn("restored saved state", stdout)
+        # Should NOT print "deleted ..."
+        self.assertNotIn("deleted", stdout)
+
 
 class TestSignalDryRun(StateDirMixin, unittest.TestCase):
     """Test dry-run mode."""

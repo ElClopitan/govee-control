@@ -131,7 +131,7 @@ def save_state(devices, dry_run=False):
     print(f"saved state to {signal_path}")
 
 
-def load_saved_state():
+def load_saved_state(quiet=False):
     """Load saved device states from file."""
     signal_path = arbiter.signal_file()
     if not signal_path.exists():
@@ -140,11 +140,12 @@ def load_saved_state():
         with open(signal_path, "r") as f:
             return json.load(f)
     except json.JSONDecodeError as e:
-        print(f"warning: failed to parse saved state: {e}", file=sys.stderr)
+        if not quiet:
+            print(f"warning: failed to parse saved state: {e}", file=sys.stderr)
         return []
 
 
-def delete_saved_state(dry_run=False):
+def delete_saved_state(dry_run=False, quiet=False):
     """Delete the saved state file."""
     signal_path = arbiter.signal_file()
     if dry_run:
@@ -152,7 +153,8 @@ def delete_saved_state(dry_run=False):
         return
     if signal_path.exists():
         signal_path.unlink()
-        print(f"deleted {signal_path}")
+        if not quiet:
+            print(f"deleted {signal_path}")
 
 
 def set_signal_color(devices, signal_cfg, dry_run=False):
@@ -201,9 +203,9 @@ def set_signal_color(devices, signal_cfg, dry_run=False):
             print(f"[dry-run] set {color_str} at {brightness}% on all devices")
 
 
-def restore_state(devices, default_cfg=None, dry_run=False):
+def restore_state(devices, default_cfg=None, dry_run=False, quiet=False):
     """Restore saved state. Returns True if state was restored, False if none."""
-    saved = load_saved_state()
+    saved = load_saved_state(quiet=quiet)
 
     if saved is not None:
         # Build a map of saved states by IP
@@ -248,7 +250,10 @@ def restore_state(devices, default_cfg=None, dry_run=False):
                 else:
                     print(f"[dry-run] fallback {ip}: {color_str} at {brightness}%")
 
-        print("restored saved state")
+        # Only print "restored saved state" if we actually had saved state to restore
+        # (not just an empty/corrupt file that fell through to the default)
+        if saved:
+            print("restored saved state")
         return True
     else:
         print("no active signal; nothing to do")
@@ -311,8 +316,12 @@ def cmd_clear(args):
             print("no active signal; nothing to do")
             return
 
-        restore_state(devices, default_cfg=default_cfg, dry_run=args.dry_run)
-        delete_saved_state(dry_run=args.dry_run)
+        # Check if the saved state is corrupt before restoring
+        saved = load_saved_state(quiet=True)
+        was_corrupt = saved == []
+
+        restore_state(devices, default_cfg=default_cfg, dry_run=args.dry_run, quiet=was_corrupt)
+        delete_saved_state(dry_run=args.dry_run, quiet=was_corrupt)
         print("signal cleared")
     finally:
         release_lock(dry_run=args.dry_run)

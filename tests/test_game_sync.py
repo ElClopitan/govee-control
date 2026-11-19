@@ -316,6 +316,20 @@ class TestRunningProcessesEncoding(unittest.TestCase):
         processes = game_sync.running_processes()
         self.assertIn("spielä.exe", processes)
 
+    @mock.patch("subprocess.run")
+    def test_uses_oem_encoding(self, mock_run):
+        """running_processes uses encoding='oem' for tasklist output."""
+        mock_result = mock.Mock()
+        mock_result.returncode = 0
+        mock_result.stdout = '"chrome.exe","1","Console","1","1 K"\n'
+        mock_run.return_value = mock_result
+
+        game_sync.running_processes()
+
+        # Verify encoding="oem" was passed to subprocess.run
+        call_kwargs = mock_run.call_args[1]
+        self.assertEqual(call_kwargs["encoding"], "oem")
+
 
 class TestDefaultNull(StateDirMixin, unittest.TestCase):
     """Test that "default": null means no game -> send nothing."""
