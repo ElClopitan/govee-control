@@ -1225,5 +1225,323 @@ class TestClearWithNullDefault(StateDirMixin, unittest.TestCase):
         mock_color.assert_any_call("192.168.1.51", 255, 255, 255, kelvin=0)
 
 
+class TestIsUnattended(unittest.TestCase):
+    """Test the is_unattended function."""
+
+    def test_unattended_when_env_is_zero(self):
+        """is_unattended returns True when CLAUDE_CODE_SESSION_ATTENDED=0."""
+        env = {"CLAUDE_CODE_SESSION_ATTENDED": "0"}
+        self.assertTrue(agent_signal.is_unattended(env))
+
+    def test_attended_when_env_is_one(self):
+        """is_unattended returns False when CLAUDE_CODE_SESSION_ATTENDED=1."""
+        env = {"CLAUDE_CODE_SESSION_ATTENDED": "1"}
+        self.assertFalse(agent_signal.is_unattended(env))
+
+    def test_attended_when_env_missing(self):
+        """is_unattended returns False when CLAUDE_CODE_SESSION_ATTENDED is not set."""
+        env = {}
+        self.assertFalse(agent_signal.is_unattended(env))
+
+    def test_attended_when_env_empty_string(self):
+        """is_unattended returns False when CLAUDE_CODE_SESSION_ATTENDED is empty."""
+        env = {"CLAUDE_CODE_SESSION_ATTENDED": ""}
+        self.assertFalse(agent_signal.is_unattended(env))
+
+
+class TestNeedsInputUnattended(StateDirMixin, unittest.TestCase):
+    """Test that needs-input skips unattended sessions."""
+
+    def setUp(self):
+        super().setUp()
+        self.config_path = self.state_dir / "config.json"
+        self.config = {
+            "devices": [
+                {"name": "left", "ip": "192.168.1.50"},
+            ],
+            "signal": {
+                "color": "#ff6a00",
+                "brightness": 100,
+                "blink": False,
+            },
+        }
+        self.config_path.write_text(json.dumps(self.config))
+
+    @mock.patch("agent_signal.govee.status")
+    @mock.patch("agent_signal.govee.turn")
+    @mock.patch("agent_signal.govee.brightness")
+    @mock.patch("agent_signal.govee.color")
+    def test_unattended_skips_signal(
+        self, mock_color, mock_brightness, mock_turn, mock_status
+    ):
+        """Unattended session: no govee calls, no saved state, exit 0."""
+        mock_status.return_value = {
+            "msg": {"data": {"on": True, "brightness": 50, "color": {"r": 255, "g": 255, "b": 255}}}
+        }
+
+        args = mock.Mock()
+        args.command = "needs-input"
+        args.config = str(self.config_path)
+        args.dry_run = False
+        args.force = False
+
+        with mock.patch.dict(os.environ, {"CLAUDE_CODE_SESSION_ATTENDED": "0"}):
+            agent_signal.cmd_needs_input(args)
+
+        # No govee calls
+        mock_status.assert_not_called()
+        mock_turn.assert_not_called()
+        mock_brightness.assert_not_called()
+        mock_color.assert_not_called()
+
+        # No saved state
+        self.assertFalse(arbiter.signal_file().exists())
+
+    @mock.patch("agent_signal.govee.status")
+    @mock.patch("agent_signal.govee.turn")
+    @mock.patch("agent_signal.govee.brightness")
+    @mock.patch("agent_signal.govee.color")
+    def test_attended_applies_signal(
+        self, mock_color, mock_brightness, mock_turn, mock_status
+    ):
+        """Attended session (env var missing): signal applied as before."""
+        mock_status.return_value = {
+            "msg": {"data": {"on": True, "brightness": 50, "color": {"r": 255, "g": 255, "b": 255}}}
+        }
+
+        args = mock.Mock()
+        args.command = "needs-input"
+        args.config = str(self.config_path)
+        args.dry_run = False
+        args.force = False
+
+        # No CLAUDE_CODE_SESSION_ATTENDED env var
+        with mock.patch.dict(os.environ, {}, clear=True):
+            agent_signal.cmd_needs_input(args)
+
+        # Signal applied
+        self.assertTrue(arbiter.signal_file().exists())
+        self.assertEqual(mock_color.call_count, 1)
+
+    @mock.patch("agent_signal.govee.status")
+    @mock.patch("agent_signal.govee.turn")
+    @mock.patch("agent_signal.govee.brightness")
+    @mock.patch("agent_signal.govee.color")
+    def test_include_unattended_true_applies_signal(
+        self, mock_color, mock_brightness, mock_turn, mock_status
+    ):
+        """include_unattended: true -> signal applied even for unattended."""
+        mock_status.return_value = {
+            "msg": {"data": {"on": True, "brightness": 50, "color": {"r": 255, "g": 255, "b": 255}}}
+        }
+
+        # Add include_unattended to config
+        self.config["signal"]["include_unattended"] = True
+        self.config_path.write_text(json.dumps(self.config))
+
+        args = mock.Mock()
+        args.command = "needs-input"
+        args.config = str(self.config_path)
+        args.dry_run = False
+        args.force = False
+
+        with mock.patch.dict(os.environ, {"CLAUDE_CODE_SESSION_ATTENDED": "0"}):
+            agent_signal.cmd_needs_input(args)
+
+        # Signal applied
+        self.assertTrue(arbiter.signal_file().exists())
+        self.assertEqual(mock_color.call_count, 1)
+
+    @mock.patch("agent_signal.govee.status")
+    @mock.patch("agent_signal.govee.turn")
+    @mock.patch("agent_signal.govee.brightness")
+    @mock.patch("agent_signal.govee.color")
+    def test_force_flag_applies_signal(
+        self, mock_color, mock_brightness, mock_turn, mock_status
+    ):
+        """--force flag -> signal applied even for unattended."""
+        mock_status.return_value = {
+            "msg": {"data": {"on": True, "brightness": 50, "color": {"r": 255, "g": 255, "b": 255}}}
+        }
+
+        args = mock.Mock()
+        args.command = "needs-input"
+        args.config = str(self.config_path)
+        args.dry_run = False
+        args.force = True
+
+        with mock.patch.dict(os.environ, {"CLAUDE_CODE_SESSION_ATTENDED": "0"}):
+            agent_signal.cmd_needs_input(args)
+
+        # Signal applied
+        self.assertTrue(arbiter.signal_file().exists())
+        self.assertEqual(mock_color.call_count, 1)
+
+
+class TestSignalLogging(StateDirMixin, unittest.TestCase):
+    """Test that signal events are logged."""
+
+    def setUp(self):
+        super().setUp()
+        self.config_path = self.state_dir / "config.json"
+        self.config = {
+            "devices": [
+                {"name": "left", "ip": "192.168.1.50"},
+            ],
+            "signal": {
+                "color": "#ff6a00",
+                "brightness": 100,
+                "blink": False,
+            },
+        }
+        self.config_path.write_text(json.dumps(self.config))
+
+    @mock.patch("agent_signal.govee.status")
+    @mock.patch("agent_signal.govee.turn")
+    @mock.patch("agent_signal.govee.brightness")
+    @mock.patch("agent_signal.govee.color")
+    def test_needs_input_logs_applied(
+        self, mock_color, mock_brightness, mock_turn, mock_status
+    ):
+        """needs-input logs 'applied' when signal is set."""
+        mock_status.return_value = {
+            "msg": {"data": {"on": True, "brightness": 50, "color": {"r": 255, "g": 255, "b": 255}}}
+        }
+
+        args = mock.Mock()
+        args.command = "needs-input"
+        args.config = str(self.config_path)
+        args.dry_run = False
+        args.force = False
+
+        agent_signal.cmd_needs_input(args)
+
+        # Check log file exists and contains the event
+        self.assertTrue(agent_signal.SIGNAL_LOG.exists())
+        log_content = agent_signal.SIGNAL_LOG.read_text()
+        self.assertIn("needs-input applied", log_content)
+
+    @mock.patch("agent_signal.govee.status")
+    @mock.patch("agent_signal.govee.turn")
+    @mock.patch("agent_signal.govee.brightness")
+    @mock.patch("agent_signal.govee.color")
+    def test_unattended_logs_skipped(
+        self, mock_color, mock_brightness, mock_turn, mock_status
+    ):
+        """Unattended session logs 'skipped-unattended'."""
+        args = mock.Mock()
+        args.command = "needs-input"
+        args.config = str(self.config_path)
+        args.dry_run = False
+        args.force = False
+
+        with mock.patch.dict(os.environ, {"CLAUDE_CODE_SESSION_ATTENDED": "0"}):
+            agent_signal.cmd_needs_input(args)
+
+        # Check log file exists and contains the event
+        self.assertTrue(agent_signal.SIGNAL_LOG.exists())
+        log_content = agent_signal.SIGNAL_LOG.read_text()
+        self.assertIn("needs-input skipped-unattended", log_content)
+
+    @mock.patch("agent_signal.govee.turn")
+    @mock.patch("agent_signal.govee.brightness")
+    @mock.patch("agent_signal.govee.color")
+    def test_clear_logs_applied(
+        self, mock_color, mock_brightness, mock_turn
+    ):
+        """clear logs 'applied' when signal is cleared."""
+        # Create a saved state file
+        arbiter.signal_file().parent.mkdir(parents=True, exist_ok=True)
+        saved_state = [
+            {"ip": "192.168.1.50", "on": True, "brightness": 50, "color": {"r": 255, "g": 255, "b": 255}},
+        ]
+        arbiter.signal_file().write_text(json.dumps(saved_state))
+
+        args = mock.Mock()
+        args.command = "clear"
+        args.config = str(self.config_path)
+        args.dry_run = False
+
+        agent_signal.cmd_clear(args)
+
+        # Check log file exists and contains the event
+        self.assertTrue(agent_signal.SIGNAL_LOG.exists())
+        log_content = agent_signal.SIGNAL_LOG.read_text()
+        self.assertIn("clear applied", log_content)
+
+    @mock.patch("agent_signal.govee.turn")
+    @mock.patch("agent_signal.govee.brightness")
+    @mock.patch("agent_signal.govee.color")
+    def test_clear_no_signal_logs_no_signal(
+        self, mock_color, mock_brightness, mock_turn
+    ):
+        """clear with no signal logs 'no-signal'."""
+        args = mock.Mock()
+        args.command = "clear"
+        args.config = str(self.config_path)
+        args.dry_run = False
+
+        agent_signal.cmd_clear(args)
+
+        # Check log file exists and contains the event
+        self.assertTrue(agent_signal.SIGNAL_LOG.exists())
+        log_content = agent_signal.SIGNAL_LOG.read_text()
+        self.assertIn("clear no-signal", log_content)
+
+    @mock.patch("agent_signal.govee.status")
+    @mock.patch("agent_signal.govee.turn")
+    @mock.patch("agent_signal.govee.brightness")
+    @mock.patch("agent_signal.govee.color")
+    def test_log_contains_session_id(
+        self, mock_color, mock_brightness, mock_turn, mock_status
+    ):
+        """Log contains session_id from hook input."""
+        mock_status.return_value = {
+            "msg": {"data": {"on": True, "brightness": 50, "color": {"r": 255, "g": 255, "b": 255}}}
+        }
+
+        args = mock.Mock()
+        args.command = "needs-input"
+        args.config = str(self.config_path)
+        args.dry_run = False
+        args.force = False
+
+        # Fake stdin with hook input
+        fake_stdin = json.dumps({"session_id": "test-session-123", "message": "waiting for input"})
+        with mock.patch("sys.stdin", mock.Mock(isatty=lambda: False, read=lambda: fake_stdin)):
+            agent_signal.cmd_needs_input(args)
+
+        # Check log contains session_id
+        log_content = agent_signal.SIGNAL_LOG.read_text()
+        self.assertIn("session=test-session-123", log_content)
+
+    @mock.patch("agent_signal.govee.status")
+    @mock.patch("agent_signal.govee.turn")
+    @mock.patch("agent_signal.govee.brightness")
+    @mock.patch("agent_signal.govee.color")
+    def test_bad_stdin_json_no_crash(
+        self, mock_color, mock_brightness, mock_turn, mock_status
+    ):
+        """Bad stdin JSON does not crash."""
+        mock_status.return_value = {
+            "msg": {"data": {"on": True, "brightness": 50, "color": {"r": 255, "g": 255, "b": 255}}}
+        }
+
+        args = mock.Mock()
+        args.command = "needs-input"
+        args.config = str(self.config_path)
+        args.dry_run = False
+        args.force = False
+
+        # Fake stdin with bad JSON, and ensure attended env
+        fake_stdin = "{bad json}"
+        with mock.patch("sys.stdin", mock.Mock(isatty=lambda: False, read=lambda: fake_stdin)):
+            with mock.patch.dict(os.environ, {"CLAUDE_CODE_SESSION_ATTENDED": "1"}):
+                agent_signal.cmd_needs_input(args)
+
+        # Should not crash, signal should be applied
+        self.assertTrue(arbiter.signal_file().exists())
+
+
 if __name__ == "__main__":
     unittest.main()

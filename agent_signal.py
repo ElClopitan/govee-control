@@ -14,6 +14,7 @@ import json
 import os
 import sys
 import time
+from datetime import datetime, timezone
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent))
@@ -26,12 +27,88 @@ LOCK_TIMEOUT = 10.0
 LOCK_STALE = 30.0
 STATUS_TIMEOUT = 1.0
 SAVE_STATE_BUDGET = 5.0
+SIGNAL_LOG = STATE_DIR / "signal.log"
+LOG_MAX_BYTES = 200 * 1024  # 200 KB
+LOG_MAX_LINES = 100
 
 DEFAULT_SIGNAL = {
     "color": "#ff6a00",
     "brightness": 100,
     "blink": False,
 }
+
+
+def is_unattended(env=None):
+    """Check if the current session is unattended (background/dispatcher).
+
+    Returns True when CLAUDE_CODE_SESSION_ATTENDED is set to "0".
+    """
+    if env is None:
+        env = os.environ
+    return env.get("CLAUDE_CODE_SESSION_ATTENDED") == "0"
+
+
+def read_hook_input():
+    """Read hook input JSON from stdin if available.
+
+    Returns a dict with session_id and message if present, or an empty dict.
+    Never fails if stdin is empty or not JSON.
+    """
+    if sys.stdin.isatty():
+        return {}
+    try:
+        raw = sys.stdin.read()
+        if not raw.strip():
+            return {}
+        data = json.loads(raw)
+        return {
+            "session_id": data.get("session_id", ""),
+            "message": data.get("message", ""),
+        }
+    except (json.JSONDecodeError, OSError):
+        return {}
+
+
+def log_signal_event(command, action, hook_input=None):
+    """Append a log line to state/signal.log.
+
+    Format: ISO timestamp, command, action, session_id, message.
+    Truncates the log if it exceeds LOG_MAX_BYTES.
+    """
+    try:
+        STATE_DIR.mkdir(parents=True, exist_ok=True)
+
+        # Truncate if too large
+        if SIGNAL_LOG.exists():
+            try:
+                size = SIGNAL_LOG.stat().st_size
+                if size > LOG_MAX_BYTES:
+                    # Keep last 100 lines
+                    with open(SIGNAL_LOG, "r") as f:
+                        lines = f.readlines()
+                    with open(SIGNAL_LOG, "w") as f:
+                        f.writelines(lines[-LOG_MAX_LINES:])
+            except OSError:
+                pass
+
+        now = datetime.now(timezone.utc).isoformat()
+        session_id = ""
+        message = ""
+        if hook_input:
+            session_id = hook_input.get("session_id", "")
+            message = hook_input.get("message", "")
+
+        line = f"{now} {command} {action}"
+        if session_id:
+            line += f" session={session_id}"
+        if message:
+            line += f" msg={message}"
+        line += "\n"
+
+        with open(SIGNAL_LOG, "a") as f:
+            f.write(line)
+    except OSError:
+        pass
 
 
 def acquire_lock(dry_run=False):
@@ -336,6 +413,17 @@ def restore_state(devices, signal_cfg, default_cfg=None, dry_run=False, quiet=Fa
 
 def cmd_needs_input(args):
     """Handle the needs-input command."""
+    hook_input = read_hook_input()
+
+    # Check if unattended and not forced
+    if not args.force and is_unattended():
+        cfg = load_config(args.config)
+        signal_cfg = get_signal_config(cfg)
+        include_unattended = signal_cfg.get("include_unattended", False)
+        if not include_unattended:
+            log_signal_event("needs-input", "skipped-unattended", hook_input)
+            return
+
     cfg = load_config(args.config)
     devices = cfg.get("devices", [])
     if not devices:
@@ -352,7 +440,9 @@ def cmd_needs_input(args):
             set_signal_color(devices, signal_cfg, dry_run=args.dry_run)
         except OSError as e:
             print(f"warning: could not set signal colour: {e}", file=sys.stderr)
+            log_signal_event("needs-input", "lock-timeout-oserror", hook_input)
             return
+        log_signal_event("needs-input", "lock-timeout-applied", hook_input)
         print("signal set")
         return
 
@@ -365,7 +455,9 @@ def cmd_needs_input(args):
             set_signal_color(devices, signal_cfg, dry_run=args.dry_run)
         except OSError as e:
             print(f"warning: could not set signal colour: {e}", file=sys.stderr)
+            log_signal_event("needs-input", "oserror", hook_input)
             return
+        log_signal_event("needs-input", "applied", hook_input)
         print("signal set")
     finally:
         release_lock(dry_run=args.dry_run)
@@ -373,9 +465,11 @@ def cmd_needs_input(args):
 
 def cmd_clear(args):
     """Handle the clear command."""
+    hook_input = read_hook_input()
     signal_path = arbiter.signal_file()
     # Fast path: if no saved state, nothing to do (no lock needed)
     if not signal_path.exists():
+        log_signal_event("clear", "no-signal", hook_input)
         print("no active signal; nothing to do")
         return
 
@@ -391,11 +485,13 @@ def cmd_clear(args):
     # Acquire lock before restoring state
     if not acquire_lock(dry_run=args.dry_run):
         # Lock timed out, exit 0 without doing anything
+        log_signal_event("clear", "lock-timeout", hook_input)
         return
 
     try:
         # Re-check under the lock
         if not signal_path.exists():
+            log_signal_event("clear", "no-signal", hook_input)
             print("no active signal; nothing to do")
             return
 
@@ -407,8 +503,10 @@ def cmd_clear(args):
             restore_state(devices, signal_cfg, default_cfg=default_cfg, dry_run=args.dry_run, quiet=was_corrupt)
         except OSError as e:
             print(f"warning: could not restore lights: {e}", file=sys.stderr)
+            log_signal_event("clear", "oserror", hook_input)
             return
         delete_saved_state(dry_run=args.dry_run, quiet=was_corrupt)
+        log_signal_event("clear", "applied", hook_input)
         print("signal cleared")
     finally:
         release_lock(dry_run=args.dry_run)
@@ -438,6 +536,11 @@ def main():
         "--dry-run",
         action="store_true",
         help="print what would be done without sending commands",
+    )
+    parser.add_argument(
+        "--force",
+        action="store_true",
+        help="apply signal even for unattended/background sessions",
     )
 
     args = parser.parse_args()

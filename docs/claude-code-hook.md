@@ -61,6 +61,24 @@ If your settings.json already has a `hooks` key, merge these two events into it 
 - Make sure `python` is on your PATH, or use the full path to the Python
   executable.
 
+## Unattended Sessions
+
+By default, `needs-input` ignores unattended/background Claude sessions (those
+with `CLAUDE_CODE_SESSION_ATTENDED=0` in their environment). This prevents the
+lights from turning orange when a background dispatcher session goes idle.
+
+To include unattended sessions, set `signal.include_unattended` to `true` in
+`config.json`. You can also use the `--force` flag on the command line to
+override the check for a single invocation.
+
+## Logging
+
+Every `needs-input` and `clear` call is logged to `state/signal.log` with an
+ISO timestamp, the command, the action taken (applied, skipped-unattended,
+no-signal, etc.), and the session ID and message from the hook input if
+available. The log is automatically truncated to its last 100 lines when it
+exceeds 200 KB.
+
 ## Reference
 
 - Claude Code Hooks documentation: https://code.claude.com/docs/en/hooks
