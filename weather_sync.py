@@ -30,6 +30,7 @@ import logging
 import sys
 import time
 import urllib.error
+import urllib.parse
 import urllib.request
 from pathlib import Path
 
@@ -55,7 +56,7 @@ def fetch_weather(lat, lon):
         "longitude": lon,
         "current": "temperature_2m,weather_code,is_day",
     }
-    query = "&".join(f"{k}={v}" for k, v in params.items())
+    query = urllib.parse.urlencode(params)
     url = f"{OPEN_METEO_URL}?{query}"
 
     logger.info("Fetching weather from Open-Meteo for (%s, %s)", lat, lon)
@@ -144,8 +145,7 @@ def run(config, once=False, interval=900, dry_run=False):
     while True:
         try:
             weather = fetch_weather(lat, lon)
-        except (urllib.error.URLError, urllib.error.HTTPError, json.JSONDecodeError,
-                KeyError, TimeoutError) as e:
+        except (OSError, ValueError, KeyError) as e:
             logger.error("Failed to fetch weather: %s", e)
             if once:
                 sys.exit(1)
@@ -153,6 +153,13 @@ def run(config, once=False, interval=900, dry_run=False):
             continue
 
         code = weather["weather_code"]
+        if code is None:
+            logger.warning("weather_code is null; skipping this iteration")
+            if once:
+                sys.exit(1)
+            time.sleep(interval)
+            continue
+
         temp = weather["temperature_2m"]
         is_day = weather["is_day"]
 
@@ -162,16 +169,21 @@ def run(config, once=False, interval=900, dry_run=False):
 
         if color_hex != last_color or dry_run:
             r, g, b = govee.parse_color(color_hex)
-            for dev in devices:
-                ip = dev["ip"]
-                if dry_run:
-                    logger.info("[dry-run] Would set %s to %s (brightness %d)",
-                                ip, color_hex, brightness)
-                else:
-                    govee.color(ip, r, g, b)
-                    govee.brightness(ip, brightness)
-                    logger.info("Set %s to %s (brightness %d)", ip, color_hex, brightness)
-            last_color = color_hex
+            try:
+                for dev in devices:
+                    ip = dev["ip"]
+                    if dry_run:
+                        logger.info("[dry-run] Would set %s to %s (brightness %d)",
+                                    ip, color_hex, brightness)
+                    else:
+                        govee.color(ip, r, g, b)
+                        govee.brightness(ip, brightness)
+                        logger.info("Set %s to %s (brightness %d)", ip, color_hex, brightness)
+            except OSError as e:
+                logger.error("Failed to send to lights: %s", e)
+                # Don't update last_color so we retry next iteration
+            else:
+                last_color = color_hex
 
         if once:
             break

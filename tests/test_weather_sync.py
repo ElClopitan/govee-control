@@ -267,9 +267,11 @@ class TestNetworkError(unittest.TestCase):
             weather_sync.run(config, once=True)
         self.assertEqual(ctx.exception.code, 1)
 
+    @mock.patch("govee.color")
+    @mock.patch("govee.brightness")
     @mock.patch("weather_sync.fetch_weather")
     @mock.patch("time.sleep")
-    def test_network_error_loop_mode(self, mock_sleep, mock_fetch):
+    def test_network_error_loop_mode(self, mock_sleep, mock_fetch, mock_brightness, mock_color):
         """Network error in loop mode retries (doesn't crash)."""
         import urllib.error
         call_count = [0]
@@ -303,6 +305,115 @@ class TestNetworkError(unittest.TestCase):
 
         # Should have called fetch twice (once failed, once succeeded)
         self.assertEqual(call_count[0], 2)
+        # Should have sent color once (after successful fetch)
+        self.assertEqual(mock_color.call_count, 1)
+        mock_color.assert_called_with("192.168.1.50", 255, 210, 127)
+
+
+    @mock.patch("weather_sync.fetch_weather")
+    @mock.patch("time.sleep")
+    def test_connection_reset_once_mode(self, mock_sleep, mock_fetch):
+        """ConnectionResetError in --once mode exits non-zero."""
+        mock_fetch.side_effect = ConnectionResetError("connection reset")
+        config = {
+            "devices": [{"name": "left", "ip": "192.168.1.50"}],
+            "weather": {"latitude": 51.5, "longitude": -0.1, "brightness": 50},
+        }
+        with self.assertRaises(SystemExit) as ctx:
+            weather_sync.run(config, once=True)
+        self.assertEqual(ctx.exception.code, 1)
+
+    @mock.patch("govee.color")
+    @mock.patch("govee.brightness")
+    @mock.patch("weather_sync.fetch_weather")
+    @mock.patch("time.sleep")
+    def test_govee_color_oserror_loop_mode(self, mock_sleep, mock_fetch, mock_brightness, mock_color):
+        """govee.color OSError in loop mode retries (doesn't crash)."""
+        mock_fetch.return_value = {
+            "temperature_2m": 20.0,
+            "weather_code": 0,
+            "is_day": 1,
+        }
+
+        call_count = [0]
+        def color_side_effect(ip, r, g, b):
+            call_count[0] += 1
+            if call_count[0] == 1:
+                raise OSError("network down")
+
+        mock_color.side_effect = color_side_effect
+
+        # Mock sleep to raise KeyboardInterrupt after 2 calls to exit loop
+        sleep_count = [0]
+        def sleep_side_effect(seconds):
+            sleep_count[0] += 1
+            if sleep_count[0] >= 2:
+                raise KeyboardInterrupt()
+
+        mock_sleep.side_effect = sleep_side_effect
+
+        config = {
+            "devices": [{"name": "left", "ip": "192.168.1.50"}],
+            "weather": {"latitude": 51.5, "longitude": -0.1, "brightness": 50},
+        }
+
+        try:
+            weather_sync.run(config, once=False, interval=1)
+        except KeyboardInterrupt:
+            pass
+
+        # Should have tried to send color twice (once failed, once succeeded)
+        self.assertEqual(call_count[0], 2)
+
+    @mock.patch("weather_sync.fetch_weather")
+    @mock.patch("time.sleep")
+    def test_null_weather_code_once_mode(self, mock_sleep, mock_fetch):
+        """Null weather_code in --once mode exits non-zero."""
+        mock_fetch.return_value = {
+            "temperature_2m": 20.0,
+            "weather_code": None,
+            "is_day": 1,
+        }
+        config = {
+            "devices": [{"name": "left", "ip": "192.168.1.50"}],
+            "weather": {"latitude": 51.5, "longitude": -0.1, "brightness": 50},
+        }
+        with self.assertRaises(SystemExit) as ctx:
+            weather_sync.run(config, once=True)
+        self.assertEqual(ctx.exception.code, 1)
+
+
+class TestFetchWeatherUrl(unittest.TestCase):
+    """Test fetch_weather URL construction."""
+
+    def _mock_response(self, data):
+        """Create a mock HTTP response."""
+        mock_resp = mock.MagicMock()
+        mock_resp.read.return_value = json.dumps(data).encode("utf-8")
+        mock_resp.__enter__ = mock.MagicMock(return_value=mock_resp)
+        mock_resp.__exit__ = mock.MagicMock(return_value=False)
+        return mock_resp
+
+    @mock.patch("urllib.request.urlopen")
+    def test_url_encoding(self, mock_urlopen):
+        """URL uses urllib.parse.urlencode (commas are escaped)."""
+        fixture = {
+            "current": {
+                "temperature_2m": 22.5,
+                "weather_code": 3,
+                "is_day": 1,
+            }
+        }
+        mock_urlopen.return_value = self._mock_response(fixture)
+
+        weather_sync.fetch_weather(51.5, -0.1)
+
+        call_args = mock_urlopen.call_args
+        request_obj = call_args[0][0]
+        # urlencode escapes commas as %2C
+        self.assertIn("latitude=51.5", request_obj.full_url)
+        self.assertIn("longitude=-0.1", request_obj.full_url)
+        self.assertIn("current=temperature_2m%2Cweather_code%2Cis_day", request_obj.full_url)
 
 
 class TestDryRun(unittest.TestCase):
