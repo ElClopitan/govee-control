@@ -303,7 +303,11 @@ def cmd_needs_input(args):
     # Always acquire lock before saving state (race condition fix)
     if not acquire_lock(dry_run=args.dry_run):
         # Lock timed out, still set the signal colour
-        set_signal_color(devices, signal_cfg, dry_run=args.dry_run)
+        try:
+            set_signal_color(devices, signal_cfg, dry_run=args.dry_run)
+        except OSError as e:
+            print(f"warning: could not set signal colour: {e}", file=sys.stderr)
+            return
         print("signal set")
         return
 

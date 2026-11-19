@@ -546,6 +546,35 @@ class TestOSErrorHandling(StateDirMixin, unittest.TestCase):
         # Lock file should not exist (released)
         self.assertFalse(agent_signal.LOCK_FILE.exists())
 
+    @mock.patch("agent_signal.govee.status")
+    @mock.patch("agent_signal.govee.turn")
+    @mock.patch("agent_signal.govee.brightness")
+    @mock.patch("agent_signal.govee.color")
+    @mock.patch("agent_signal.acquire_lock")
+    def test_needs_input_lock_timeout_oserror_does_not_crash(
+        self, mock_lock, mock_color, mock_brightness, mock_turn, mock_status
+    ):
+        """needs-input with lock timeout and govee.color raising OSError: no crash, exit 0."""
+        # Lock times out
+        mock_lock.return_value = False
+        # Status answers (not used on lock-timeout path, but mocked for completeness)
+        mock_status.return_value = {
+            "msg": {"data": {"on": True, "brightness": 50, "color": {"r": 255, "g": 255, "b": 255}}}
+        }
+        # govee.color raises OSError
+        mock_color.side_effect = OSError("[WinError 10051] network unreachable")
+
+        args = mock.Mock()
+        args.command = "needs-input"
+        args.config = str(self.config_path)
+        args.dry_run = False
+
+        # Should not raise
+        agent_signal.cmd_needs_input(args)
+
+        # Lock file should not exist (lock timed out, never acquired)
+        self.assertFalse(agent_signal.LOCK_FILE.exists())
+
 
 class TestSignalDryRun(StateDirMixin, unittest.TestCase):
     """Test dry-run mode."""
