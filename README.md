@@ -103,6 +103,20 @@ Add `default` and `games` sections to your `config.json`:
 The `exe` field is matched case-insensitively against running process names.
 When multiple games match, the first one in config order wins.
 
+### Leaving lights to weather when no game is running
+
+Set `"default": null` in your config to have game_sync send nothing when no game
+is running. This lets weather_sync (or manual settings) control the lights
+between games. When a game starts, its profile is applied as usual.
+
+```json
+{
+  "devices": [...],
+  "default": null,
+  "games": [...]
+}
+```
+
 ### Game profiles
 
 Two game profiles are included out of the box:

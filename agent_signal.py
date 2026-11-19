@@ -232,20 +232,21 @@ def restore_state(devices, default_cfg=None, dry_run=False):
             else:
                 print(f"[dry-run] restore {ip}: on={was_on}, brightness={brightness}")
 
-        # Fallback: for devices in config but not in saved state, apply default
-        if default_cfg:
-            for dev in devices:
-                ip = dev["ip"]
-                if ip not in saved_by_ip:
-                    color_str = default_cfg.get("color", "white")
-                    brightness = default_cfg.get("brightness", 40)
-                    r, g, b = govee.parse_color(color_str)
-                    if not dry_run:
-                        govee.turn(ip, True)
-                        govee.brightness(ip, brightness)
-                        govee.color(ip, r, g, b, kelvin=0)
-                    else:
-                        print(f"[dry-run] fallback {ip}: {color_str} at {brightness}%")
+        # Fallback: for devices in config but not in saved state, apply default.
+        # If default_cfg is None (config had "default": null), use the built-in default.
+        fallback = default_cfg if default_cfg is not None else arbiter.BUILTIN_DEFAULT
+        for dev in devices:
+            ip = dev["ip"]
+            if ip not in saved_by_ip:
+                color_str = fallback.get("color", "white")
+                brightness = fallback.get("brightness", 40)
+                r, g, b = govee.parse_color(color_str)
+                if not dry_run:
+                    govee.turn(ip, True)
+                    govee.brightness(ip, brightness)
+                    govee.color(ip, r, g, b, kelvin=0)
+                else:
+                    print(f"[dry-run] fallback {ip}: {color_str} at {brightness}%")
 
         print("restored saved state")
         return True

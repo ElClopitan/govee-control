@@ -317,6 +317,72 @@ class TestRunningProcessesEncoding(unittest.TestCase):
         self.assertIn("spielä.exe", processes)
 
 
+class TestDefaultNull(StateDirMixin, unittest.TestCase):
+    """Test that "default": null means no game -> send nothing."""
+
+    def _make_config(self, default=None):
+        return {
+            "devices": [{"name": "left", "ip": "192.168.1.50"}],
+            "games": [
+                {"name": "Test Game", "exe": "testgame.exe", "color": "red", "brightness": 80},
+            ],
+            "default": default,
+        }
+
+    @mock.patch("game_sync.running_processes")
+    @mock.patch("govee.color")
+    @mock.patch("govee.brightness")
+    def test_default_null_no_game_sends_nothing(self, mock_brightness, mock_color, mock_processes):
+        """With "default": null and no game running, apply_profile is not called."""
+        mock_processes.return_value = {"chrome.exe"}
+        config = self._make_config(default=None)
+
+        game_sync.run(config, once=True)
+
+        # Should NOT have called govee functions
+        mock_color.assert_not_called()
+        mock_brightness.assert_not_called()
+
+    @mock.patch("game_sync.running_processes")
+    @mock.patch("govee.color")
+    @mock.patch("govee.brightness")
+    def test_default_missing_uses_builtin(self, mock_brightness, mock_color, mock_processes):
+        """With "default" key missing, built-in white/40 is used."""
+        mock_processes.return_value = {"chrome.exe"}
+        config = {
+            "devices": [{"name": "left", "ip": "192.168.1.50"}],
+            "games": [
+                {"name": "Test Game", "exe": "testgame.exe", "color": "red", "brightness": 80},
+            ],
+        }
+
+        game_sync.run(config, once=True)
+
+        # Should have called color and brightness for the built-in default
+        self.assertEqual(mock_color.call_count, 1)
+        self.assertEqual(mock_brightness.call_count, 1)
+        # White = (255, 255, 255)
+        mock_color.assert_called_with("192.168.1.50", 255, 255, 255)
+        mock_brightness.assert_called_with("192.168.1.50", 40)
+
+    @mock.patch("game_sync.running_processes")
+    @mock.patch("govee.color")
+    @mock.patch("govee.brightness")
+    def test_default_null_game_still_applies(self, mock_brightness, mock_color, mock_processes):
+        """With "default": null, a running game still applies its profile."""
+        mock_processes.return_value = {"testgame.exe"}
+        config = self._make_config(default=None)
+
+        game_sync.run(config, once=True)
+
+        # Should have called color and brightness for the game profile
+        self.assertEqual(mock_color.call_count, 1)
+        self.assertEqual(mock_brightness.call_count, 1)
+        # Red = (255, 0, 0)
+        mock_color.assert_called_with("192.168.1.50", 255, 0, 0)
+        mock_brightness.assert_called_with("192.168.1.50", 80)
+
+
 class TestSignalPriority(StateDirMixin, unittest.TestCase):
     """Test that game sync respects agent signal priority."""
 

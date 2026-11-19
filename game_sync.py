@@ -108,7 +108,12 @@ def run(config, interval=5, once=False, dry_run=False):
         dry_run: if True, print instead of sending
     """
     games = config.get("games", [])
-    default = config.get("default", {"color": "white", "brightness": 40})
+    # If "default" key is missing, use the built-in default.
+    # If "default" is explicitly null, use None (no default profile).
+    if "default" in config:
+        default = config["default"]
+    else:
+        default = arbiter.BUILTIN_DEFAULT
 
     last_profile_name = None
     signal_was_active = False
@@ -150,13 +155,19 @@ def run(config, interval=5, once=False, dry_run=False):
                         print("signal active; skipping game sync")
                         last_profile_name = None
                     else:
-                        print(f"Switching to: {profile_name}")
-                        try:
-                            apply_profile(config, profile, dry_run=dry_run)
-                        except OSError as e:
-                            print(f"warning: failed to apply {profile_name}: {e}", file=sys.stderr)
-                        else:
+                        # If default is null (no game -> leave lights alone),
+                        # don't send anything; just mark as applied.
+                        if profile is None:
+                            print("no game running; leaving lights to weather/manual")
                             last_profile_name = profile_name
+                        else:
+                            print(f"Switching to: {profile_name}")
+                            try:
+                                apply_profile(config, profile, dry_run=dry_run)
+                            except OSError as e:
+                                print(f"warning: failed to apply {profile_name}: {e}", file=sys.stderr)
+                            else:
+                                last_profile_name = profile_name
 
             if once:
                 break

@@ -41,6 +41,10 @@ logger = logging.getLogger(__name__)
 
 OPEN_METEO_URL = "https://api.open-meteo.com/v1/forecast"
 
+# When blocked by signal/game priority, poll at least this often (seconds)
+# so weather takes over quickly after a game ends or signal clears.
+BLOCKED_POLL_SECONDS = 10
+
 
 def fetch_weather(lat, lon):
     """Fetch current weather from Open-Meteo API.
@@ -155,7 +159,7 @@ def run(config, once=False, interval=900, dry_run=False):
             last_color = None
             if once:
                 break
-            time.sleep(interval)
+            time.sleep(min(interval, BLOCKED_POLL_SECONDS))
             continue
 
         priority_was_active = False
@@ -191,7 +195,7 @@ def run(config, once=False, interval=900, dry_run=False):
             last_color = None
             if once:
                 break
-            time.sleep(interval)
+            time.sleep(min(interval, BLOCKED_POLL_SECONDS))
             continue
 
         if color_hex != last_color or dry_run:

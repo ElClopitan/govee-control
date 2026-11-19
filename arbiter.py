@@ -22,6 +22,11 @@ STATE_DIR = Path(__file__).parent / "state"
 # or it's considered stale and weather sync takes over.
 GAME_STALE_SECONDS = 60
 
+# Built-in default profile used when config has no "default" key or it is null.
+# Used by game_sync (when no game is running) and agent_signal (when restoring
+# a device that had no saved state).
+BUILTIN_DEFAULT = {"color": "white", "brightness": 40}
+
 
 def signal_file():
     """Return the path to the signal state file.

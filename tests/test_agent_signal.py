@@ -337,7 +337,10 @@ class TestSignalClear(StateDirMixin, unittest.TestCase):
         # Check actual call order for this IP
         names = [c[0] for c in parent.mock_calls if c[1] and c[1][0] == "192.168.1.50"]
         self.assertEqual(names, ["brightness", "color", "turn"])
-        self.assertEqual(mock_turn.call_args, mock.call("192.168.1.50", False))
+        # Find the turn call for this specific IP
+        turn_calls = [c for c in mock_turn.call_args_list if c[0][0] == "192.168.1.50"]
+        self.assertEqual(len(turn_calls), 1)
+        self.assertEqual(turn_calls[0], mock.call("192.168.1.50", False))
 
     @mock.patch("agent_signal.govee.turn")
     @mock.patch("agent_signal.govee.brightness")
@@ -368,7 +371,10 @@ class TestSignalClear(StateDirMixin, unittest.TestCase):
         # Check actual call order for this IP
         names = [c[0] for c in parent.mock_calls if c[1] and c[1][0] == "192.168.1.50"]
         self.assertEqual(names, ["turn", "brightness", "color"])
-        self.assertEqual(mock_turn.call_args, mock.call("192.168.1.50", True))
+        # Find the turn call for this specific IP
+        turn_calls = [c for c in mock_turn.call_args_list if c[0][0] == "192.168.1.50"]
+        self.assertEqual(len(turn_calls), 1)
+        self.assertEqual(turn_calls[0], mock.call("192.168.1.50", True))
 
     @mock.patch("agent_signal.govee.turn")
     @mock.patch("agent_signal.govee.brightness")
@@ -408,7 +414,7 @@ class TestSignalClear(StateDirMixin, unittest.TestCase):
     def test_clear_invalid_json_file_deleted(
         self, mock_color, mock_brightness, mock_turn
     ):
-        """clear with a file containing invalid JSON: no exception, no govee calls, file deleted."""
+        """clear with a file containing invalid JSON: no exception, fallback applied, file deleted."""
         arbiter.signal_file().parent.mkdir(parents=True, exist_ok=True)
         arbiter.signal_file().write_text("{")
 
@@ -420,10 +426,13 @@ class TestSignalClear(StateDirMixin, unittest.TestCase):
         # Should not raise
         agent_signal.cmd_clear(args)
 
-        # No govee commands should have been sent
-        mock_turn.assert_not_called()
-        mock_brightness.assert_not_called()
-        mock_color.assert_not_called()
+        # Invalid JSON -> load_saved_state returns [] -> fallback applied to all devices
+        # Config has no "default" key, so BUILTIN_DEFAULT (white, 40%) is used
+        self.assertEqual(mock_color.call_count, 2)
+        mock_color.assert_any_call("192.168.1.50", 255, 255, 255, kelvin=0)
+        mock_color.assert_any_call("192.168.1.51", 255, 255, 255, kelvin=0)
+        mock_brightness.assert_any_call("192.168.1.50", 40)
+        mock_brightness.assert_any_call("192.168.1.51", 40)
 
         # File should be deleted
         self.assertFalse(arbiter.signal_file().exists())
@@ -566,8 +575,8 @@ class TestLocking(StateDirMixin, unittest.TestCase):
 
         agent_signal.cmd_clear(args)
 
-        # Should have called govee.color
-        self.assertEqual(mock_color.call_count, 1)
+        # Should have called govee.color for the saved device and the fallback device
+        self.assertEqual(mock_color.call_count, 2)
         # Lock file should be gone
         self.assertFalse(agent_signal.LOCK_FILE.exists())
 
@@ -765,6 +774,71 @@ class TestSignalArbiterIntegration(StateDirMixin, unittest.TestCase):
 
         # After clear: arbiter should not see signal as active
         self.assertFalse(arbiter.signal_active())
+
+
+class TestClearWithNullDefault(StateDirMixin, unittest.TestCase):
+    """Test that clear with "default": null uses built-in default."""
+
+    def setUp(self):
+        super().setUp()
+        self.config_path = self.state_dir / "config.json"
+        self.config = {
+            "devices": [
+                {"name": "left", "ip": "192.168.1.50"},
+                {"name": "right", "ip": "192.168.1.51"},
+            ],
+            "default": None,  # Explicitly null
+            "signal": {
+                "color": "#ff6a00",
+                "brightness": 100,
+                "blink": False,
+            },
+        }
+        self.config_path.write_text(json.dumps(self.config))
+
+    @mock.patch("agent_signal.govee.status")
+    @mock.patch("agent_signal.govee.turn")
+    @mock.patch("agent_signal.govee.brightness")
+    @mock.patch("agent_signal.govee.color")
+    def test_clear_with_null_default_uses_builtin(
+        self, mock_color, mock_brightness, mock_turn, mock_status
+    ):
+        """With "default": null, clear uses built-in white/40 for devices without saved state."""
+        # First, create a signal with saved state for only one device
+        mock_status.side_effect = [
+            {"msg": {"data": {"onOff": 1, "brightness": 50, "color": {"r": 255, "g": 255, "b": 255}}}},
+            None,  # Second device doesn't respond
+            None,  # retry
+            None,  # retry
+        ]
+
+        args1 = mock.Mock()
+        args1.command = "needs-input"
+        args1.config = str(self.config_path)
+        args1.dry_run = False
+        agent_signal.cmd_needs_input(args1)
+
+        # Reset mocks for clear
+        mock_color.reset_mock()
+        mock_brightness.reset_mock()
+        mock_turn.reset_mock()
+
+        # Now clear
+        args2 = mock.Mock()
+        args2.command = "clear"
+        args2.config = str(self.config_path)
+        args2.dry_run = False
+        agent_signal.cmd_clear(args2)
+
+        # Device 1 should be restored from saved state (white, 50%)
+        # Device 2 should get built-in default (white, 40%)
+        # Check that govee.color was called for both devices
+        self.assertEqual(mock_color.call_count, 2)
+        # Device 2 (no saved state) should get built-in default brightness 40
+        # Find the call for device 2
+        device2_calls = [c for c in mock_brightness.call_args_list if c[0][0] == "192.168.1.51"]
+        self.assertEqual(len(device2_calls), 1)
+        self.assertEqual(device2_calls[0][0][1], 40)
 
 
 if __name__ == "__main__":

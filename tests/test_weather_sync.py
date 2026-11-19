@@ -596,6 +596,92 @@ class TestPriority(StateDirMixin, unittest.TestCase):
         self.assertEqual(mock_color.call_count, 2)
 
 
+class TestBlockedPollInterval(StateDirMixin, unittest.TestCase):
+    """Test that weather sync polls every 10s while blocked."""
+
+    def _make_config(self):
+        return {
+            "devices": [{"name": "left", "ip": "192.168.1.50"}],
+            "weather": {"latitude": 51.5, "longitude": -0.1, "brightness": 50},
+        }
+
+    @mock.patch("weather_sync.fetch_weather")
+    @mock.patch("govee.color")
+    @mock.patch("govee.brightness")
+    @mock.patch("time.sleep")
+    def test_blocked_uses_shorter_interval(self, mock_sleep, mock_brightness, mock_color, mock_fetch):
+        """When blocked by signal, sleep uses min(interval, 10) not full interval."""
+        import arbiter
+        # Create signal file to block weather sync
+        (arbiter.STATE_DIR / "saved_state.json").write_text("[]")
+
+        mock_fetch.return_value = {
+            "temperature_2m": 20.0,
+            "weather_code": 0,
+            "is_day": 1,
+        }
+        config = self._make_config()
+
+        # Run with interval=900; should sleep 10s while blocked
+        call_count = [0]
+        def sleep_side_effect(seconds):
+            call_count[0] += 1
+            # Verify the sleep duration is 10, not 900
+            self.assertEqual(seconds, 10)
+            if call_count[0] >= 1:
+                raise KeyboardInterrupt()
+
+        mock_sleep.side_effect = sleep_side_effect
+
+        try:
+            weather_sync.run(config, once=False, interval=900)
+        except KeyboardInterrupt:
+            pass
+
+        # Should have slept once with 10 seconds
+        self.assertEqual(mock_sleep.call_count, 1)
+        mock_sleep.assert_called_with(10)
+
+    @mock.patch("weather_sync.fetch_weather")
+    @mock.patch("govee.color")
+    @mock.patch("govee.brightness")
+    @mock.patch("time.sleep")
+    def test_blocked_recheck_uses_shorter_interval(self, mock_sleep, mock_brightness, mock_color, mock_fetch):
+        """When blocked during re-check before send, sleep uses min(interval, 10)."""
+        import arbiter
+
+        def fetch_with_game(*args, **kwargs):
+            # Simulate game becoming active during the fetch
+            arbiter.set_game_active("Test Game")
+            return {
+                "temperature_2m": 20.0,
+                "weather_code": 0,
+                "is_day": 1,
+            }
+
+        mock_fetch.side_effect = fetch_with_game
+        config = self._make_config()
+
+        call_count = [0]
+        def sleep_side_effect(seconds):
+            call_count[0] += 1
+            # Verify the sleep duration is 10, not 900
+            self.assertEqual(seconds, 10)
+            if call_count[0] >= 1:
+                raise KeyboardInterrupt()
+
+        mock_sleep.side_effect = sleep_side_effect
+
+        try:
+            weather_sync.run(config, once=False, interval=900)
+        except KeyboardInterrupt:
+            pass
+
+        # Should have slept once with 10 seconds
+        self.assertEqual(mock_sleep.call_count, 1)
+        mock_sleep.assert_called_with(10)
+
+
 class TestPriorityRecheckBeforeSend(StateDirMixin, unittest.TestCase):
     """Test that weather sync re-checks priority just before sending."""
 
