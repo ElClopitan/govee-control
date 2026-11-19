@@ -441,5 +441,87 @@ class TestDryRun(unittest.TestCase):
         mock_brightness.assert_not_called()
 
 
+class TestPriority(unittest.TestCase):
+    """Test that weather sync respects signal/game priority."""
+
+    def setUp(self):
+        import tempfile
+        from pathlib import Path
+        self.tmpdir = tempfile.mkdtemp()
+        self.state_dir = Path(self.tmpdir)
+        import arbiter
+        arbiter.STATE_DIR = self.state_dir
+
+    def tearDown(self):
+        import shutil
+        shutil.rmtree(self.tmpdir)
+
+    def _make_config(self):
+        return {
+            "devices": [{"name": "left", "ip": "192.168.1.50"}],
+            "weather": {"latitude": 51.5, "longitude": -0.1, "brightness": 50},
+        }
+
+    @mock.patch("weather_sync.fetch_weather")
+    @mock.patch("govee.color")
+    @mock.patch("govee.brightness")
+    def test_game_active_skips_send(self, mock_brightness, mock_color, mock_fetch):
+        """When game is active, weather sync does not send to lights."""
+        import arbiter
+        arbiter.set_game_active("Test Game")
+
+        mock_fetch.return_value = {
+            "temperature_2m": 20.0,
+            "weather_code": 0,
+            "is_day": 1,
+        }
+        config = self._make_config()
+
+        weather_sync.run(config, once=True)
+
+        # Should NOT have called govee functions
+        mock_color.assert_not_called()
+        mock_brightness.assert_not_called()
+
+    @mock.patch("weather_sync.fetch_weather")
+    @mock.patch("govee.color")
+    @mock.patch("govee.brightness")
+    def test_signal_active_skips_send(self, mock_brightness, mock_color, mock_fetch):
+        """When signal is active, weather sync does not send to lights."""
+        import arbiter
+        (arbiter.STATE_DIR / "saved_state.json").write_text("[]")
+
+        mock_fetch.return_value = {
+            "temperature_2m": 20.0,
+            "weather_code": 0,
+            "is_day": 1,
+        }
+        config = self._make_config()
+
+        weather_sync.run(config, once=True)
+
+        # Should NOT have called govee functions
+        mock_color.assert_not_called()
+        mock_brightness.assert_not_called()
+
+    @mock.patch("weather_sync.fetch_weather")
+    @mock.patch("govee.color")
+    @mock.patch("govee.brightness")
+    def test_no_priority_sends_color(self, mock_brightness, mock_color, mock_fetch):
+        """When neither signal nor game is active, weather sync sends color."""
+        mock_fetch.return_value = {
+            "temperature_2m": 20.0,
+            "weather_code": 0,
+            "is_day": 1,
+        }
+        config = self._make_config()
+
+        weather_sync.run(config, once=True)
+
+        # Should have called govee functions
+        self.assertEqual(mock_color.call_count, 1)
+        mock_color.assert_called_with("192.168.1.50", 255, 210, 127)
+
+
 if __name__ == "__main__":
     unittest.main()

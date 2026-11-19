@@ -34,6 +34,7 @@ import urllib.parse
 import urllib.request
 from pathlib import Path
 
+import arbiter
 import govee
 
 logger = logging.getLogger(__name__)
@@ -141,8 +142,22 @@ def run(config, once=False, interval=900, dry_run=False):
         sys.exit(1)
 
     last_color = None
+    priority_was_active = False
 
     while True:
+        # Check signal/game priority
+        if arbiter.signal_active() or arbiter.game_active():
+            if not priority_was_active:
+                logger.info("skipped: signal/game active")
+            priority_was_active = True
+            if once:
+                break
+            time.sleep(interval)
+            continue
+
+        priority_just_cleared = priority_was_active
+        priority_was_active = False
+
         try:
             weather = fetch_weather(lat, lon)
         except (OSError, ValueError, KeyError) as e:
@@ -167,7 +182,7 @@ def run(config, once=False, interval=900, dry_run=False):
         logger.info("Weather: code=%d temp=%.1f°C day=%d -> color=%s",
                     code, temp, is_day, color_hex)
 
-        if color_hex != last_color or dry_run:
+        if color_hex != last_color or dry_run or priority_just_cleared:
             r, g, b = govee.parse_color(color_hex)
             try:
                 for dev in devices:

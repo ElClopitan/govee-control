@@ -315,5 +315,155 @@ class TestRunningProcessesEncoding(unittest.TestCase):
         self.assertIn("spielä.exe", processes)
 
 
+class TestSignalPriority(unittest.TestCase):
+    """Test that game sync respects agent signal priority."""
+
+    def setUp(self):
+        import tempfile
+        from pathlib import Path
+        self.tmpdir = tempfile.mkdtemp()
+        self.state_dir = Path(self.tmpdir)
+        import arbiter
+        arbiter.STATE_DIR = self.state_dir
+
+    def tearDown(self):
+        import shutil
+        shutil.rmtree(self.tmpdir)
+
+    def _make_config(self):
+        return {
+            "devices": [{"name": "left", "ip": "192.168.1.50"}],
+            "games": [
+                {"name": "Test Game", "exe": "testgame.exe", "color": "red", "brightness": 80},
+            ],
+            "default": {"color": "white", "brightness": 40},
+        }
+
+    @mock.patch("game_sync.running_processes")
+    @mock.patch("govee.color")
+    @mock.patch("govee.brightness")
+    def test_signal_active_skips_send(self, mock_brightness, mock_color, mock_processes):
+        """When signal is active, game sync does not send to lights."""
+        import arbiter
+        # Create signal file
+        (arbiter.STATE_DIR / "saved_state.json").write_text("[]")
+
+        mock_processes.return_value = {"testgame.exe"}
+        config = self._make_config()
+
+        game_sync.run(config, once=True)
+
+        # Should NOT have called govee functions
+        mock_color.assert_not_called()
+        mock_brightness.assert_not_called()
+
+    @mock.patch("game_sync.running_processes")
+    @mock.patch("govee.color")
+    @mock.patch("govee.brightness")
+    @mock.patch("time.sleep")
+    def test_signal_cleared_reapplies_profile(self, mock_sleep, mock_brightness, mock_color, mock_processes):
+        """After signal clears, game sync re-applies profile even if unchanged."""
+        import arbiter
+
+        # Start with signal active
+        (arbiter.STATE_DIR / "saved_state.json").write_text("[]")
+
+        mock_processes.return_value = {"testgame.exe"}
+        config = self._make_config()
+
+        # First iteration: signal active, skip
+        # Second iteration: signal cleared, re-apply
+        call_count = [0]
+        def sleep_side_effect(seconds):
+            call_count[0] += 1
+            if call_count[0] == 1:
+                # Remove signal file between iterations
+                (arbiter.STATE_DIR / "saved_state.json").unlink()
+            if call_count[0] >= 2:
+                raise KeyboardInterrupt()
+        mock_sleep.side_effect = sleep_side_effect
+
+        try:
+            game_sync.run(config, interval=1)
+        except KeyboardInterrupt:
+            pass
+
+        # Should have sent color once (after signal cleared)
+        self.assertEqual(mock_color.call_count, 1)
+        mock_color.assert_called_with("192.168.1.50", 255, 0, 0)
+
+
+class TestGameActiveState(unittest.TestCase):
+    """Test that game sync manages game_active.json state."""
+
+    def setUp(self):
+        import tempfile
+        from pathlib import Path
+        self.tmpdir = tempfile.mkdtemp()
+        self.state_dir = Path(self.tmpdir)
+        import arbiter
+        arbiter.STATE_DIR = self.state_dir
+
+    def tearDown(self):
+        import shutil
+        shutil.rmtree(self.tmpdir)
+
+    def _make_config(self):
+        return {
+            "devices": [{"name": "left", "ip": "192.168.1.50"}],
+            "games": [
+                {"name": "Test Game", "exe": "testgame.exe", "color": "red", "brightness": 80},
+            ],
+            "default": {"color": "white", "brightness": 40},
+        }
+
+    @mock.patch("game_sync.running_processes")
+    @mock.patch("govee.color")
+    @mock.patch("govee.brightness")
+    def test_game_profile_writes_game_active(self, mock_brightness, mock_color, mock_processes):
+        """When a game profile is active, game_active.json is written."""
+        import arbiter
+        mock_processes.return_value = {"testgame.exe"}
+        config = self._make_config()
+
+        game_sync.run(config, once=True)
+
+        self.assertTrue(arbiter.game_active())
+        with open(arbiter.STATE_DIR / "game_active.json") as f:
+            data = json.load(f)
+        self.assertEqual(data["profile"], "Test Game")
+
+    @mock.patch("game_sync.running_processes")
+    @mock.patch("govee.color")
+    @mock.patch("govee.brightness")
+    @mock.patch("time.sleep")
+    def test_default_clears_game_active(self, mock_sleep, mock_brightness, mock_color, mock_processes):
+        """When going back to default, game_active.json is removed."""
+        import arbiter
+
+        # First iteration: game running
+        # Second iteration: no game (default)
+        mock_processes.side_effect = [
+            {"testgame.exe"},
+            {"chrome.exe"},
+        ]
+        config = self._make_config()
+
+        call_count = [0]
+        def sleep_side_effect(seconds):
+            call_count[0] += 1
+            if call_count[0] >= 2:
+                raise KeyboardInterrupt()
+        mock_sleep.side_effect = sleep_side_effect
+
+        try:
+            game_sync.run(config, interval=1)
+        except KeyboardInterrupt:
+            pass
+
+        # After going to default, game_active should be cleared
+        self.assertFalse(arbiter.game_active())
+
+
 if __name__ == "__main__":
     unittest.main()

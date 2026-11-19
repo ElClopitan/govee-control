@@ -181,3 +181,17 @@ Weather conditions are mapped to colours using WMO weather codes:
 | 85-86 | Snow showers | Pale blue `#e3f2fd` | Pale blue `#e3f2fd` |
 | 95-99 | Thunderstorm | Purple `#7b1fa2` | Purple `#7b1fa2` |
 | Other | Unknown | White `#ffffff` | White `#ffffff` |
+
+## Priority
+
+When multiple light sources are active, they follow this priority order:
+
+1. **Agent signal** (highest) — `agent_signal.py needs-input` sets the lights to the signal colour. While active, game sync and weather sync do not send any commands.
+2. **Game sync** — When a game is running, `game_sync.py` sets the lights to the game's colour. Weather sync does not send commands while a game is active.
+3. **Weather sync** (lowest) — `weather_sync.py` sets the lights based on current weather conditions.
+
+The priority system uses file-based state in the `state/` directory:
+- `state/saved_state.json` — exists when an agent signal is active
+- `state/game_active.json` — exists when game sync is active (contains the profile name)
+
+When a higher-priority source becomes inactive, the next source in the priority chain re-applies its colour on the next sync cycle.
