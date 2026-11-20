@@ -88,8 +88,9 @@ class TestSwitchMusic(StateDirMixin, unittest.TestCase):
         """switch("music") sends nothing to devices."""
         config = {"devices": [{"ip": "192.168.1.1"}]}
         with mock.patch("govee.turn") as mock_turn:
-            import mode
-            mode.switch("music", config)
+            with mock.patch("music_sync.cmd_start"):
+                import mode
+                mode.switch("music", config)
         mock_turn.assert_not_called()
         self.assertEqual(arbiter.get_mode(), "music")
 
@@ -226,6 +227,17 @@ class TestSetModePermissionError(StateDirMixin, unittest.TestCase):
 
         # Mode should still be "weather"
         self.assertEqual(arbiter.get_mode(), "weather")
+
+
+class TestNoRealPopen(unittest.TestCase):
+    """Test that the Popen guard in tests/__init__.py works."""
+
+    def test_popen_guard_raises(self):
+        """Calling subprocess.Popen without a mock raises AssertionError."""
+        import subprocess
+        with self.assertRaises(AssertionError) as cm:
+            subprocess.Popen(["python", "--version"])
+        self.assertIn("real subprocess.Popen", str(cm.exception))
 
 
 if __name__ == "__main__":

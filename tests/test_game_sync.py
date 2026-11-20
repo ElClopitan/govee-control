@@ -936,11 +936,9 @@ class TestModeControl(StateDirMixin, unittest.TestCase):
 
     @mock.patch("agent_signal.sweep_and_restore")
     @mock.patch("game_sync.running_processes")
-    @mock.patch("govee.turn")
-    @mock.patch("govee.color")
     @mock.patch("govee.brightness")
     @mock.patch("time.sleep")
-    def test_mode_game_game_appears_turns_on(self, mock_sleep, mock_brightness, mock_color, mock_turn, mock_processes, mock_sweep):
+    def test_mode_game_game_appears_turns_on(self, mock_sleep, mock_brightness, mock_processes, mock_sweep):
         """Mode=game + game appears -> on + profile."""
         import arbiter
         arbiter.set_mode("game")
@@ -959,6 +957,13 @@ class TestModeControl(StateDirMixin, unittest.TestCase):
             "default": None,
         }
 
+        # Create manager first so it captures all calls in order
+        manager = mock.Mock()
+        mock_turn = mock.Mock()
+        mock_color = mock.Mock()
+        manager.attach_mock(mock_turn, "turn")
+        manager.attach_mock(mock_color, "color")
+
         call_count = [0]
         def sleep_side_effect(seconds):
             call_count[0] += 1
@@ -966,10 +971,12 @@ class TestModeControl(StateDirMixin, unittest.TestCase):
                 raise KeyboardInterrupt()
         mock_sleep.side_effect = sleep_side_effect
 
-        try:
-            game_sync.run(config, interval=1)
-        except KeyboardInterrupt:
-            pass
+        with mock.patch("govee.turn", mock_turn):
+            with mock.patch("govee.color", mock_color):
+                try:
+                    game_sync.run(config, interval=1)
+                except KeyboardInterrupt:
+                    pass
 
         # Should have sent off first, then on, then the game profile
         self.assertEqual(mock_turn.call_count, 2)
@@ -980,6 +987,14 @@ class TestModeControl(StateDirMixin, unittest.TestCase):
         # Then the game profile (red)
         self.assertEqual(mock_color.call_count, 1)
         mock_color.assert_called_with("192.168.1.50", 255, 0, 0)
+
+        # Verify order: turn on must come before color
+        turn_on_call = mock.call.turn("192.168.1.50", True)
+        color_call = mock.call.color("192.168.1.50", 255, 0, 0)
+        turn_on_idx = manager.mock_calls.index(turn_on_call)
+        color_idx = manager.mock_calls.index(color_call)
+        self.assertLess(turn_on_idx, color_idx,
+                       "govee.turn(ip, True) must come before govee.color(...)")
 
     @mock.patch("agent_signal.sweep_and_restore")
     @mock.patch("game_sync.running_processes")
