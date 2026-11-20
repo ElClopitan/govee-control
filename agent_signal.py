@@ -26,7 +26,7 @@ LOCK_FILE = STATE_DIR / "agent_signal.lock"
 LOCK_TIMEOUT = 10.0
 LOCK_STALE = 30.0
 STATUS_TIMEOUT = 1.0
-SAVE_STATE_BUDGET = 5.0
+SAVE_STATE_BUDGET = 4.0  # lock is held for save_state + set_signal_color; with blink on for 2 strips set_signal_color takes ~4 s, so total must stay under LOCK_TIMEOUT with margin
 LOG_MAX_BYTES = 200 * 1024  # 200 KB
 LOG_MAX_LINES = 100
 

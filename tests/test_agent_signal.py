@@ -785,6 +785,66 @@ class TestLocking(StateDirMixin, unittest.TestCase):
     @mock.patch("agent_signal.govee.turn")
     @mock.patch("agent_signal.govee.brightness")
     @mock.patch("agent_signal.govee.color")
+    def test_needs_input_lock_hold_with_blink_under_timeout(
+        self, mock_color, mock_brightness, mock_turn, mock_status
+    ):
+        """With blink on, the lock is held for save_state + set_signal_color.
+        Total must stay under LOCK_TIMEOUT with margin."""
+        # Fake clock
+        clock = [0.0]
+
+        def fake_time():
+            return clock[0]
+
+        def fake_sleep(seconds):
+            clock[0] += seconds
+
+        def fake_status(ip, timeout=2):
+            clock[0] += timeout
+            return None
+
+        # Record lock acquire/release times
+        lock_times = {"acquired": None, "released": None}
+
+        def fake_acquire_lock(dry_run=False):
+            lock_times["acquired"] = clock[0]
+            return True
+
+        def fake_release_lock(dry_run=False):
+            lock_times["released"] = clock[0]
+
+        with mock.patch("agent_signal.time.time", fake_time):
+            with mock.patch("agent_signal.time.sleep", fake_sleep):
+                with mock.patch("agent_signal.acquire_lock", fake_acquire_lock):
+                    with mock.patch("agent_signal.release_lock", fake_release_lock):
+                        mock_status.side_effect = fake_status
+
+                        # Config with blink on
+                        self.config["signal"] = {
+                            "color": "#ff6a00",
+                            "brightness": 80,
+                            "blink": True,
+                        }
+                        self.config_path.write_text(json.dumps(self.config))
+
+                        args = mock.Mock()
+                        args.command = "needs-input"
+                        args.config = str(self.config_path)
+                        args.dry_run = False
+
+                        agent_signal.cmd_needs_input(args)
+
+        hold_time = lock_times["released"] - lock_times["acquired"]
+        self.assertLessEqual(
+            hold_time,
+            agent_signal.LOCK_TIMEOUT - 1.5,
+            f"lock held {hold_time}s, exceeding LOCK_TIMEOUT - 1.5 = {agent_signal.LOCK_TIMEOUT - 1.5}s"
+        )
+
+    @mock.patch("agent_signal.govee.status")
+    @mock.patch("agent_signal.govee.turn")
+    @mock.patch("agent_signal.govee.brightness")
+    @mock.patch("agent_signal.govee.color")
     def test_status_retry_on_oserror(
         self, mock_color, mock_brightness, mock_turn, mock_status
     ):
