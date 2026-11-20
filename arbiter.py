@@ -19,6 +19,7 @@ State files:
 
 import json
 import os
+import threading
 import time
 from pathlib import Path
 
@@ -207,21 +208,32 @@ def get_mode():
     Returns the mode string ("off", "weather", "game", or "music").
     Missing file, unreadable file, bad JSON, wrong shape, or unknown mode
     all return "off". Never raises.
+
+    On Windows, if a reader opens mode.json while set_mode() is doing
+    os.replace(), it gets PermissionError. Retry up to 5 times with a
+    short sleep between tries before giving up.
     """
     path = mode_file()
     if not path.exists():
         return "off"
-    try:
-        with open(path, "r") as f:
-            data = json.load(f)
-    except (ValueError, OSError):
-        return "off"
-    if not isinstance(data, dict):
-        return "off"
-    mode = data.get("mode")
-    if mode not in MODES:
-        return "off"
-    return mode
+    for attempt in range(5):
+        try:
+            with open(path, "r", encoding="utf-8-sig") as f:
+                data = json.load(f)
+        except PermissionError:
+            if attempt < 4:
+                time.sleep(0.01)
+                continue
+            return "off"
+        except (ValueError, OSError):
+            return "off"
+        if not isinstance(data, dict):
+            return "off"
+        mode = data.get("mode")
+        if mode not in MODES:
+            return "off"
+        return mode
+    return "off"
 
 
 def set_mode(mode):
@@ -238,23 +250,29 @@ def set_mode(mode):
         raise ValueError(f"mode must be one of {MODES}, got {mode!r}")
     STATE_DIR.mkdir(parents=True, exist_ok=True)
     target = mode_file()
-    tmp = target.with_name(f"mode.json.tmp.{os.getpid()}")
-    with open(tmp, "w") as f:
-        json.dump({"mode": mode}, f)
-        f.flush()
-        os.fsync(f.fileno())
-    # Atomic replace; retry on Windows PermissionError (reader has file open)
-    for attempt in range(3):
-        try:
-            os.replace(tmp, target)
-            return
-        except PermissionError:
-            if attempt < 2:
-                time.sleep(0.01)
-            else:
-                # All retries failed; clean up and re-raise
-                tmp.unlink(missing_ok=True)
-                raise
+    # Thread-unique temp name so concurrent set_mode calls don't collide
+    tmp = target.with_name(f"mode.json.tmp.{os.getpid()}.{threading.get_ident()}")
+    try:
+        with open(tmp, "w") as f:
+            json.dump({"mode": mode}, f)
+            f.flush()
+            os.fsync(f.fileno())
+        # Atomic replace; retry on Windows PermissionError (reader has file open)
+        for attempt in range(3):
+            try:
+                os.replace(tmp, target)
+                return
+            except PermissionError:
+                if attempt < 2:
+                    time.sleep(0.01)
+                else:
+                    # All retries failed; clean up and re-raise
+                    tmp.unlink(missing_ok=True)
+                    raise
+    except BaseException:
+        # Clean up temp file on any failure (disk full, fsync error, etc.)
+        tmp.unlink(missing_ok=True)
+        raise
 
 
 def weather_blocked():

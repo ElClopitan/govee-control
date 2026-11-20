@@ -312,6 +312,64 @@ class TestSetMode(StateDirMixin, unittest.TestCase):
         tmp_files = list(self.state_dir.glob("mode.json.tmp.*"))
         self.assertEqual(len(tmp_files), 0)
 
+    def test_json_dump_failure_cleans_up_temp(self):
+        """set_mode cleans up temp file when json.dump fails."""
+        with mock.patch.object(arbiter.json, "dump", side_effect=OSError("disk full")):
+            with self.assertRaises(OSError):
+                arbiter.set_mode("game")
+        tmp_files = list(self.state_dir.glob("mode.json.tmp.*"))
+        self.assertEqual(len(tmp_files), 0)
+
+    def test_os_replace_failure_cleans_up_temp(self):
+        """set_mode cleans up temp file when os.replace fails."""
+        with mock.patch.object(arbiter.os, "replace", side_effect=FileNotFoundError()):
+            with self.assertRaises(FileNotFoundError):
+                arbiter.set_mode("game")
+        tmp_files = list(self.state_dir.glob("mode.json.tmp.*"))
+        self.assertEqual(len(tmp_files), 0)
+
+
+class TestGetModeRetry(StateDirMixin, unittest.TestCase):
+    """Test get_mode() retry logic for PermissionError."""
+
+    def test_permission_error_then_success(self):
+        """get_mode retries on PermissionError and succeeds."""
+        (arbiter.STATE_DIR / "mode.json").write_text('{"mode": "game"}')
+        open_calls = [0]
+        real_open = open
+
+        def flaky_open(path, *args, **kwargs):
+            open_calls[0] += 1
+            if open_calls[0] <= 2:
+                raise PermissionError()
+            return real_open(path, *args, **kwargs)
+
+        with mock.patch("builtins.open", side_effect=flaky_open):
+            with mock.patch.object(arbiter.time, "sleep") as mock_sleep:
+                result = arbiter.get_mode()
+        self.assertEqual(result, "game")
+        self.assertEqual(mock_sleep.call_count, 2)
+
+    def test_permission_error_all_tries(self):
+        """get_mode returns 'off' after 5 PermissionError tries."""
+        (arbiter.STATE_DIR / "mode.json").write_text('{"mode": "game"}')
+
+        def always_perm_error(path, *args, **kwargs):
+            raise PermissionError()
+
+        with mock.patch("builtins.open", side_effect=always_perm_error):
+            with mock.patch.object(arbiter.time, "sleep") as mock_sleep:
+                result = arbiter.get_mode()
+        self.assertEqual(result, "off")
+        self.assertEqual(mock_sleep.call_count, 4)
+
+    def test_utf8_bom(self):
+        """get_mode reads mode.json with UTF-8 BOM."""
+        bom = b"\xef\xbb\xbf"
+        content = bom + b'{"mode": "music"}'
+        (arbiter.STATE_DIR / "mode.json").write_bytes(content)
+        self.assertEqual(arbiter.get_mode(), "music")
+
 
 class TestCapBrightness(unittest.TestCase):
     """Test cap_brightness() function."""
