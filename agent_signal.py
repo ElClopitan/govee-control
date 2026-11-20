@@ -448,15 +448,12 @@ def cmd_needs_input(args):
 
     # Always acquire lock before saving state (race condition fix)
     if not acquire_lock(dry_run=args.dry_run):
-        # Lock timed out, still set the signal colour
-        try:
-            set_signal_color(devices, signal_cfg, cfg, dry_run=args.dry_run)
-        except OSError as e:
-            print(f"warning: could not set signal colour: {e}", file=sys.stderr)
-            log_signal_event("needs-input", "lock-timeout-oserror", hook_input)
-            return
-        log_signal_event("needs-input", "lock-timeout-applied", hook_input)
-        print("signal set")
+        # Lock timed out: don't set the signal colour. Without the lock we
+        # can't save state, so a later clear would take its fast path
+        # ("no active signal") and never restore the strips. A missed
+        # signal is better than orange strips that nothing clears.
+        print("warning: lock busy; not setting the signal colour", file=sys.stderr)
+        log_signal_event("needs-input", "lock-timeout-skipped", hook_input)
         return
 
     try:
