@@ -189,6 +189,7 @@ class TestMusicSignalPriority(StateDirMixin, unittest.TestCase):
     def test_music_skips_frames_when_signal_active(self):
         """music_sync.run() should not send frames when signal is active,
         but should send after signal clears. Tests the re-check before sending."""
+        self.set_mode("music")
         # Signal becomes active on the second call (the re-check before sending)
         signal_active_count = [0]
 
@@ -282,6 +283,7 @@ class TestMusicRestoreSkippedDuringSignal(StateDirMixin, unittest.TestCase):
 
     def test_no_restore_when_signal_active(self):
         """When run() exits while signal is active, don't restore initial state."""
+        self.set_mode("music")
         # Signal is active throughout
         def fake_signal_active():
             return True
@@ -362,6 +364,7 @@ class TestMusicHeartbeatClearOnException(StateDirMixin, unittest.TestCase):
 
     def test_heartbeat_cleared_on_exception(self):
         """When run() exits via exception, music_active.json should be removed."""
+        self.set_mode("music")
         # Create a fake recorder that raises KeyboardInterrupt on first frame
         # (RuntimeError is now caught and recovered from, so use KeyboardInterrupt
         # to force exit)
@@ -414,6 +417,7 @@ class TestMusicActiveBeforeInitialState(StateDirMixin, unittest.TestCase):
 
     def test_set_music_active_before_status(self):
         """set_music_active should be called before the first govee.status call."""
+        self.set_mode("music")
         call_order = []
 
         def fake_set_music_active():
@@ -486,6 +490,7 @@ class TestMusicHeartbeatRefresh(StateDirMixin, unittest.TestCase):
 
     def test_heartbeat_refreshed_during_run(self):
         """set_music_active should be called multiple times during a long run."""
+        self.set_mode("music")
         heartbeat_calls = []
 
         def fake_set_music_active():
@@ -589,6 +594,7 @@ class TestLeftoverStopFlag(StateDirMixin, unittest.TestCase):
 
     def test_run_clears_leftover_stop_flag(self):
         """run() should remove a leftover stop flag and not exit on it."""
+        self.set_mode("music")
         # Create a leftover stop flag
         stop_flag = self.state_dir / "music_stop"
         stop_flag.write_text("leftover")
@@ -868,6 +874,7 @@ class TestToggleCommands(StateDirMixin, unittest.TestCase):
 
     def test_run_cleans_own_pid_file_on_exception(self):
         """run() should remove its own PID file when exiting via exception."""
+        self.set_mode("music")
         import os
         my_pid = os.getpid()
         music_sync.PID_FILE.write_text(str(my_pid))
@@ -916,6 +923,7 @@ class TestToggleCommands(StateDirMixin, unittest.TestCase):
 
     def test_run_leaves_other_pid_file(self):
         """run() should not remove a PID file that doesn't match its own PID."""
+        self.set_mode("music")
         music_sync.PID_FILE.write_text("99999")
 
         fake_rec = mock.Mock()
@@ -1241,7 +1249,8 @@ class TestToggleCommands(StateDirMixin, unittest.TestCase):
                         "run() should have removed its own PID file on missing soundcard")
 
     def test_run_cleans_pid_on_no_loopback(self):
-        """run() should remove its own PID file when no loopback device found."""
+        """run() should keep running when no loopback device found (no sys.exit)."""
+        self.set_mode("music")
         my_pid = os.getpid()
         music_sync.PID_FILE.write_text(str(my_pid))
 
@@ -1253,13 +1262,37 @@ class TestToggleCommands(StateDirMixin, unittest.TestCase):
         fake_sc.get_microphone = mock.Mock(side_effect=Exception("not found"))
         fake_sc.all_microphones = mock.Mock(return_value=[])
 
+        # Track govee calls - should turn off once
+        govee_calls = []
+        def fake_turn(ip, on):
+            govee_calls.append(("turn", ip, on))
+
+        fake_time_fn = bounded_clock()
+
         with mock.patch.dict(sys.modules, {"soundcard": fake_sc, "numpy": mock.Mock()}):
             with mock.patch.object(music_sync, "govee") as mock_govee:
-                with self.assertRaises(SystemExit) as ctx:
-                    music_sync.run({"devices": [{"ip": "1.2.3.4"}]}, fps=10)
-        self.assertEqual(ctx.exception.code, 1)
+                mock_govee.turn = fake_turn
+                mock_govee.status = mock.Mock(return_value={"msg": {"data": {"brightness": 50}}})
+                mock_govee.brightness = mock.Mock()
+                with mock.patch("time.sleep"):
+                    with mock.patch.object(music_sync, "STOP_FLAG_FILE", self.state_dir / "music_stop"):
+                        with mock.patch.object(music_sync, "PID_FILE", self.state_dir / "music_sync.pid"):
+                            # Run for a few iterations, then stop via flag
+                            stop_after = [0]
+                            def fake_stop_flag_exists():
+                                stop_after[0] += 1
+                                return stop_after[0] > 3
+                            with mock.patch.object(music_sync, "STOP_FLAG_FILE") as mock_stop_flag:
+                                mock_stop_flag.exists = fake_stop_flag_exists
+                                music_sync.run({"devices": [{"ip": "1.2.3.4"}]}, fps=10, time_fn=fake_time_fn)
+
+        # Should have turned off once due to no device
+        turn_off_calls = [c for c in govee_calls if c[0] == "turn" and not c[2]]
+        self.assertEqual(len(turn_off_calls), 1,
+                        "Expected exactly one turn-off call due to no device")
+        # PID file should be removed
         self.assertFalse(music_sync.PID_FILE.exists(),
-                        "run() should have removed its own PID file on no loopback")
+                        "run() should have removed its own PID file")
 
     def test_run_leaves_other_pid_on_no_devices(self):
         """run() should not remove a PID file that doesn't match its own PID."""
@@ -1276,6 +1309,7 @@ class TestToggleCommands(StateDirMixin, unittest.TestCase):
     def test_run_clear_music_active_error_does_not_skip_cleanup(self):
         """When clear_music_active raises PermissionError, PID cleanup and restore
         should still run."""
+        self.set_mode("music")
         my_pid = os.getpid()
         music_sync.PID_FILE.write_text(str(my_pid))
 
@@ -1498,6 +1532,7 @@ class TestRecorderOpenedOnce(StateDirMixin, unittest.TestCase):
 
     def test_recorder_opened_once_for_multiple_frames(self):
         """mic.recorder should be called exactly once for 5 frames."""
+        self.set_mode("music")
         recorder_call_count = [0]
 
         def fake_recorder(samplerate, channels):
@@ -1558,6 +1593,7 @@ class TestRuntimeErrorRecovery(StateDirMixin, unittest.TestCase):
 
     def test_runtime_error_reopens_recorder(self):
         """RuntimeError on frame 2 should not exit; recorder reopened; colours sent after."""
+        self.set_mode("music")
         recorder_call_count = [0]
         colors_sent = []
         total_record_calls = [0]
@@ -1661,6 +1697,7 @@ class TestRecorderReopenWithStrictFake(StateDirMixin, unittest.TestCase):
     def test_reopen_after_runtime_error(self):
         """RuntimeError on frame 2: run() keeps going, first recorder exited,
         second recorder entered, colours sent after error."""
+        self.set_mode("music")
         recorders_created = []
         record_call_count = [0]
 
@@ -1729,6 +1766,7 @@ class TestRecorderReopenWithStrictFake(StateDirMixin, unittest.TestCase):
 
     def test_stop_flag_after_reopen(self):
         """Stop flag after a reopen: the second recorder's __exit__ is called exactly once."""
+        self.set_mode("music")
         recorders_created = []
         record_call_count = [0]
         stop_after_reopen = [False]
@@ -1791,6 +1829,7 @@ class TestRecorderReopenWithStrictFake(StateDirMixin, unittest.TestCase):
     def test_pick_loopback_none_then_recovers(self):
         """pick_loopback returns None after the error for 2 frames, then a mic:
         run() does not exit and recovers."""
+        self.set_mode("music")
         recorders_created = []
         record_call_count = [0]
         pick_call_count = [0]
@@ -1871,6 +1910,7 @@ class TestRecorderReopenWithStrictFake(StateDirMixin, unittest.TestCase):
         then works: run() recovers, colours are sent afterwards, every
         recorder's __exit__ count is <= 1, and the one in use at the end
         has count exactly 1."""
+        self.set_mode("music")
         recorders_created = []
         record_call_count = [0]
         enter_call_count = [0]
@@ -1953,6 +1993,7 @@ class TestRecorderReopenWithStrictFake(StateDirMixin, unittest.TestCase):
     def test_stop_flag_while_rec_is_none(self):
         """Stop flag while rec is None (pick_loopback returns None):
         run() exits cleanly, no recorder exited twice."""
+        self.set_mode("music")
         recorders_created = []
         pick_call_count = [0]
         record_call_count = [0]
@@ -2021,12 +2062,14 @@ class TestRecorderReopenWithStrictFake(StateDirMixin, unittest.TestCase):
         # The recorder that opened should have been exited exactly once
         self.assertEqual(fake_rec.exit_count, 1,
                         "Recorder should have been exited exactly once")
-        # pick_loopback should have been called at least twice
-        self.assertGreaterEqual(pick_call_count[0], 2,
-                               "pick_loopback should have been called at least twice")
+        # pick_loopback should have been called once (at startup)
+        # The stop flag is checked before pick_loopback on subsequent iterations
+        self.assertEqual(pick_call_count[0], 1,
+                       "pick_loopback should have been called once at startup")
 
     def test_default_speaker_change_reopens(self):
         """When the default speaker changes, the recorder should be reopened."""
+        self.set_mode("music")
         recorders_created = []
         calls_per_recorder = []
         current_speaker_id = ["A"]
@@ -2141,6 +2184,7 @@ class TestRecorderReopenWithStrictFake(StateDirMixin, unittest.TestCase):
 
     def test_same_speaker_no_reopen(self):
         """When the default speaker doesn't change, the recorder should not be reopened."""
+        self.set_mode("music")
         recorders_created = []
         record_call_count = [0]
 
@@ -2193,6 +2237,425 @@ class TestRecorderReopenWithStrictFake(StateDirMixin, unittest.TestCase):
         # It should have been exited exactly once (by finally)
         self.assertEqual(recorders_created[0].exit_count, 1,
                         "Recorder should have been exited exactly once")
+
+
+class TestModeSwitchStep3(StateDirMixin, unittest.TestCase):
+    """Tests for mode switch step 3: music_sync runs only in music mode."""
+
+    def setUp(self):
+        super().setUp()
+        self.original_state_dir = music_sync.STATE_DIR
+        self.original_pid_file = music_sync.PID_FILE
+        self.original_stop_flag = music_sync.STOP_FLAG_FILE
+        self.original_log_file = music_sync.LOG_FILE
+
+        music_sync.STATE_DIR = self.state_dir
+        music_sync.PID_FILE = self.state_dir / "music_sync.pid"
+        music_sync.STOP_FLAG_FILE = self.state_dir / "music_stop"
+        music_sync.LOG_FILE = self.state_dir / "music_sync.log"
+
+    def tearDown(self):
+        music_sync.STATE_DIR = self.original_state_dir
+        music_sync.PID_FILE = self.original_pid_file
+        music_sync.STOP_FLAG_FILE = self.original_stop_flag
+        music_sync.LOG_FILE = self.original_log_file
+        super().tearDown()
+
+    def test_mode_change_exits_loop(self):
+        """run(): mode changes to "weather" mid-run -> loop ends, PID file gone,
+        music_active cleared, no restore sent."""
+        self.set_mode("music")
+
+        # Track govee calls
+        govee_calls = []
+        def fake_color(ip, r, g, b):
+            govee_calls.append(("color", ip, r, g, b))
+        def fake_brightness(ip, b):
+            govee_calls.append(("brightness", ip, b))
+        def fake_turn(ip, on):
+            govee_calls.append(("turn", ip, on))
+
+        # Change mode to "weather" after first frame
+        mode_changed = [False]
+        def fake_get_mode():
+            if mode_changed[0]:
+                return "weather"
+            return "music"
+
+        fake_time_fn = bounded_clock()
+
+        # Create a fake recorder
+        fake_rec = mock.Mock()
+        fake_rec.__enter__ = mock.Mock(return_value=fake_rec)
+        fake_rec.__exit__ = mock.Mock(return_value=False)
+
+        frame_count = [0]
+        def fake_record(numframes):
+            frame_count[0] += 1
+            if frame_count[0] >= 2:
+                # Change mode after first frame
+                mode_changed[0] = True
+            return mock.Mock(ndim=1, shape=(1024,), dtype="float64")
+
+        fake_rec.record = mock.Mock(side_effect=fake_record)
+
+        fake_mic = mock.Mock()
+        fake_mic.name = "Stereo Mix (loopback)"
+        fake_mic.isloopback = True
+        fake_mic.recorder = mock.Mock(return_value=fake_rec)
+
+        fake_speaker = mock.Mock()
+        fake_speaker.name = "Stereo Mix (loopback)"
+
+        fake_sc = mock.Mock()
+        fake_sc.default_speaker = mock.Mock(return_value=fake_speaker)
+        fake_sc.get_microphone = mock.Mock(return_value=fake_mic)
+        fake_sc.all_microphones = mock.Mock(return_value=[fake_mic])
+
+        with mock.patch.dict(sys.modules, {
+            "soundcard": fake_sc,
+            "numpy": mock.Mock(),
+        }):
+            with mock.patch.object(arbiter, "get_mode", side_effect=fake_get_mode):
+                with mock.patch.object(music_sync, "govee") as mock_govee:
+                    mock_govee.color = fake_color
+                    mock_govee.brightness = fake_brightness
+                    mock_govee.turn = fake_turn
+                    mock_govee.status = mock.Mock(return_value={"msg": {"data": {"brightness": 50}}})
+                    with mock.patch("time.sleep"):
+                        with mock.patch.object(music_sync, "STOP_FLAG_FILE", self.state_dir / "music_stop"):
+                            with mock.patch.object(music_sync, "PID_FILE", self.state_dir / "music_sync.pid"):
+                                with mock.patch.object(music_sync, "analyze", return_value={"level": 0.5, "bass": 0.5, "mid": 0.5, "treble": 0.5}):
+                                    music_sync.run(
+                                        {"devices": [{"ip": "1.2.3.4"}]},
+                                        fps=10,
+                                        time_fn=fake_time_fn,
+                                    )
+
+        # PID file should be gone
+        self.assertFalse(music_sync.PID_FILE.exists(),
+                        "PID file should be removed after mode change exit")
+        # music_active should be cleared
+        self.assertFalse(arbiter.music_active(),
+                        "music_active should be cleared after mode change exit")
+        # No restore calls (no turn off, no brightness/color restore)
+        # Only the initial brightness set should have happened
+        brightness_calls = [c for c in govee_calls if c[0] == "brightness"]
+        self.assertEqual(len(brightness_calls), 1,
+                        f"Expected 1 brightness call (initial only), got {len(brightness_calls)}")
+
+    def test_silence_turns_off_lights(self):
+        """run(): silent frames for > silence_seconds -> exactly one off;
+        then loud frames -> on + colour."""
+        self.set_mode("music")
+
+        # Track govee calls
+        govee_calls = []
+        def fake_color(ip, r, g, b):
+            govee_calls.append(("color", ip, r, g, b))
+        def fake_turn(ip, on):
+            govee_calls.append(("turn", ip, on))
+
+        fake_time_fn = bounded_clock(step=0.1)
+
+        # Create a fake recorder
+        fake_rec = mock.Mock()
+        fake_rec.__enter__ = mock.Mock(return_value=fake_rec)
+        fake_rec.__exit__ = mock.Mock(return_value=False)
+
+        frame_count = [0]
+        def fake_record(numframes):
+            frame_count[0] += 1
+            if frame_count[0] >= 30:  # 3 seconds of silence, then loud
+                raise KeyboardInterrupt()
+            return mock.Mock(ndim=1, shape=(1024,), dtype="float64")
+
+        fake_rec.record = mock.Mock(side_effect=fake_record)
+
+        fake_mic = mock.Mock()
+        fake_mic.name = "Stereo Mix (loopback)"
+        fake_mic.isloopback = True
+        fake_mic.recorder = mock.Mock(return_value=fake_rec)
+
+        fake_speaker = mock.Mock()
+        fake_speaker.name = "Stereo Mix (loopback)"
+
+        fake_sc = mock.Mock()
+        fake_sc.default_speaker = mock.Mock(return_value=fake_speaker)
+        fake_sc.get_microphone = mock.Mock(return_value=fake_mic)
+        fake_sc.all_microphones = mock.Mock(return_value=[fake_mic])
+
+        # Silent for first 25 frames, then loud
+        def fake_analyze(samples, rate):
+            if frame_count[0] <= 25:
+                return {"level": 0.01, "bass": 0.0, "mid": 0.0, "treble": 0.0}
+            else:
+                return {"level": 0.5, "bass": 0.5, "mid": 0.5, "treble": 0.5}
+
+        with mock.patch.dict(sys.modules, {
+            "soundcard": fake_sc,
+            "numpy": mock.Mock(),
+        }):
+            with mock.patch.object(music_sync, "govee") as mock_govee:
+                mock_govee.color = fake_color
+                mock_govee.turn = fake_turn
+                mock_govee.status = mock.Mock(return_value={"msg": {"data": {"brightness": 50}}})
+                mock_govee.brightness = mock.Mock()
+                with mock.patch("time.sleep"):
+                    with mock.patch.object(music_sync, "STOP_FLAG_FILE", self.state_dir / "music_stop"):
+                        with mock.patch.object(music_sync, "PID_FILE", self.state_dir / "music_sync.pid"):
+                            with mock.patch.object(music_sync, "analyze", side_effect=fake_analyze):
+                                try:
+                                    music_sync.run(
+                                        {"devices": [{"ip": "1.2.3.4"}], "music": {"silence_seconds": 2.0}},
+                                        fps=10,
+                                        time_fn=fake_time_fn,
+                                    )
+                                except KeyboardInterrupt:
+                                    pass
+
+        # Should have turned off once due to silence
+        turn_off_calls = [c for c in govee_calls if c[0] == "turn" and not c[2]]
+        self.assertEqual(len(turn_off_calls), 1,
+                        f"Expected exactly one turn-off call, got {len(turn_off_calls)}")
+        # Should have turned back on when sound returned
+        turn_on_calls = [c for c in govee_calls if c[0] == "turn" and c[2]]
+        self.assertEqual(len(turn_on_calls), 1,
+                        f"Expected exactly one turn-on call, got {len(turn_on_calls)}")
+        # Should have sent colours after sound returned
+        color_calls = [c for c in govee_calls if c[0] == "color"]
+        self.assertGreater(len(color_calls), 0,
+                          "Expected colour calls after sound returned")
+
+    def test_short_gap_no_off(self):
+        """run(): a gap shorter than silence_seconds -> no off."""
+        self.set_mode("music")
+
+        # Track govee calls
+        govee_calls = []
+        def fake_color(ip, r, g, b):
+            govee_calls.append(("color", ip, r, g, b))
+        def fake_turn(ip, on):
+            govee_calls.append(("turn", ip, on))
+
+        fake_time_fn = bounded_clock(step=0.1)
+
+        # Create a fake recorder
+        fake_rec = mock.Mock()
+        fake_rec.__enter__ = mock.Mock(return_value=fake_rec)
+        fake_rec.__exit__ = mock.Mock(return_value=False)
+
+        frame_count = [0]
+        def fake_record(numframes):
+            frame_count[0] += 1
+            if frame_count[0] >= 15:  # 1.5 seconds, less than 2s silence threshold
+                raise KeyboardInterrupt()
+            return mock.Mock(ndim=1, shape=(1024,), dtype="float64")
+
+        fake_rec.record = mock.Mock(side_effect=fake_record)
+
+        fake_mic = mock.Mock()
+        fake_mic.name = "Stereo Mix (loopback)"
+        fake_mic.isloopback = True
+        fake_mic.recorder = mock.Mock(return_value=fake_rec)
+
+        fake_speaker = mock.Mock()
+        fake_speaker.name = "Stereo Mix (loopback)"
+
+        fake_sc = mock.Mock()
+        fake_sc.default_speaker = mock.Mock(return_value=fake_speaker)
+        fake_sc.get_microphone = mock.Mock(return_value=fake_mic)
+        fake_sc.all_microphones = mock.Mock(return_value=[fake_mic])
+
+        # Silent for 10 frames (1 second), then loud
+        def fake_analyze(samples, rate):
+            if frame_count[0] <= 10:
+                return {"level": 0.01, "bass": 0.0, "mid": 0.0, "treble": 0.0}
+            else:
+                return {"level": 0.5, "bass": 0.5, "mid": 0.5, "treble": 0.5}
+
+        with mock.patch.dict(sys.modules, {
+            "soundcard": fake_sc,
+            "numpy": mock.Mock(),
+        }):
+            with mock.patch.object(music_sync, "govee") as mock_govee:
+                mock_govee.color = fake_color
+                mock_govee.turn = fake_turn
+                mock_govee.status = mock.Mock(return_value={"msg": {"data": {"brightness": 50}}})
+                mock_govee.brightness = mock.Mock()
+                with mock.patch("time.sleep"):
+                    with mock.patch.object(music_sync, "STOP_FLAG_FILE", self.state_dir / "music_stop"):
+                        with mock.patch.object(music_sync, "PID_FILE", self.state_dir / "music_sync.pid"):
+                            with mock.patch.object(music_sync, "analyze", side_effect=fake_analyze):
+                                try:
+                                    music_sync.run(
+                                        {"devices": [{"ip": "1.2.3.4"}], "music": {"silence_seconds": 2.0}},
+                                        fps=10,
+                                        time_fn=fake_time_fn,
+                                    )
+                                except KeyboardInterrupt:
+                                    pass
+
+        # Should NOT have turned off (gap was too short)
+        turn_off_calls = [c for c in govee_calls if c[0] == "turn" and not c[2]]
+        self.assertEqual(len(turn_off_calls), 0,
+                        f"Expected no turn-off calls, got {len(turn_off_calls)}")
+
+    def test_no_device_turns_off_once(self):
+        """run(): no device -> off sent once, loop keeps running for N iterations,
+        mode.json still "music"."""
+        self.set_mode("music")
+
+        # Track govee calls
+        govee_calls = []
+        def fake_turn(ip, on):
+            govee_calls.append(("turn", ip, on))
+
+        fake_time_fn = bounded_clock(step=0.1)
+
+        fake_speaker = mock.Mock()
+        fake_speaker.name = "Speakers X"
+
+        fake_sc = mock.Mock()
+        fake_sc.default_speaker = mock.Mock(return_value=fake_speaker)
+        fake_sc.get_microphone = mock.Mock(side_effect=Exception("not found"))
+        fake_sc.all_microphones = mock.Mock(return_value=[])
+
+        with mock.patch.dict(sys.modules, {"soundcard": fake_sc, "numpy": mock.Mock()}):
+            with mock.patch.object(music_sync, "govee") as mock_govee:
+                mock_govee.turn = fake_turn
+                mock_govee.status = mock.Mock(return_value={"msg": {"data": {"brightness": 50}}})
+                mock_govee.brightness = mock.Mock()
+                with mock.patch("time.sleep"):
+                    with mock.patch.object(music_sync, "STOP_FLAG_FILE", self.state_dir / "music_stop"):
+                        with mock.patch.object(music_sync, "PID_FILE", self.state_dir / "music_sync.pid"):
+                            # Run for a few iterations, then stop via flag
+                            stop_after = [0]
+                            def fake_stop_flag_exists():
+                                stop_after[0] += 1
+                                return stop_after[0] > 5
+                            with mock.patch.object(music_sync, "STOP_FLAG_FILE") as mock_stop_flag:
+                                mock_stop_flag.exists = fake_stop_flag_exists
+                                music_sync.run({"devices": [{"ip": "1.2.3.4"}]}, fps=10, time_fn=fake_time_fn)
+
+        # Should have turned off once due to no device
+        turn_off_calls = [c for c in govee_calls if c[0] == "turn" and not c[2]]
+        self.assertEqual(len(turn_off_calls), 1,
+                        f"Expected exactly one turn-off call, got {len(turn_off_calls)}")
+        # Mode should still be "music"
+        self.assertEqual(arbiter.get_mode(), "music",
+                        "Mode should still be 'music' after no-device exit")
+
+    def test_signal_clears_during_silence_sends_off(self):
+        """run(): signal active -> nothing sent; signal clears during silence -> off (not a colour)."""
+        self.set_mode("music")
+
+        # Track govee calls
+        govee_calls = []
+        def fake_color(ip, r, g, b):
+            govee_calls.append(("color", ip, r, g, b))
+        def fake_turn(ip, on):
+            govee_calls.append(("turn", ip, on))
+
+        fake_time_fn = bounded_clock(step=0.1)
+
+        # Signal is active for first 5 frames, then clears
+        signal_active_count = [0]
+        def fake_signal_active():
+            signal_active_count[0] += 1
+            return signal_active_count[0] <= 10  # Active for first ~5 frames (2 calls per frame)
+
+        # Create a fake recorder
+        fake_rec = mock.Mock()
+        fake_rec.__enter__ = mock.Mock(return_value=fake_rec)
+        fake_rec.__exit__ = mock.Mock(return_value=False)
+
+        frame_count = [0]
+        def fake_record(numframes):
+            frame_count[0] += 1
+            if frame_count[0] >= 30:  # Run long enough for silence timeout
+                raise KeyboardInterrupt()
+            return mock.Mock(ndim=1, shape=(1024,), dtype="float64")
+
+        fake_rec.record = mock.Mock(side_effect=fake_record)
+
+        fake_mic = mock.Mock()
+        fake_mic.name = "Stereo Mix (loopback)"
+        fake_mic.isloopback = True
+        fake_mic.recorder = mock.Mock(return_value=fake_rec)
+
+        fake_speaker = mock.Mock()
+        fake_speaker.name = "Stereo Mix (loopback)"
+
+        fake_sc = mock.Mock()
+        fake_sc.default_speaker = mock.Mock(return_value=fake_speaker)
+        fake_sc.get_microphone = mock.Mock(return_value=fake_mic)
+        fake_sc.all_microphones = mock.Mock(return_value=[fake_mic])
+
+        # Silent throughout
+        def fake_analyze(samples, rate):
+            return {"level": 0.01, "bass": 0.0, "mid": 0.0, "treble": 0.0}
+
+        with mock.patch.dict(sys.modules, {
+            "soundcard": fake_sc,
+            "numpy": mock.Mock(),
+        }):
+            with mock.patch.object(arbiter, "signal_active", side_effect=fake_signal_active):
+                with mock.patch.object(music_sync, "govee") as mock_govee:
+                    mock_govee.color = fake_color
+                    mock_govee.turn = fake_turn
+                    mock_govee.status = mock.Mock(return_value={"msg": {"data": {"brightness": 50}}})
+                    mock_govee.brightness = mock.Mock()
+                    with mock.patch("time.sleep"):
+                        with mock.patch.object(music_sync, "STOP_FLAG_FILE", self.state_dir / "music_stop"):
+                            with mock.patch.object(music_sync, "PID_FILE", self.state_dir / "music_sync.pid"):
+                                with mock.patch.object(music_sync, "analyze", side_effect=fake_analyze):
+                                    try:
+                                        music_sync.run(
+                                            {"devices": [{"ip": "1.2.3.4"}], "music": {"silence_seconds": 2.0}},
+                                            fps=10,
+                                            time_fn=fake_time_fn,
+                                        )
+                                    except KeyboardInterrupt:
+                                        pass
+
+        # No colours should have been sent (signal was active, then silence)
+        color_calls = [c for c in govee_calls if c[0] == "color"]
+        self.assertEqual(len(color_calls), 0,
+                        f"Expected no colour calls, got {len(color_calls)}")
+        # Should have turned off due to silence after signal cleared
+        turn_off_calls = [c for c in govee_calls if c[0] == "turn" and not c[2]]
+        self.assertEqual(len(turn_off_calls), 1,
+                        f"Expected exactly one turn-off call, got {len(turn_off_calls)}")
+
+
+class TestModeSwitchMusic(StateDirMixin, unittest.TestCase):
+    """Test that switch("music") calls cmd_start."""
+
+    def test_switch_music_calls_cmd_start(self):
+        """switch("music") calls music_sync.cmd_start()."""
+        config = {"devices": [{"ip": "192.168.1.1"}]}
+        with mock.patch("music_sync.cmd_start") as mock_start:
+            import mode
+            mode.switch("music", config)
+        mock_start.assert_called_once()
+        self.assertEqual(arbiter.get_mode(), "music")
+
+    def test_cmd_stop_sets_mode_off(self):
+        """music_sync.cmd_stop() sets mode to "off"."""
+        # Set mode to music first
+        arbiter.set_mode("music")
+
+        # Create a fake running process
+        music_sync.PID_FILE.write_text("12345")
+
+        with mock.patch.object(music_sync, "_is_process_alive", return_value=False):
+            with mock.patch.object(arbiter, "music_active", return_value=True):
+                with mock.patch("builtins.print"):
+                    music_sync.cmd_stop()
+
+        self.assertEqual(arbiter.get_mode(), "off",
+                        "cmd_stop should set mode to 'off'")
 
 
 if __name__ == "__main__":

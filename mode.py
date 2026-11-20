@@ -20,6 +20,7 @@ sys.path.insert(0, str(Path(__file__).parent))
 
 import arbiter
 import govee
+import music_sync
 
 
 def load_config(path):
@@ -46,6 +47,11 @@ def switch(mode, config, dry_run=False):
         return
 
     arbiter.set_mode(mode)
+
+    # When switching to music mode, start the music sync background process
+    if mode == "music":
+        music_sync.cmd_start()
+        return
 
     # Only when mode is "off" and no signal is active, turn devices off.
     # For other modes, send nothing — the mode's own script will light the strips.

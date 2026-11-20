@@ -87,13 +87,15 @@ Add to `config.json`:
 {
   "music": {
     "fps": 10,
-    "smoothing": 0.5
+    "smoothing": 0.5,
+    "silence_seconds": 2.0
   }
 }
 ```
 
 - `fps`: frames per second (default 10, clamped to 2-20)
 - `smoothing`: EMA factor (0-1, higher = less smoothing, default 0.5)
+- `silence_seconds`: seconds of silence before turning lights off (default 2.0)
 
 ## State restoration
 
@@ -107,12 +109,26 @@ Music mode is one of the selectable modes. The owner picks ONE mode by hand;
 only that mode may drive the strips. The agent signal (orange) stays above
 everything.
 
-When music mode is selected (`python mode.py set music`), music_sync drives the
-strips. When another mode is selected, music_sync stops sending frames.
+When music mode is selected (`python mode.py set music`), music_sync starts
+automatically and drives the strips. When another mode is selected, music_sync
+exits cleanly (the new mode's script lights the strips).
+
+### Silence and no audio device
+
+- **Silence**: When audio level drops below the silence threshold for more than
+  `silence_seconds` (default 2.0s), the strips turn off. When sound returns,
+  the strips turn back on and resume colour changes. Short gaps between songs
+  (less than `silence_seconds`) don't trigger the off state.
+- **No audio device**: If no loopback audio device is found or the recorder
+  cannot open, the strips turn off once and music_sync keeps running, retrying
+  quietly. The mode stays "music" — it doesn't switch to another mode or exit.
+
+### Agent signal
 
 When an agent signal becomes active (e.g., `needs-input`), music_sync pauses
-sending frames and lets the signal colour show. When the signal clears, music
-sync resumes on the next frame.
+sending frames and lets the signal colour show. When the signal clears:
+- If audio is playing, music sync resumes colour changes on the next frame.
+- If audio is silent, music sync sends off (not a colour).
 
 Music sync writes a heartbeat file (`state/music_active.json`) at least every
 5 seconds. If music_sync crashes or exits without clearing the file, it becomes
