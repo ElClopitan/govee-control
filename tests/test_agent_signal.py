@@ -27,6 +27,7 @@ class TestSignalNeedsInput(StateDirMixin, unittest.TestCase):
     def setUp(self):
         """Create a temp config and state directory for each test."""
         super().setUp()
+        arbiter.set_mode("weather")
         self.config_path = self.state_dir / "config.json"
         self.config = {
             "devices": [
@@ -214,6 +215,189 @@ class TestSignalNeedsInput(StateDirMixin, unittest.TestCase):
 
         # Signal colour should still be set
         self.assertEqual(mock_color.call_count, 2)
+
+
+@mock.patch("agent_signal.time.sleep")
+class TestNeedsInputOffMode(StateDirMixin, unittest.TestCase):
+    """Test that needs-input is skipped when mode is 'off'."""
+
+    def setUp(self):
+        super().setUp()
+        self.config_path = self.state_dir / "config.json"
+        self.config = {
+            "devices": [
+                {"name": "left", "ip": "192.168.1.50"},
+                {"name": "right", "ip": "192.168.1.51"},
+            ],
+            "signal": {
+                "color": "#ff6a00",
+                "brightness": 100,
+                "blink": False,
+            },
+        }
+        self.config_path.write_text(json.dumps(self.config))
+
+    @mock.patch("agent_signal.govee.status")
+    @mock.patch("agent_signal.govee.turn")
+    @mock.patch("agent_signal.govee.brightness")
+    @mock.patch("agent_signal.govee.color")
+    def test_off_mode_skips(
+        self, mock_color, mock_brightness, mock_turn, mock_status, mock_sleep
+    ):
+        """Mode 'off' skips the signal entirely."""
+        arbiter.set_mode("off")
+
+        args = mock.Mock()
+        args.command = "needs-input"
+        args.config = str(self.config_path)
+        args.dry_run = False
+        args.force = False
+
+        # Ensure attended session so the unattended check doesn't skip first
+        with mock.patch.dict(os.environ, {"CLAUDE_CODE_SESSION_ATTENDED": "1"}):
+            agent_signal.cmd_needs_input(args)
+
+        # No govee calls
+        mock_color.assert_not_called()
+        mock_brightness.assert_not_called()
+        mock_turn.assert_not_called()
+        mock_status.assert_not_called()
+
+        # No saved state file
+        self.assertFalse(arbiter.signal_file().exists())
+
+        # No session marker
+        marker_dir = self.state_dir / "signal_sessions"
+        if marker_dir.exists():
+            self.assertEqual(len(list(marker_dir.iterdir())), 0)
+
+        # Log should contain skipped-off
+        log_path = agent_signal.signal_log_path()
+        self.assertTrue(log_path.exists())
+        log_content = log_path.read_text()
+        self.assertIn("needs-input skipped-off", log_content)
+
+    @mock.patch("agent_signal.govee.status")
+    @mock.patch("agent_signal.govee.turn")
+    @mock.patch("agent_signal.govee.brightness")
+    @mock.patch("agent_signal.govee.color")
+    def test_off_mode_skips_with_force(
+        self, mock_color, mock_brightness, mock_turn, mock_status, mock_sleep
+    ):
+        """Mode 'off' skips even with --force."""
+        arbiter.set_mode("off")
+
+        args = mock.Mock()
+        args.command = "needs-input"
+        args.config = str(self.config_path)
+        args.dry_run = False
+        args.force = True
+
+        # Ensure attended session so the unattended check doesn't skip first
+        with mock.patch.dict(os.environ, {"CLAUDE_CODE_SESSION_ATTENDED": "1"}):
+            agent_signal.cmd_needs_input(args)
+
+        # No govee calls
+        mock_color.assert_not_called()
+        mock_brightness.assert_not_called()
+        mock_turn.assert_not_called()
+        mock_status.assert_not_called()
+
+        # No saved state file
+        self.assertFalse(arbiter.signal_file().exists())
+
+        # Log should contain skipped-off
+        log_path = agent_signal.signal_log_path()
+        self.assertTrue(log_path.exists())
+        log_content = log_path.read_text()
+        self.assertIn("needs-input skipped-off", log_content)
+
+    @mock.patch("agent_signal.govee.status")
+    @mock.patch("agent_signal.govee.turn")
+    @mock.patch("agent_signal.govee.brightness")
+    @mock.patch("agent_signal.govee.color")
+    def test_mode_turns_off_before_lock(
+        self, mock_color, mock_brightness, mock_turn, mock_status, mock_sleep
+    ):
+        """Mode turns off between first check and lock acquisition."""
+        # First check returns "weather", second (under lock) returns "off"
+        with mock.patch("arbiter.get_mode", side_effect=["weather", "off"]):
+            args = mock.Mock()
+            args.command = "needs-input"
+            args.config = str(self.config_path)
+            args.dry_run = False
+            args.force = False
+
+            # Ensure attended session so the unattended check doesn't skip first
+            with mock.patch.dict(os.environ, {"CLAUDE_CODE_SESSION_ATTENDED": "1"}):
+                agent_signal.cmd_needs_input(args)
+
+        # No govee calls
+        mock_color.assert_not_called()
+        mock_brightness.assert_not_called()
+        mock_turn.assert_not_called()
+        mock_status.assert_not_called()
+
+        # No saved state file
+        self.assertFalse(arbiter.signal_file().exists())
+
+        # Lock should have been released (no exception)
+        # If the lock were still held, the test would hang or fail
+
+    @mock.patch("agent_signal.govee.status")
+    @mock.patch("agent_signal.govee.turn")
+    @mock.patch("agent_signal.govee.brightness")
+    @mock.patch("agent_signal.govee.color")
+    def test_weather_mode_applies(
+        self, mock_color, mock_brightness, mock_turn, mock_status, mock_sleep
+    ):
+        """Mode 'weather' applies the signal normally."""
+        arbiter.set_mode("weather")
+
+        mock_status.side_effect = [
+            {"msg": {"data": {"on": True, "brightness": 50, "color": {"r": 255, "g": 255, "b": 255}}}},
+            {"msg": {"data": {"on": True, "brightness": 60, "color": {"r": 0, "g": 0, "b": 255}}}},
+        ]
+
+        args = mock.Mock()
+        args.command = "needs-input"
+        args.config = str(self.config_path)
+        args.dry_run = False
+        args.force = False
+
+        # Ensure attended session so the unattended check doesn't skip first
+        with mock.patch.dict(os.environ, {"CLAUDE_CODE_SESSION_ATTENDED": "1"}):
+            agent_signal.cmd_needs_input(args)
+
+        # Signal colour should be set
+        self.assertEqual(mock_color.call_count, 2)
+
+        # Saved state file should exist
+        self.assertTrue(arbiter.signal_file().exists())
+
+    @mock.patch("agent_signal.govee.turn")
+    @mock.patch("agent_signal.govee.brightness")
+    @mock.patch("agent_signal.govee.color")
+    def test_clear_no_saved_state_does_not_read_mode(
+        self, mock_color, mock_brightness, mock_turn, mock_sleep
+    ):
+        """cmd_clear with no saved state does not read the mode."""
+        with mock.patch("arbiter.get_mode") as mock_get_mode:
+            args = mock.Mock()
+            args.command = "clear"
+            args.config = str(self.config_path)
+            args.dry_run = False
+            args.stale = False
+
+            agent_signal.cmd_clear(args)
+
+        # No govee calls
+        mock_color.assert_not_called()
+        mock_brightness.assert_not_called()
+        mock_turn.assert_not_called()
+
+        # get_mode should not have been called
+        mock_get_mode.assert_not_called()
 
 
 @mock.patch("agent_signal.time.sleep")
@@ -499,6 +683,7 @@ class TestOSErrorHandling(StateDirMixin, unittest.TestCase):
 
     def setUp(self):
         super().setUp()
+        arbiter.set_mode("weather")
         self.config_path = self.state_dir / "config.json"
         self.config = {
             "devices": [
@@ -608,6 +793,7 @@ class TestSignalDryRun(StateDirMixin, unittest.TestCase):
     def setUp(self):
         """Create a temp config for each test."""
         super().setUp()
+        arbiter.set_mode("weather")
         self.config_path = self.state_dir / "config.json"
         self.config = {
             "devices": [{"name": "left", "ip": "192.168.1.50"}],
@@ -671,6 +857,7 @@ class TestLocking(StateDirMixin, unittest.TestCase):
     def setUp(self):
         """Create a temp config and state directory for each test."""
         super().setUp()
+        arbiter.set_mode("weather")
         self.config_path = self.state_dir / "config.json"
         self.config = {
             "devices": [
@@ -937,6 +1124,7 @@ class TestSignalArbiterIntegration(StateDirMixin, unittest.TestCase):
 
     def setUp(self):
         super().setUp()
+        arbiter.set_mode("weather")
         self.config_path = self.state_dir / "config.json"
         self.config = {
             "devices": [{"name": "left", "ip": "192.168.1.50"}],
@@ -1006,6 +1194,7 @@ class TestSaveStateTimeout(StateDirMixin, unittest.TestCase):
 
     def setUp(self):
         super().setUp()
+        arbiter.set_mode("weather")
         self.config_path = self.state_dir / "config.json"
         self.config = {
             "devices": [
@@ -1176,6 +1365,7 @@ class TestSignalStateFiltering(StateDirMixin, unittest.TestCase):
 
     def setUp(self):
         super().setUp()
+        arbiter.set_mode("weather")
         self.config_path = self.state_dir / "config.json"
         self.config = {
             "devices": [
@@ -1328,6 +1518,7 @@ class TestClearWithNullDefault(StateDirMixin, unittest.TestCase):
 
     def setUp(self):
         super().setUp()
+        arbiter.set_mode("weather")
         self.config_path = self.state_dir / "config.json"
         self.config = {
             "devices": [
@@ -1420,6 +1611,7 @@ class TestNeedsInputUnattended(StateDirMixin, unittest.TestCase):
 
     def setUp(self):
         super().setUp()
+        arbiter.set_mode("weather")
         self.config_path = self.state_dir / "config.json"
         self.config = {
             "devices": [
@@ -1550,6 +1742,7 @@ class TestSignalLogging(StateDirMixin, unittest.TestCase):
 
     def setUp(self):
         super().setUp()
+        arbiter.set_mode("weather")
         self.config_path = self.state_dir / "config.json"
         self.config = {
             "devices": [
@@ -1757,6 +1950,7 @@ class TestBrightnessCap(StateDirMixin, unittest.TestCase):
 
     def setUp(self):
         super().setUp()
+        arbiter.set_mode("weather")
         self.config_path = self.state_dir / "config.json"
         self.config = {
             "devices": [
@@ -1803,6 +1997,7 @@ class TestPerSessionMarkers(StateDirMixin, unittest.TestCase):
 
     def setUp(self):
         super().setUp()
+        arbiter.set_mode("weather")
         self.config_path = self.state_dir / "config.json"
         self.config = {
             "devices": [
@@ -2550,6 +2745,7 @@ class TestIgnoreMessagePatterns(StateDirMixin, unittest.TestCase):
 
     def setUp(self):
         super().setUp()
+        arbiter.set_mode("weather")
         self.config_path = self.state_dir / "config.json"
         self.config = {
             "devices": [
@@ -2766,6 +2962,7 @@ class TestStaleMarkers(StateDirMixin, unittest.TestCase):
     def setUp(self):
         """Create a temp config and state directory for each test."""
         super().setUp()
+        arbiter.set_mode("weather")
         self.config_path = self.state_dir / "config.json"
         self.config = {
             "devices": [

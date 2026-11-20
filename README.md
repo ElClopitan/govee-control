@@ -369,6 +369,14 @@ Modes:
 If `state/mode.json` is missing, unreadable, or contains an unknown mode, the
 current mode is treated as `off`.
 
+### Off mode suppresses the signal
+
+When the mode is `off`, the agent signal is suppressed: `needs-input` hooks
+return immediately without turning the strips orange. This means the lights
+stay dark when the owner has explicitly switched them off. The signal works
+normally in `weather`, `game`, and `music` modes. The `--force` flag does not
+bypass this.
+
 ### Per-session signal markers
 
 When multiple Claude sessions are running, each session that raises the signal

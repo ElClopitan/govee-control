@@ -883,6 +883,11 @@ def cmd_needs_input(args):
             log_signal_event("needs-input", "skipped-unattended", hook_input)
             return
 
+    # Check if mode is "off" — off means dark, including the signal
+    if arbiter.get_mode() == "off":
+        log_signal_event("needs-input", "skipped-off", hook_input)
+        return
+
     devices = cfg.get("devices", [])
     if not devices:
         print("no devices in config", file=sys.stderr)
@@ -901,6 +906,11 @@ def cmd_needs_input(args):
         return
 
     try:
+        # Re-check mode under the lock (race condition fix)
+        if arbiter.get_mode() == "off":
+            log_signal_event("needs-input", "skipped-off", hook_input)
+            return
+
         # Re-check under the lock (race condition fix)
         if not signal_path.exists() or args.dry_run:
             save_state(devices, signal_cfg, dry_run=args.dry_run)

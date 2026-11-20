@@ -77,6 +77,14 @@ the session that raised it (or `clear --all`) can.
 
 To manually reset the lights at any time, run `python agent_signal.py clear --all`.
 
+## Off Mode Suppresses the Signal
+
+When the mode is `off` (set via `python mode.py set off`), the agent signal is
+suppressed: `needs-input` hooks return immediately without turning the strips
+orange. This means the lights stay dark when the owner has explicitly switched
+them off. The signal works normally in `weather`, `game`, and `music` modes.
+The `--force` flag does not bypass this.
+
 ## Stale Markers
 
 Each session marker records the PID of the Claude Code process that created it.
