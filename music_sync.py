@@ -241,7 +241,11 @@ def _ensure_state_dir():
 
 
 def _is_process_alive(pid):
-    """Check if a process with the given PID is alive (Windows)."""
+    """Check if a process with the given PID is alive (Windows).
+
+    Also verifies the image name is python.exe or pythonw.exe to avoid
+    matching a stale PID that Windows has reused for another program.
+    """
     try:
         CREATE_NO_WINDOW = 0x08000000
         result = subprocess.run(
@@ -261,7 +265,12 @@ def _is_process_alive(pid):
                 try:
                     pid_col = int(parts[1].strip().strip('"'))
                     if pid_col == pid:
-                        return True
+                        # Verify image name is a Python executable
+                        image = parts[0].strip().strip('"').lower()
+                        if image in ("python.exe", "pythonw.exe"):
+                            return True
+                        # PID reused by another program -> treat as dead
+                        return False
                 except ValueError:
                     continue
         return False
