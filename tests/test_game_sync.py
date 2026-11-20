@@ -661,10 +661,11 @@ class TestGameActiveState(StateDirMixin, unittest.TestCase):
 
     @mock.patch("agent_signal.sweep_and_restore")
     @mock.patch("game_sync.running_processes")
+    @mock.patch("govee.turn")
     @mock.patch("govee.color")
     @mock.patch("govee.brightness")
     @mock.patch("time.sleep")
-    def test_default_clears_game_active(self, mock_sleep, mock_brightness, mock_color, mock_processes, mock_sweep):
+    def test_default_clears_game_active(self, mock_sleep, mock_brightness, mock_color, mock_turn, mock_processes, mock_sweep):
         """When going back to default, game_active.json is removed."""
         import arbiter
         arbiter.set_mode("game")
@@ -691,6 +692,8 @@ class TestGameActiveState(StateDirMixin, unittest.TestCase):
 
         # After going to default, game_active should be cleared
         self.assertFalse(arbiter.game_active())
+        # turn_all should have been called to turn off the strips
+        mock_turn.assert_called_with("192.168.1.50", False)
 
     @mock.patch("agent_signal.sweep_and_restore")
     @mock.patch("game_sync.running_processes")

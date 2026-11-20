@@ -8,9 +8,14 @@ block and restores it afterwards.
 subprocess.run is allowed because it internally calls Popen; guarding Popen
 would break subprocess.run. The guard checks the call stack to distinguish
 direct Popen calls from Popen calls made by subprocess.run.
+
+Also installs a socket guard that raises AssertionError if any test tries to
+send to or connect to a non-loopback address. Tests that need real network
+should mock govee functions instead.
 """
 
 import inspect
+import socket
 import subprocess
 import sys
 import tempfile
@@ -46,6 +51,38 @@ class _GuardedPopen(_original_popen):
 
 if subprocess.Popen is not _GuardedPopen:
     subprocess.Popen = _GuardedPopen
+
+
+# Install socket guard (safe to import twice)
+_original_sendto = socket.socket.sendto
+_original_connect = socket.socket.connect
+
+
+def _is_loopback(host):
+    """Check if a host is a loopback address."""
+    return host in ("127.0.0.1", "::1", "localhost")
+
+
+def _guarded_sendto(self, data, addr):
+    """Guarded sendto that raises for non-loopback addresses."""
+    host = addr[0]
+    if not _is_loopback(host):
+        raise AssertionError("real network in a test: mock govee")
+    return _original_sendto(self, data, addr)
+
+
+def _guarded_connect(self, addr):
+    """Guarded connect that raises for non-loopback addresses."""
+    host = addr[0]
+    if not _is_loopback(host):
+        raise AssertionError("real network in a test: mock govee")
+    return _original_connect(self, addr)
+
+
+if socket.socket.sendto is not _guarded_sendto:
+    socket.socket.sendto = _guarded_sendto
+if socket.socket.connect is not _guarded_connect:
+    socket.socket.connect = _guarded_connect
 
 
 def bounded_clock(step=0.1, limit=1000.0):
