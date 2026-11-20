@@ -810,10 +810,13 @@ class TestToggleCommands(StateDirMixin, unittest.TestCase):
         music_sync.PID_FILE.write_text("33333")
         old_time = time.time() - 100
         os.utime(music_sync.PID_FILE, (old_time, old_time))
+        # Process created before PID file -> not reused, should be killed
+        fake_created = old_time - 1
         with mock.patch.object(music_sync, "_is_process_alive", return_value=True):
-            with mock.patch.object(arbiter, "music_active", return_value=False):
-                with mock.patch("subprocess.run") as mock_run:
-                    pid = music_sync._get_running_pid()
+            with mock.patch.object(music_sync, "_process_create_time", return_value=fake_created):
+                with mock.patch.object(arbiter, "music_active", return_value=False):
+                    with mock.patch("subprocess.run") as mock_run:
+                        pid = music_sync._get_running_pid()
         self.assertIsNone(pid)
         self.assertFalse(music_sync.PID_FILE.exists())
         # Verify taskkill was called with correct args
@@ -1137,6 +1140,102 @@ class TestToggleCommands(StateDirMixin, unittest.TestCase):
         self.assertEqual(result, 0)
         self.assertNotIn("no heartbeat", mock_print.call_args[0][0])
         self.assertIn("ON", mock_print.call_args[0][0])
+
+    def test_pid_reuse_detected_no_kill(self):
+        """PID reused by another process (created after PID file) -> no kill."""
+        music_sync.PID_FILE.write_text("4242")
+        old_time = time.time() - 100
+        os.utime(music_sync.PID_FILE, (old_time, old_time))
+        # Process created 1 hour after PID file -> reused
+        fake_created = old_time + 3600
+        with mock.patch.object(music_sync, "_is_process_alive", return_value=True):
+            with mock.patch.object(music_sync, "_process_create_time", return_value=fake_created):
+                with mock.patch.object(arbiter, "music_active", return_value=False):
+                    with mock.patch("subprocess.run") as mock_run:
+                        pid = music_sync._get_running_pid()
+        self.assertIsNone(pid)
+        self.assertFalse(music_sync.PID_FILE.exists())
+        # No taskkill should have been called
+        self.assertFalse(any(
+            "taskkill" in str(call) for call in mock_run.call_args_list
+        ))
+
+    def test_pid_not_reused_hung_process_killed(self):
+        """PID not reused (created before PID file) + hung -> taskkill called."""
+        music_sync.PID_FILE.write_text("33333")
+        old_time = time.time() - 100
+        os.utime(music_sync.PID_FILE, (old_time, old_time))
+        # Process created 1 second before PID file -> not reused
+        fake_created = old_time - 1
+        with mock.patch.object(music_sync, "_is_process_alive", return_value=True):
+            with mock.patch.object(music_sync, "_process_create_time", return_value=fake_created):
+                with mock.patch.object(arbiter, "music_active", return_value=False):
+                    with mock.patch("subprocess.run") as mock_run:
+                        pid = music_sync._get_running_pid()
+        self.assertIsNone(pid)
+        self.assertFalse(music_sync.PID_FILE.exists())
+        # taskkill should have been called
+        self.assertTrue(any(
+            "taskkill" in str(call) for call in mock_run.call_args_list
+        ))
+
+    def test_pid_reuse_unknown_create_time_no_kill(self):
+        """Cannot determine create time -> no kill, returns None."""
+        music_sync.PID_FILE.write_text("55555")
+        old_time = time.time() - 100
+        os.utime(music_sync.PID_FILE, (old_time, old_time))
+        with mock.patch.object(music_sync, "_is_process_alive", return_value=True):
+            with mock.patch.object(music_sync, "_process_create_time", return_value=None):
+                with mock.patch.object(arbiter, "music_active", return_value=False):
+                    with mock.patch("subprocess.run") as mock_run:
+                        pid = music_sync._get_running_pid()
+        self.assertIsNone(pid)
+        self.assertFalse(music_sync.PID_FILE.exists())
+        # No taskkill should have been called
+        self.assertFalse(any(
+            "taskkill" in str(call) for call in mock_run.call_args_list
+        ))
+
+    def test_toggle_with_pid_reuse_starts_new(self):
+        """cmd_toggle with PID reuse -> no kill, starts new process."""
+        music_sync.PID_FILE.write_text("4242")
+        old_time = time.time() - 100
+        os.utime(music_sync.PID_FILE, (old_time, old_time))
+        fake_created = old_time + 3600
+        with mock.patch.object(music_sync, "_is_process_alive", return_value=True):
+            with mock.patch.object(music_sync, "_process_create_time", return_value=fake_created):
+                with mock.patch.object(arbiter, "music_active", return_value=False):
+                    with mock.patch("subprocess.run") as mock_run:
+                        with mock.patch("subprocess.Popen") as mock_popen:
+                            mock_proc = mock.Mock()
+                            mock_proc.pid = 99999
+                            mock_popen.return_value = mock_proc
+                            with mock.patch("builtins.print"):
+                                result = music_sync.cmd_toggle()
+        self.assertEqual(result, 0)
+        # No taskkill should have been called
+        self.assertFalse(any(
+            "taskkill" in str(call) for call in mock_run.call_args_list
+        ))
+        # Popen should have been called once (to start new process)
+        mock_popen.assert_called_once()
+
+    @unittest.skipUnless(os.name == "nt", "Windows-only test")
+    def test_process_create_time_real(self):
+        """_process_create_time should return a valid timestamp for our own process."""
+        now = time.time()
+        created = music_sync._process_create_time(os.getpid())
+        self.assertIsNotNone(created)
+        self.assertIsInstance(created, float)
+        # Should be within the last 7 days and not in the future (plus 1s margin)
+        self.assertGreater(created, now - 7 * 86400)
+        self.assertLess(created, now + 1)
+
+    @unittest.skipUnless(os.name == "nt", "Windows-only test")
+    def test_process_create_time_nonexistent_pid(self):
+        """_process_create_time should return None for a nonexistent PID."""
+        created = music_sync._process_create_time(0x7FFFFFFC)
+        self.assertIsNone(created)
 
 
 class TestMusicActiveCorruptFile(StateDirMixin, unittest.TestCase):
