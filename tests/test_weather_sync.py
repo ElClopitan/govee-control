@@ -991,9 +991,17 @@ class TestGetPatternForCode(unittest.TestCase):
     def test_other_codes_get_no_pattern(self):
         """All other weather codes get no pattern (static)."""
         patterns_cfg = {}
-        for code in [0, 1, 45, 48, 71, 73, 75, 77, 85, 86, 95, 96, 99, 100]:
+        for code in [0, 1, 45, 48, 71, 73, 75, 77, 85, 86, 100]:
             pattern = weather_sync.get_pattern_for_code(code, patterns_cfg)
             self.assertIsNone(pattern)
+
+    def test_thunderstorm_codes_get_pattern(self):
+        """Weather codes 95-99 get thunderstorm pattern."""
+        patterns_cfg = {}
+        for code in [95, 96, 99]:
+            pattern = weather_sync.get_pattern_for_code(code, patterns_cfg)
+            self.assertIsNotNone(pattern)
+            self.assertEqual(pattern["type"], "thunderstorm")
 
     def test_custom_pattern_config(self):
         """Custom pattern config overrides defaults."""
@@ -1413,6 +1421,173 @@ class TestFrameErrorRateLimit(StateDirMixin, unittest.TestCase):
         frame_error_logs = [r for r in cm.records if "Failed to send to lights" in r.getMessage()]
         # Should be at most 1 (rate-limited to one per 60s)
         self.assertLessEqual(len(frame_error_logs), 1)
+
+
+class TestThunderstormPattern(StateDirMixin, unittest.TestCase):
+    """Test the thunderstorm pattern with lightning flashes."""
+
+    def _make_config(self, patterns_enabled=True, frame_interval=1.0):
+        return {
+            "devices": [
+                {"name": "left", "ip": "192.168.1.50"},
+                {"name": "right", "ip": "192.168.1.51"},
+            ],
+            "weather": {
+                "latitude": 51.5,
+                "longitude": -0.1,
+                "brightness": 80,
+                "patterns_enabled": patterns_enabled,
+                "frame_interval": frame_interval,
+            },
+        }
+
+    @mock.patch("weather_sync.fetch_weather")
+    @mock.patch("govee.color")
+    @mock.patch("govee.brightness")
+    @mock.patch("time.sleep")
+    def test_thunderstorm_pattern_selected(self, mock_sleep, mock_brightness, mock_color, mock_fetch):
+        """Thunderstorm weather code selects thunderstorm pattern."""
+        mock_fetch.return_value = {
+            "temperature_2m": 22.0,
+            "weather_code": 95,  # thunderstorm
+            "is_day": 1,
+        }
+        config = self._make_config(frame_interval=1.0)
+
+        # Exit after 2 sleep calls
+        sleep_count = [0]
+        def sleep_side_effect(seconds):
+            sleep_count[0] += 1
+            if sleep_count[0] >= 2:
+                raise KeyboardInterrupt()
+
+        mock_sleep.side_effect = sleep_side_effect
+
+        try:
+            weather_sync.run(config, once=False, interval=900)
+        except KeyboardInterrupt:
+            pass
+
+        # Should have sent frames
+        self.assertGreater(mock_color.call_count, 0)
+
+    @mock.patch("weather_sync.fetch_weather")
+    @mock.patch("govee.color")
+    @mock.patch("govee.brightness")
+    @mock.patch("time.sleep")
+    def test_flash_sends_100_then_returns_to_80(self, mock_sleep, mock_brightness, mock_color, mock_fetch):
+        """A flash sends brightness 100 then returns to <= 80."""
+        import random
+        mock_fetch.return_value = {
+            "temperature_2m": 22.0,
+            "weather_code": 95,
+            "is_day": 1,
+        }
+        config = self._make_config(frame_interval=1.0)
+
+        # Seed the RNG for deterministic behavior
+        rng = random.Random(42)
+
+        # Use a controllable time function
+        current_time = [1000.0]
+        def time_fn():
+            return current_time[0]
+
+        # Exit after flash (advance time to trigger flash)
+        sleep_count = [0]
+        def sleep_side_effect(seconds):
+            sleep_count[0] += 1
+            current_time[0] += seconds
+            # Advance time to trigger flash after a few frames
+            if sleep_count[0] >= 3:
+                current_time[0] = 1015.0  # Force flash time (well past 6s minimum)
+            if sleep_count[0] >= 15:
+                raise KeyboardInterrupt()
+
+        mock_sleep.side_effect = sleep_side_effect
+
+        try:
+            weather_sync.run(config, once=False, interval=900, rng=rng, time_fn=time_fn)
+        except KeyboardInterrupt:
+            pass
+
+        # Check that brightness 100 was sent (flash)
+        brightness_values = [call[0][1] for call in mock_brightness.call_args_list]
+        self.assertIn(100, brightness_values, "Flash should send brightness 100")
+
+        # Check that after the flash, brightness returns to <= 80
+        # Find the last flash brightness value and check the next one
+        last_flash_index = -1
+        for i, b in enumerate(brightness_values):
+            if b == 100:
+                last_flash_index = i
+        if last_flash_index + 1 < len(brightness_values):
+            self.assertLessEqual(brightness_values[last_flash_index + 1], 80,
+                                "After flash, brightness should return to <= 80")
+
+    @mock.patch("weather_sync.fetch_weather")
+    @mock.patch("govee.color")
+    @mock.patch("govee.brightness")
+    @mock.patch("time.sleep")
+    def test_no_flash_when_arbiter_blocks(self, mock_sleep, mock_brightness, mock_color, mock_fetch):
+        """No flash when signal/game has priority."""
+        import arbiter
+        import random
+        mock_fetch.return_value = {
+            "temperature_2m": 22.0,
+            "weather_code": 95,
+            "is_day": 1,
+        }
+        config = self._make_config(frame_interval=1.0)
+
+        # Activate signal to block flash
+        (arbiter.STATE_DIR / "saved_state.json").write_text("[]")
+
+        # Seed the RNG
+        rng = random.Random(42)
+
+        weather_sync.run(config, once=True, rng=rng)
+
+        # Should NOT have sent any frames (signal active)
+        mock_color.assert_not_called()
+        mock_brightness.assert_not_called()
+
+    @mock.patch("weather_sync.fetch_weather")
+    @mock.patch("govee.color")
+    @mock.patch("govee.brightness")
+    @mock.patch("time.sleep")
+    def test_non_flash_frames_never_exceed_80(self, mock_sleep, mock_brightness, mock_color, mock_fetch):
+        """Non-flash frames never exceed brightness 80."""
+        import random
+        mock_fetch.return_value = {
+            "temperature_2m": 22.0,
+            "weather_code": 95,
+            "is_day": 1,
+        }
+        config = self._make_config(frame_interval=1.0)
+        config["max_brightness"] = 80
+
+        # Seed the RNG
+        rng = random.Random(42)
+
+        # Exit after a few frames
+        sleep_count = [0]
+        def sleep_side_effect(seconds):
+            sleep_count[0] += 1
+            if sleep_count[0] >= 5:
+                raise KeyboardInterrupt()
+
+        mock_sleep.side_effect = sleep_side_effect
+
+        try:
+            weather_sync.run(config, once=False, interval=900, rng=rng)
+        except KeyboardInterrupt:
+            pass
+
+        # All brightness values should be <= 80 (no flash triggered in this test)
+        brightness_values = [call[0][1] for call in mock_brightness.call_args_list]
+        for b in brightness_values:
+            self.assertLessEqual(b, 80, f"Non-flash brightness {b} exceeds 80")
 
 
 if __name__ == "__main__":

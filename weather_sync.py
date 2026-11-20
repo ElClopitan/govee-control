@@ -28,6 +28,7 @@ import argparse
 import json
 import logging
 import math
+import random
 import sys
 import time
 import urllib.error
@@ -130,6 +131,91 @@ def pattern_frame(pattern, t, strip_index):
     return (r, g, b, brightness)
 
 
+def schedule_next_flash(rng, flash_every, now):
+    """Schedule the next flash time.
+
+    Args:
+        rng: random.Random instance
+        flash_every: [min, max] seconds between flashes
+        now: current time
+
+    Returns:
+        Next flash time (float)
+    """
+    min_interval, max_interval = flash_every
+    interval = rng.uniform(min_interval, max_interval)
+    return now + interval
+
+
+def should_flash(now, next_flash_time):
+    """Check if it's time to flash."""
+    return next_flash_time is not None and now >= next_flash_time
+
+
+def thunderstorm_flash_frame(pattern, strip_index, devices, rng, flash_both_prob):
+    """Determine which strips to flash and return flash frame data.
+
+    Args:
+        pattern: Thunderstorm pattern definition
+        strip_index: Current strip index being processed
+        devices: List of device dicts
+        rng: random.Random instance
+        flash_both_prob: Probability of flashing both strips
+
+    Returns:
+        (should_flash_this_strip, r, g, b, brightness) tuple
+    """
+    # Decide once per flash event which strips to flash
+    # We use a deterministic approach: if strip_index is 0, make the decision
+    # and store it; if strip_index > 0, use the stored decision.
+    # For simplicity in this design, we'll flash both or just this strip based on probability.
+
+    flash_color = pattern.get("flash_color", "#ffffff")
+    flash_brightness = pattern.get("flash_brightness", 100)
+    r, g, b = hex_to_rgb(flash_color)
+
+    # For single strip, always flash it
+    if len(devices) == 1:
+        return (True, r, g, b, flash_brightness)
+
+    # For multiple strips, decide based on probability
+    # strip_index 0: decide whether to flash both
+    # strip_index > 0: flash only if both were decided
+    if strip_index == 0:
+        flash_both = rng.random() < flash_both_prob
+        # Store decision in a way that strip 1 can access
+        # We'll use a simple approach: return a marker
+        thunderstorm_flash_frame._flash_both = flash_both
+        return (True, r, g, b, flash_brightness)
+    else:
+        # Only flash if both were decided
+        return (thunderstorm_flash_frame._flash_both, r, g, b, flash_brightness)
+
+
+thunderstorm_flash_frame._flash_both = False
+
+
+def schedule_next_flash(rng, flash_every, now):
+    """Schedule the next flash time.
+
+    Args:
+        rng: random.Random instance
+        flash_every: [min, max] seconds between flashes
+        now: current time
+
+    Returns:
+        Next flash time (float)
+    """
+    min_interval, max_interval = flash_every
+    interval = rng.uniform(min_interval, max_interval)
+    return now + interval
+
+
+def should_flash(now, next_flash_time):
+    """Check if it's time to flash."""
+    return next_flash_time is not None and now >= next_flash_time
+
+
 def get_pattern_for_code(code, patterns_cfg):
     """Get the pattern definition for a weather code.
 
@@ -163,6 +249,23 @@ def get_pattern_for_code(code, patterns_cfg):
             "period": 8.0,  # 4s per half cycle
             "brightness": 80,
             "phase_offset": 4.0,  # half cycle out of phase
+        })
+
+    # Thunderstorm: codes 95-99
+    if 95 <= code <= 99:
+        return patterns_cfg.get("thunderstorm", {
+            "type": "thunderstorm",
+            "color1": "#4a148c",
+            "color2": "#7b1fa2",
+            "period": 12.0,  # 6s per half cycle
+            "brightness": 80,
+            "phase_offset": 0.0,
+            "flash_every": [6, 20],  # [min, max] seconds between flashes
+            "flash_duration": 0.15,  # 150ms flash
+            "flash_color": "#ffffff",
+            "flash_brightness": 100,
+            "double_flash_prob": 0.3,
+            "flash_both_prob": 0.5,
         })
 
     # All other codes: static (no pattern)
@@ -243,7 +346,7 @@ def weather_to_color(code, temp_c, is_day):
         return "#ffffff"
 
 
-def run(config, once=False, interval=900, dry_run=False):
+def run(config, once=False, interval=900, dry_run=False, rng=None, time_fn=None):
     """Run the weather sync loop.
 
     Args:
@@ -251,7 +354,13 @@ def run(config, once=False, interval=900, dry_run=False):
         once: If True, run once and exit
         interval: Seconds between updates (default 900 = 15 min)
         dry_run: If True, print instead of sending to lights
+        rng: Optional random.Random instance for testability
+        time_fn: Optional time function for testability
     """
+    if rng is None:
+        rng = random.Random()
+    if time_fn is None:
+        time_fn = time.time
     weather_cfg = config.get("weather", {})
     lat = weather_cfg.get("latitude", 0.0)
     lon = weather_cfg.get("longitude", 0.0)
@@ -284,8 +393,11 @@ def run(config, once=False, interval=900, dry_run=False):
     last_fetch = None  # time of last weather fetch
     last_frame_error_time = None  # for rate-limiting frame error logs
 
+    # Thunderstorm flash state
+    next_flash_time = None
+
     while True:
-        now = time.time()
+        now = time_fn()
 
         # Check signal/game priority
         if arbiter.signal_active() or arbiter.game_active():
@@ -353,6 +465,12 @@ def run(config, once=False, interval=900, dry_run=False):
                 pattern_start_time = now
                 if current_pattern is not None:
                     logger.info("Starting pattern: %s", current_pattern.get("type", "unknown"))
+                    # Schedule first flash for thunderstorm patterns
+                    if current_pattern.get("type") == "thunderstorm":
+                        flash_every = current_pattern.get("flash_every", [6, 20])
+                        next_flash_time = schedule_next_flash(rng, flash_every, now)
+                else:
+                    next_flash_time = None
 
             last_fetch = now
         else:
@@ -379,6 +497,96 @@ def run(config, once=False, interval=900, dry_run=False):
         if current_pattern is not None:
             # Pattern mode: compute frame based on elapsed time
             elapsed = now - pattern_start_time
+
+            # Check for thunderstorm flash
+            is_thunderstorm = current_pattern.get("type") == "thunderstorm"
+            if is_thunderstorm and should_flash(now, next_flash_time):
+                # Re-check arbiter right before flashing
+                if not (arbiter.signal_active() or arbiter.game_active()):
+                    logger.debug("Thunderstorm flash!")
+                    flash_color = current_pattern.get("flash_color", "#ffffff")
+                    flash_brightness = current_pattern.get("flash_brightness", 100)
+                    flash_duration = current_pattern.get("flash_duration", 0.15)
+                    double_flash_prob = current_pattern.get("double_flash_prob", 0.3)
+                    flash_both_prob = current_pattern.get("flash_both_prob", 0.5)
+                    r, g, b = hex_to_rgb(flash_color)
+
+                    # Decide which strips to flash
+                    if len(devices) == 1:
+                        flash_strips = [0]
+                    else:
+                        if rng.random() < flash_both_prob:
+                            flash_strips = [0, 1]
+                        else:
+                            flash_strips = [rng.randint(0, 1)]
+
+                    # Send flash frame to selected strips
+                    for i in flash_strips:
+                        ip = devices[i]["ip"]
+                        if dry_run:
+                            logger.debug("[dry-run] Would flash %s to %s (brightness %d)",
+                                         ip, flash_color, flash_brightness)
+                        else:
+                            try:
+                                govee.color(ip, r, g, b)
+                                govee.brightness(ip, arbiter.cap_brightness(flash_brightness, config, allow_flash=True))
+                                last_brightness[ip] = flash_brightness
+                                logger.debug("Flashed %s to %s (brightness %d)",
+                                             ip, flash_color, flash_brightness)
+                            except OSError as e:
+                                if last_frame_error_time is None or (now - last_frame_error_time) >= 60:
+                                    logger.error("Failed to send to lights: %s", e)
+                                    last_frame_error_time = now
+
+                    # Wait for flash duration
+                    time.sleep(flash_duration)
+
+                    # Double flash?
+                    if rng.random() < double_flash_prob:
+                        # Brief pause, then flash again
+                        time.sleep(0.12)
+                        for i in flash_strips:
+                            ip = devices[i]["ip"]
+                            if dry_run:
+                                logger.debug("[dry-run] Would flash %s again (double flash)", ip)
+                            else:
+                                try:
+                                    govee.color(ip, r, g, b)
+                                    govee.brightness(ip, arbiter.cap_brightness(flash_brightness, config, allow_flash=True))
+                                    last_brightness[ip] = flash_brightness
+                                    logger.debug("Double-flashed %s", ip)
+                                except OSError as e:
+                                    if last_frame_error_time is None or (now - last_frame_error_time) >= 60:
+                                        logger.error("Failed to send to lights: %s", e)
+                                        last_frame_error_time = now
+                        time.sleep(flash_duration)
+
+                    # Restore base frame to all strips
+                    for i, dev in enumerate(devices):
+                        ip = dev["ip"]
+                        base_r, base_g, base_b, base_brightness = pattern_frame(current_pattern, elapsed, i)
+                        base_brightness = arbiter.cap_brightness(base_brightness, config)
+                        base_color = rgb_to_hex(base_r, base_g, base_b)
+                        if dry_run:
+                            logger.debug("[dry-run] Would restore %s to %s (brightness %d)",
+                                         ip, base_color, base_brightness)
+                        else:
+                            try:
+                                govee.color(ip, base_r, base_g, base_b)
+                                govee.brightness(ip, base_brightness)
+                                last_brightness[ip] = base_brightness
+                                logger.debug("Restored %s to %s (brightness %d)",
+                                             ip, base_color, base_brightness)
+                            except OSError as e:
+                                if last_frame_error_time is None or (now - last_frame_error_time) >= 60:
+                                    logger.error("Failed to send to lights: %s", e)
+                                    last_frame_error_time = now
+
+                    # Schedule next flash
+                    flash_every = current_pattern.get("flash_every", [6, 20])
+                    next_flash_time = schedule_next_flash(rng, flash_every, time_fn())
+
+            # Send normal base frame
             for i, dev in enumerate(devices):
                 ip = dev["ip"]
                 # Check frame interval
