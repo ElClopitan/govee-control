@@ -132,7 +132,8 @@ def run(config, once=False, interval=900, dry_run=False):
     weather_cfg = config.get("weather", {})
     lat = weather_cfg.get("latitude", 0.0)
     lon = weather_cfg.get("longitude", 0.0)
-    brightness = weather_cfg.get("brightness", 50)
+    brightness = weather_cfg.get("brightness", 80)
+    brightness = arbiter.cap_brightness(brightness, config)
 
     # Validate location
     if lat == 0.0 and lon == 0.0:

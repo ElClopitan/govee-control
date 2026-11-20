@@ -113,5 +113,55 @@ class TestGameActiveStaleness(StateDirMixin, unittest.TestCase):
         self.assertTrue(arbiter.game_active())
 
 
+class TestCapBrightness(unittest.TestCase):
+    """Test cap_brightness() function."""
+
+    def test_below_cap(self):
+        """Brightness below cap is unchanged."""
+        cfg = {"max_brightness": 80}
+        self.assertEqual(arbiter.cap_brightness(50, cfg), 50)
+
+    def test_at_cap(self):
+        """Brightness at cap is unchanged."""
+        cfg = {"max_brightness": 80}
+        self.assertEqual(arbiter.cap_brightness(80, cfg), 80)
+
+    def test_above_cap(self):
+        """Brightness above cap is reduced to cap."""
+        cfg = {"max_brightness": 80}
+        self.assertEqual(arbiter.cap_brightness(100, cfg), 80)
+
+    def test_custom_max_brightness(self):
+        """Custom max_brightness of 60 caps at 60."""
+        cfg = {"max_brightness": 60}
+        self.assertEqual(arbiter.cap_brightness(100, cfg), 60)
+        self.assertEqual(arbiter.cap_brightness(50, cfg), 50)
+
+    def test_bad_max_brightness_value(self):
+        """Non-int max_brightness falls back to default 80."""
+        cfg = {"max_brightness": "high"}
+        self.assertEqual(arbiter.cap_brightness(100, cfg), 80)
+
+    def test_allow_flash_passes_through(self):
+        """allow_flash=True passes 100 through even with cap."""
+        cfg = {"max_brightness": 80}
+        self.assertEqual(arbiter.cap_brightness(100, cfg, allow_flash=True), 100)
+
+    def test_clamp_zero_to_one(self):
+        """Brightness 0 is clamped to 1."""
+        cfg = {"max_brightness": 80}
+        self.assertEqual(arbiter.cap_brightness(0, cfg), 1)
+
+    def test_clamp_above_100(self):
+        """Brightness 150 is clamped to 100."""
+        cfg = {"max_brightness": 80}
+        self.assertEqual(arbiter.cap_brightness(150, cfg), 80)
+
+    def test_no_max_brightness_in_config(self):
+        """Missing max_brightness uses default 80."""
+        cfg = {}
+        self.assertEqual(arbiter.cap_brightness(100, cfg), 80)
+
+
 if __name__ == "__main__":
     unittest.main()

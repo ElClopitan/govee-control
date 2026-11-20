@@ -33,7 +33,7 @@ LOG_MAX_LINES = 100
 
 DEFAULT_SIGNAL = {
     "color": "#ff6a00",
-    "brightness": 100,
+    "brightness": 80,
     "blink": False,
 }
 
@@ -287,10 +287,11 @@ def delete_saved_state(dry_run=False, quiet=False):
             print(f"deleted {signal_path}")
 
 
-def set_signal_color(devices, signal_cfg, dry_run=False):
+def set_signal_color(devices, signal_cfg, cfg, dry_run=False):
     """Set all devices to the signal colour."""
     color_str = signal_cfg.get("color", DEFAULT_SIGNAL["color"])
     brightness = signal_cfg.get("brightness", DEFAULT_SIGNAL["brightness"])
+    brightness = arbiter.cap_brightness(brightness, cfg)
     blink = signal_cfg.get("blink", DEFAULT_SIGNAL["blink"])
 
     r, g, b = govee.parse_color(color_str)
@@ -339,7 +340,7 @@ def set_signal_color(devices, signal_cfg, dry_run=False):
             print(f"[dry-run] set {color_str} at {brightness}% on all devices")
 
 
-def restore_state(devices, signal_cfg, default_cfg=None, dry_run=False, quiet=False):
+def restore_state(devices, signal_cfg, cfg, default_cfg=None, dry_run=False, quiet=False):
     """Restore saved state. Returns True if state was restored, False if none."""
     saved = load_saved_state(quiet=quiet)
 
@@ -360,6 +361,7 @@ def restore_state(devices, signal_cfg, default_cfg=None, dry_run=False, quiet=Fa
                 continue
             was_on = dev_state.get("on", True)
             brightness = dev_state.get("brightness", 100)
+            brightness = arbiter.cap_brightness(brightness, cfg)
             color = dev_state.get("color", {"r": 255, "g": 255, "b": 255})
             kelvin = dev_state.get("colorTemInKelvin", 0)
 
@@ -391,6 +393,7 @@ def restore_state(devices, signal_cfg, default_cfg=None, dry_run=False, quiet=Fa
             if ip not in saved_by_ip or ip in skipped_ips:
                 color_str = fallback.get("color", "white")
                 brightness = fallback.get("brightness", 40)
+                brightness = arbiter.cap_brightness(brightness, cfg)
                 r, g, b = govee.parse_color(color_str)
                 if not dry_run:
                     govee.turn(ip, True)
@@ -437,7 +440,7 @@ def cmd_needs_input(args):
     if not acquire_lock(dry_run=args.dry_run):
         # Lock timed out, still set the signal colour
         try:
-            set_signal_color(devices, signal_cfg, dry_run=args.dry_run)
+            set_signal_color(devices, signal_cfg, cfg, dry_run=args.dry_run)
         except OSError as e:
             print(f"warning: could not set signal colour: {e}", file=sys.stderr)
             log_signal_event("needs-input", "lock-timeout-oserror", hook_input)
@@ -452,7 +455,7 @@ def cmd_needs_input(args):
             save_state(devices, signal_cfg, dry_run=args.dry_run)
 
         try:
-            set_signal_color(devices, signal_cfg, dry_run=args.dry_run)
+            set_signal_color(devices, signal_cfg, cfg, dry_run=args.dry_run)
         except OSError as e:
             print(f"warning: could not set signal colour: {e}", file=sys.stderr)
             log_signal_event("needs-input", "oserror", hook_input)
@@ -500,7 +503,7 @@ def cmd_clear(args):
         was_corrupt = saved == []
 
         try:
-            restore_state(devices, signal_cfg, default_cfg=default_cfg, dry_run=args.dry_run, quiet=was_corrupt)
+            restore_state(devices, signal_cfg, cfg, default_cfg=default_cfg, dry_run=args.dry_run, quiet=was_corrupt)
         except OSError as e:
             print(f"warning: could not restore lights: {e}", file=sys.stderr)
             log_signal_event("clear", "oserror", hook_input)

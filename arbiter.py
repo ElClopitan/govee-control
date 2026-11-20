@@ -27,6 +27,31 @@ GAME_STALE_SECONDS = 60
 # a device that had no saved state).
 BUILTIN_DEFAULT = {"color": "white", "brightness": 40}
 
+# Default maximum brightness for automatic scripts (agent signal, game sync,
+# weather sync). Manual CLI brightness commands are not capped.
+MAX_BRIGHTNESS_DEFAULT = 80
+
+
+def cap_brightness(value, cfg, allow_flash=False):
+    """Cap brightness to the configured maximum.
+
+    Args:
+        value: The requested brightness (0-100).
+        cfg: The loaded config dict.
+        allow_flash: If True, skip the cap (for explicit flashes like thunderstorms).
+
+    Returns:
+        The capped brightness, clamped to 1..100.
+    """
+    if allow_flash:
+        return max(1, min(100, value))
+
+    max_b = cfg.get("max_brightness", MAX_BRIGHTNESS_DEFAULT)
+    if not isinstance(max_b, int):
+        max_b = MAX_BRIGHTNESS_DEFAULT
+
+    return max(1, min(100, min(value, max_b)))
+
 
 def signal_file():
     """Return the path to the signal state file.

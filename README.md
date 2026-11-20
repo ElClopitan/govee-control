@@ -186,6 +186,23 @@ While a signal or game is active, weather_sync re-checks every 10 seconds
 (`weather_sync.BLOCKED_POLL_SECONDS`) and resumes as soon as the higher-priority
 source clears.
 
+### Brightness cap
+
+All automatic scripts (agent signal, game sync, weather sync) cap brightness at
+the configured `max_brightness` (default 80). This keeps the strips from running
+at full brightness all the time. Manual CLI brightness commands (`govee.py
+brightness N`) are not capped — if you type it, you get it.
+
+```json
+{
+  "devices": [...],
+  "max_brightness": 80,
+  ...
+}
+```
+
+Set `max_brightness` to 100 to disable the cap. Values are clamped to 1–100.
+
 ### Colour mapping
 
 Weather conditions are mapped to colours using WMO weather codes:

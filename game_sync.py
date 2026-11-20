@@ -77,6 +77,7 @@ def apply_profile(config, profile, dry_run=False):
     devices = config.get("devices", [])
     color_str = profile.get("color", "white")
     brightness_val = profile.get("brightness", 50)
+    brightness_val = arbiter.cap_brightness(brightness_val, config)
 
     try:
         r, g, b = govee.parse_color(color_str)

@@ -1,5 +1,6 @@
 {
   "iface_ip": "",
+  "max_brightness": 80,
   "devices": [
     {"name": "left", "ip": "192.168.1.50"},
     {"name": "right", "ip": "192.168.1.51"}
@@ -10,14 +11,14 @@
   },
   "signal": {
     "color": "#ff6a00",
-    "brightness": 100,
+    "brightness": 80,
     "blink": false,
     "include_unattended": false
   },
   "weather": {
     "latitude": 0.0,
     "longitude": 0.0,
-    "brightness": 50
+    "brightness": 80
   },
   "games": [
     {

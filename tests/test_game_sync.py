@@ -649,5 +649,26 @@ class TestGameActiveState(StateDirMixin, unittest.TestCase):
         self.assertEqual(mock_color.call_count, 3)
 
 
+class TestBrightnessCap(StateDirMixin, unittest.TestCase):
+    """Test that brightness is capped at max_brightness (default 80)."""
+
+    @mock.patch("game_sync.govee.color")
+    @mock.patch("game_sync.govee.brightness")
+    def test_profile_brightness_capped_at_80(self, mock_brightness, mock_color):
+        """Game profile brightness of 100 is capped to 80 (default max_brightness)."""
+        config = {
+            "devices": [{"name": "left", "ip": "192.168.1.50"}],
+            "games": [
+                {"name": "Test Game", "exe": "testgame.exe", "color": "red", "brightness": 100},
+            ],
+        }
+        profile = {"name": "Test Game", "color": "red", "brightness": 100}
+        game_sync.apply_profile(config, profile, dry_run=False)
+
+        # Brightness should be capped at 80, not 100
+        self.assertEqual(mock_brightness.call_count, 1)
+        self.assertEqual(mock_brightness.call_args[0][1], 80)
+
+
 if __name__ == "__main__":
     unittest.main()

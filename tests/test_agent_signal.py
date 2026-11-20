@@ -1543,5 +1543,50 @@ class TestSignalLogging(StateDirMixin, unittest.TestCase):
         self.assertTrue(arbiter.signal_file().exists())
 
 
+class TestBrightnessCap(StateDirMixin, unittest.TestCase):
+    """Test that brightness is capped at max_brightness (default 80)."""
+
+    def setUp(self):
+        super().setUp()
+        self.config_path = self.state_dir / "config.json"
+        self.config = {
+            "devices": [
+                {"name": "left", "ip": "192.168.1.50"},
+            ],
+            "signal": {
+                "color": "#ff6a00",
+                "brightness": 100,
+                "blink": False,
+            },
+        }
+        self.config_path.write_text(json.dumps(self.config))
+
+    @mock.patch("agent_signal.govee.status")
+    @mock.patch("agent_signal.govee.turn")
+    @mock.patch("agent_signal.govee.brightness")
+    @mock.patch("agent_signal.govee.color")
+    def test_signal_brightness_capped_at_80(
+        self, mock_color, mock_brightness, mock_turn, mock_status
+    ):
+        """Signal brightness of 100 is capped to 80 (default max_brightness)."""
+        mock_status.return_value = {
+            "msg": {"data": {"on": True, "brightness": 50, "color": {"r": 255, "g": 255, "b": 255}}}
+        }
+
+        args = mock.Mock()
+        args.command = "needs-input"
+        args.config = str(self.config_path)
+        args.dry_run = False
+        args.force = False
+
+        # Ensure attended session so the signal is applied
+        with mock.patch.dict(os.environ, {"CLAUDE_CODE_SESSION_ATTENDED": "1"}):
+            agent_signal.cmd_needs_input(args)
+
+        # Brightness should be capped at 80, not 100
+        self.assertEqual(mock_brightness.call_count, 1)
+        self.assertEqual(mock_brightness.call_args[0][1], 80)
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -815,5 +815,35 @@ class TestPriorityRecheckBeforeSend(StateDirMixin, unittest.TestCase):
                          + "; ".join(r.getMessage() for r in skipped_records))
 
 
+class TestBrightnessCap(StateDirMixin, unittest.TestCase):
+    """Test that brightness is capped at max_brightness (default 80)."""
+
+    @mock.patch("weather_sync.govee.color")
+    @mock.patch("weather_sync.govee.brightness")
+    @mock.patch("weather_sync.fetch_weather")
+    def test_weather_brightness_capped_at_80(self, mock_fetch, mock_brightness, mock_color):
+        """Weather brightness of 100 is capped to 80 (default max_brightness)."""
+        mock_fetch.return_value = {
+            "temperature_2m": 20.0,
+            "weather_code": 0,
+            "is_day": 1,
+        }
+
+        config = {
+            "devices": [{"name": "left", "ip": "192.168.1.50"}],
+            "weather": {
+                "latitude": 51.5074,
+                "longitude": -0.1278,
+                "brightness": 100,
+            },
+        }
+
+        weather_sync.run(config, once=True)
+
+        # Brightness should be capped at 80, not 100
+        self.assertEqual(mock_brightness.call_count, 1)
+        self.assertEqual(mock_brightness.call_args[0][1], 80)
+
+
 if __name__ == "__main__":
     unittest.main()
