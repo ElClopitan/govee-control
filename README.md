@@ -208,11 +208,16 @@ Set `max_brightness` to 100 to disable the cap. Values are clamped to 1–100.
 When `patterns_enabled` is true (default), weather_sync uses animated patterns
 for certain weather conditions instead of static colours:
 
-- **Cloudy** (WMO codes 2-3): slow drift between grey tones (40s cycle)
+- **Cloudy** (WMO codes 2-3): slow drift between blue-grey tones (40s cycle)
 - **Rain** (WMO codes 51-67, 80-82): wave pattern between blue tones (8s cycle),
   with strips out of phase for a rippling effect
+- **Thunderstorm** (WMO codes 95-99): purple drift with white lightning flashes
 
 All other weather conditions use static colours.
+
+At night (is_day=0), different colours are used for a more atmospheric look,
+and brightness is reduced to `night_brightness` (default 30). Thunderstorm
+flashes keep their own flash_brightness (100).
 
 Configuration options in the `weather` section:
 
@@ -222,15 +227,24 @@ Configuration options in the `weather` section:
     "latitude": 51.5074,
     "longitude": -0.1278,
     "brightness": 50,
+    "night_brightness": 30,
     "patterns_enabled": true,
     "frame_interval": 1.0,
     "patterns": {
       "cloudy": {
         "type": "drift",
-        "color1": "#b0bec5",
-        "color2": "#eceff1",
+        "color1": "#546e7a",
+        "color2": "#90a4ae",
         "period": 40.0,
         "brightness": 75,
+        "phase_offset": 0.0
+      },
+      "cloudy_night": {
+        "type": "drift",
+        "color1": "#37474f",
+        "color2": "#5c6bc0",
+        "period": 40.0,
+        "brightness": 30,
         "phase_offset": 0.0
       },
       "rain": {
@@ -248,10 +262,14 @@ Configuration options in the `weather` section:
 
 - `patterns_enabled`: enable/disable animated patterns (default: true)
 - `frame_interval`: seconds between animation frames (default: 1.0, min: 0.5)
-- `patterns`: override default pattern definitions for cloudy/rain
+- `night_brightness`: brightness at night (default: 30)
+- `patterns`: override default pattern definitions for cloudy/rain/thunderstorm
+  (use `_night` suffix for night variants, e.g. `cloudy_night`)
 
 Weather is fetched every `interval` seconds (default 900), not every frame.
-Between fetches, the last known weather data is used for animation.
+Between fetches, the last known weather data is used for animation. When
+is_day changes (day to night or vice versa), the pattern and brightness
+switch immediately at the next fetch.
 
 ### Colour mapping
 
@@ -260,14 +278,14 @@ Weather conditions are mapped to colours using WMO weather codes:
 | WMO codes | Condition | Day colour | Night colour |
 |-----------|-----------|------------|--------------|
 | 0-1 | Clear sky | Warm yellow `#ffd27f` | Deep blue `#1a237e` |
-| 2-3 | Partly/mostly cloudy | Grey `#b0bec5` | Grey `#b0bec5` |
-| 45-48 | Fog | Light grey `#cfd8dc` | Light grey `#cfd8dc` |
-| 51-67 | Drizzle/rain | Blue `#1e88e5` | Blue `#1e88e5` |
-| 71-77 | Snow | Pale blue `#e3f2fd` | Pale blue `#e3f2fd` |
-| 80-82 | Showers | Blue `#1e88e5` | Blue `#1e88e5` |
-| 85-86 | Snow showers | Pale blue `#e3f2fd` | Pale blue `#e3f2fd` |
+| 2-3 | Partly/mostly cloudy | Blue-grey `#546e7a` | Dark blue-grey `#37474f` |
+| 45-48 | Fog | Light grey `#cfd8dc` | Dark grey `#455a64` |
+| 51-67 | Drizzle/rain | Blue `#1e88e5` | Dark blue `#0d47a1` |
+| 71-77 | Snow | Pale blue `#e3f2fd` | Indigo `#3949ab` |
+| 80-82 | Showers | Blue `#1e88e5` | Dark blue `#0d47a1` |
+| 85-86 | Snow showers | Pale blue `#e3f2fd` | Indigo `#3949ab` |
 | 95-99 | Thunderstorm | Purple `#7b1fa2` | Purple `#7b1fa2` |
-| Other | Unknown | White `#ffffff` | White `#ffffff` |
+| Other | Unknown | White `#ffffff` | Dark grey `#37474f` |
 
 ## Priority
 

@@ -13,15 +13,29 @@ Config keys (in config.json):
   }
 
 Colour mapping (WMO weather codes):
-  0-1   clear: day=warm yellow (#ffd27f), night=deep blue (#1a237e)
-  2-3   partly/mostly cloudy: grey (#b0bec5)
-  45-48 fog: light grey (#cfd8dc)
-  51-67 drizzle/rain: blue (#1e88e5)
-  71-77 snow: pale blue (#e3f2fd)
-  80-82 showers: blue (#1e88e5)
-  85-86 snow showers: pale blue (#e3f2fd)
-  95-99 thunderstorm: purple (#7b1fa2)
-  other unknown: white (#ffffff)
+  Day:
+    0-1   clear: warm yellow (#ffd27f)
+    2-3   partly/mostly cloudy: drift #546e7a <-> #90a4ae
+    45-48 fog: light grey (#cfd8dc)
+    51-67 drizzle/rain: wave #1e88e5 <-> #0d47a1
+    71-77 snow: pale blue (#e3f2fd)
+    80-82 showers: wave #1e88e5 <-> #0d47a1
+    85-86 snow showers: pale blue (#e3f2fd)
+    95-99 thunderstorm: purple (#7b1fa2) with flashes
+    other unknown: white (#ffffff)
+  Night (is_day=0):
+    0-1   clear: deep blue (#1a237e)
+    2-3   partly/mostly cloudy: drift #37474f <-> #5c6bc0
+    45-48 fog: dark grey (#455a64)
+    51-67 drizzle/rain: wave #0d47a1 <-> #1a237e
+    71-77 snow: indigo (#3949ab)
+    80-82 showers: wave #0d47a1 <-> #1a237e
+    85-86 snow showers: indigo (#3949ab)
+    95-99 thunderstorm: same as day (flashes keep flash_brightness)
+    other unknown: dark grey (#37474f)
+  Night brightness: weather.night_brightness (default 30), applied to all
+  base frames and static colours at night. Thunderstorm flashes keep
+  their own flash_brightness.
 """
 
 import argparse
@@ -155,12 +169,13 @@ def should_flash(now, next_flash_time):
 
 
 
-def get_pattern_for_code(code, patterns_cfg):
+def get_pattern_for_code(code, patterns_cfg, is_day=1):
     """Get the pattern definition for a weather code.
 
     Args:
         code: WMO weather code
         patterns_cfg: Config dict for weather.patterns
+        is_day: 1 if daytime, 0 if night (int)
 
     Returns:
         Pattern definition dict, or None for static color
@@ -170,27 +185,47 @@ def get_pattern_for_code(code, patterns_cfg):
 
     # Cloudy: codes 2-3
     if 2 <= code <= 3:
-        return patterns_cfg.get("cloudy", {
-            "type": "drift",
-            "color1": "#b0bec5",
-            "color2": "#eceff1",
-            "period": 40.0,  # 20s per half cycle
-            "brightness": 75,
-            "phase_offset": 0.0,
-        })
+        if is_day:
+            return patterns_cfg.get("cloudy", {
+                "type": "drift",
+                "color1": "#546e7a",
+                "color2": "#90a4ae",
+                "period": 40.0,  # 20s per half cycle
+                "brightness": 75,
+                "phase_offset": 0.0,
+            })
+        else:
+            return patterns_cfg.get("cloudy_night", {
+                "type": "drift",
+                "color1": "#37474f",
+                "color2": "#5c6bc0",
+                "period": 40.0,
+                "brightness": 30,
+                "phase_offset": 0.0,
+            })
 
     # Rain: codes 51-67, 80-82
     if (51 <= code <= 67) or (80 <= code <= 82):
-        return patterns_cfg.get("rain", {
-            "type": "wave",
-            "color1": "#1e88e5",
-            "color2": "#0d47a1",
-            "period": 8.0,  # 4s per half cycle
-            "brightness": 80,
-            "phase_offset": 4.0,  # half cycle out of phase
-        })
+        if is_day:
+            return patterns_cfg.get("rain", {
+                "type": "wave",
+                "color1": "#1e88e5",
+                "color2": "#0d47a1",
+                "period": 8.0,  # 4s per half cycle
+                "brightness": 80,
+                "phase_offset": 4.0,  # half cycle out of phase
+            })
+        else:
+            return patterns_cfg.get("rain_night", {
+                "type": "wave",
+                "color1": "#0d47a1",
+                "color2": "#1a237e",
+                "period": 8.0,
+                "brightness": 30,
+                "phase_offset": 4.0,
+            })
 
-    # Thunderstorm: codes 95-99
+    # Thunderstorm: codes 95-99 (same pattern day and night)
     if 95 <= code <= 99:
         return patterns_cfg.get("thunderstorm", {
             "type": "thunderstorm",
@@ -261,28 +296,49 @@ def weather_to_color(code, temp_c, is_day):
             return "#1a237e"  # deep blue
     elif code <= 3:
         # Partly/mostly cloudy
-        return "#b0bec5"
+        if is_day:
+            return "#546e7a"  # blue-grey
+        else:
+            return "#37474f"  # dark blue-grey
     elif code <= 48:
         # Fog
-        return "#cfd8dc"
+        if is_day:
+            return "#cfd8dc"  # light grey
+        else:
+            return "#455a64"  # dark grey
     elif code <= 67:
         # Drizzle/rain
-        return "#1e88e5"
+        if is_day:
+            return "#1e88e5"  # blue
+        else:
+            return "#0d47a1"  # dark blue
     elif code <= 77:
         # Snow
-        return "#e3f2fd"
+        if is_day:
+            return "#e3f2fd"  # pale blue
+        else:
+            return "#3949ab"  # indigo
     elif code <= 82:
         # Showers
-        return "#1e88e5"
+        if is_day:
+            return "#1e88e5"  # blue
+        else:
+            return "#0d47a1"  # dark blue
     elif code <= 86:
         # Snow showers
-        return "#e3f2fd"
+        if is_day:
+            return "#e3f2fd"  # pale blue
+        else:
+            return "#3949ab"  # indigo
     elif code <= 99:
-        # Thunderstorm
+        # Thunderstorm (same day and night)
         return "#7b1fa2"
     else:
         # Unknown
-        return "#ffffff"
+        if is_day:
+            return "#ffffff"
+        else:
+            return "#37474f"
 
 
 def run(config, once=False, interval=900, dry_run=False, rng=None, time_fn=None):
@@ -305,6 +361,8 @@ def run(config, once=False, interval=900, dry_run=False, rng=None, time_fn=None)
     lon = weather_cfg.get("longitude", 0.0)
     brightness = weather_cfg.get("brightness", 80)
     brightness = arbiter.cap_brightness(brightness, config)
+    night_brightness = weather_cfg.get("night_brightness", 30)
+    night_brightness = arbiter.cap_brightness(night_brightness, config)
 
     # Pattern configuration
     patterns_enabled = weather_cfg.get("patterns_enabled", True)
@@ -331,6 +389,7 @@ def run(config, once=False, interval=900, dry_run=False, rng=None, time_fn=None)
     last_frame_time = {}  # ip -> last frame send time
     last_fetch = None  # time of last weather fetch
     last_frame_error_time = None  # for rate-limiting frame error logs
+    current_is_day = None  # track day/night for pattern switching
 
     # Thunderstorm flash state
     next_flash_time = None
@@ -394,16 +453,18 @@ def run(config, once=False, interval=900, dry_run=False, rng=None, time_fn=None)
 
             # Determine if we should use a pattern
             if patterns_enabled:
-                new_pattern = get_pattern_for_code(code, patterns_cfg)
+                new_pattern = get_pattern_for_code(code, patterns_cfg, is_day)
             else:
                 new_pattern = None
 
-            # If pattern changed, reset the pattern timer
-            if new_pattern != current_pattern:
+            # If pattern changed (code or day/night), reset the pattern timer
+            if new_pattern != current_pattern or is_day != current_is_day:
                 current_pattern = new_pattern
+                current_is_day = is_day
                 pattern_start_time = now
                 if current_pattern is not None:
-                    logger.info("Starting pattern: %s", current_pattern.get("type", "unknown"))
+                    logger.info("Starting pattern: %s (day=%d)",
+                                current_pattern.get("type", "unknown"), is_day)
                     # Schedule first flash for thunderstorm patterns
                     if current_pattern.get("type") == "thunderstorm":
                         flash_every = current_pattern.get("flash_every", [6, 20])
@@ -500,6 +561,9 @@ def run(config, once=False, interval=900, dry_run=False, rng=None, time_fn=None)
                     for i in flash_strips:
                         ip = devices[i]["ip"]
                         base_r, base_g, base_b, base_brightness = pattern_frame(current_pattern, elapsed, i)
+                        # At night, use night_brightness for base frames
+                        if current_is_day == 0:
+                            base_brightness = night_brightness
                         base_brightness = arbiter.cap_brightness(base_brightness, config)
                         if dry_run:
                             logger.debug("[dry-run] Would send base frame to %s during double-flash gap", ip)
@@ -552,6 +616,9 @@ def run(config, once=False, interval=900, dry_run=False, rng=None, time_fn=None)
                 for i, dev in enumerate(devices):
                     ip = dev["ip"]
                     base_r, base_g, base_b, base_brightness = pattern_frame(current_pattern, elapsed, i)
+                    # At night, use night_brightness for base frames
+                    if current_is_day == 0:
+                        base_brightness = night_brightness
                     base_brightness = arbiter.cap_brightness(base_brightness, config)
                     base_color = rgb_to_hex(base_r, base_g, base_b)
                     if dry_run:
@@ -586,6 +653,9 @@ def run(config, once=False, interval=900, dry_run=False, rng=None, time_fn=None)
                     continue
 
                 r, g, b, frame_brightness = pattern_frame(current_pattern, elapsed, i)
+                # At night, use night_brightness for base frames
+                if current_is_day == 0:
+                    frame_brightness = night_brightness
                 frame_brightness = arbiter.cap_brightness(frame_brightness, config)
 
                 color_str = rgb_to_hex(r, g, b)
@@ -610,6 +680,8 @@ def run(config, once=False, interval=900, dry_run=False, rng=None, time_fn=None)
                 last_color = color_str
         else:
             # Static mode: send only if color changed
+            # At night, use night_brightness
+            effective_brightness = night_brightness if current_is_day == 0 else brightness
             if color_hex != last_color or dry_run:
                 r, g, b = govee.parse_color(color_hex)
                 try:
@@ -617,13 +689,13 @@ def run(config, once=False, interval=900, dry_run=False, rng=None, time_fn=None)
                         ip = dev["ip"]
                         if dry_run:
                             logger.info("[dry-run] Would set %s to %s (brightness %d)",
-                                        ip, color_hex, brightness)
+                                        ip, color_hex, effective_brightness)
                         else:
                             govee.color(ip, r, g, b)
-                            if last_brightness.get(ip) != brightness:
-                                govee.brightness(ip, brightness)
-                                last_brightness[ip] = brightness
-                            logger.info("Set %s to %s (brightness %d)", ip, color_hex, brightness)
+                            if last_brightness.get(ip) != effective_brightness:
+                                govee.brightness(ip, effective_brightness)
+                                last_brightness[ip] = effective_brightness
+                            logger.info("Set %s to %s (brightness %d)", ip, color_hex, effective_brightness)
                 except OSError as e:
                     logger.error("Failed to send to lights: %s", e)
                     # Don't update last_color so we retry next iteration

@@ -35,9 +35,14 @@ class TestWeatherToColor(unittest.TestCase):
         self.assertEqual(weather_sync.weather_to_color(1, 15.0, 0), "#1a237e")
 
     def test_partly_cloudy(self):
-        """Partly cloudy -> grey."""
-        self.assertEqual(weather_sync.weather_to_color(2, 20.0, 1), "#b0bec5")
-        self.assertEqual(weather_sync.weather_to_color(3, 20.0, 1), "#b0bec5")
+        """Partly cloudy day -> blue-grey."""
+        self.assertEqual(weather_sync.weather_to_color(2, 20.0, 1), "#546e7a")
+        self.assertEqual(weather_sync.weather_to_color(3, 20.0, 1), "#546e7a")
+
+    def test_partly_cloudy_night(self):
+        """Partly cloudy night -> dark blue-grey."""
+        self.assertEqual(weather_sync.weather_to_color(2, 15.0, 0), "#37474f")
+        self.assertEqual(weather_sync.weather_to_color(3, 15.0, 0), "#37474f")
 
     def test_fog(self):
         """Fog -> light grey."""
@@ -85,6 +90,27 @@ class TestWeatherToColor(unittest.TestCase):
         """Unknown weather code -> white."""
         self.assertEqual(weather_sync.weather_to_color(100, 20.0, 1), "#ffffff")
         self.assertEqual(weather_sync.weather_to_color(999, 20.0, 1), "#ffffff")
+
+    def test_night_colors(self):
+        """Night mode colors for each weather code group."""
+        # Clear night
+        self.assertEqual(weather_sync.weather_to_color(0, 15.0, 0), "#1a237e")
+        # Cloudy night
+        self.assertEqual(weather_sync.weather_to_color(2, 15.0, 0), "#37474f")
+        # Fog night
+        self.assertEqual(weather_sync.weather_to_color(45, 10.0, 0), "#455a64")
+        # Rain night
+        self.assertEqual(weather_sync.weather_to_color(61, 12.0, 0), "#0d47a1")
+        # Snow night
+        self.assertEqual(weather_sync.weather_to_color(71, -2.0, 0), "#3949ab")
+        # Showers night
+        self.assertEqual(weather_sync.weather_to_color(80, 18.0, 0), "#0d47a1")
+        # Snow showers night
+        self.assertEqual(weather_sync.weather_to_color(85, -1.0, 0), "#3949ab")
+        # Thunderstorm night (same as day)
+        self.assertEqual(weather_sync.weather_to_color(95, 22.0, 0), "#7b1fa2")
+        # Unknown night
+        self.assertEqual(weather_sync.weather_to_color(100, 20.0, 0), "#37474f")
 
 
 class TestFetchWeather(unittest.TestCase):
@@ -227,6 +253,97 @@ class TestRunOnce(StateDirMixin, unittest.TestCase):
         self.assertEqual(mock_color.call_count, 2)
         # Brightness is sent only when it changes (optimization)
         self.assertGreaterEqual(mock_brightness.call_count, 1)
+
+    @mock.patch("weather_sync.fetch_weather")
+    @mock.patch("govee.color")
+    @mock.patch("govee.brightness")
+    def test_night_brightness_default(self, mock_brightness, mock_color, mock_fetch):
+        """Night mode uses default night_brightness of 30."""
+        mock_fetch.return_value = {
+            "temperature_2m": 15.0,
+            "weather_code": 2,
+            "is_day": 0,
+        }
+        config = self._make_config(brightness=50)
+        config["weather"]["patterns_enabled"] = False
+
+        weather_sync.run(config, once=True)
+
+        # Night brightness should be 30 (default)
+        mock_brightness.assert_called_with("192.168.1.50", 30)
+
+    @mock.patch("weather_sync.fetch_weather")
+    @mock.patch("govee.color")
+    @mock.patch("govee.brightness")
+    def test_night_brightness_configured(self, mock_brightness, mock_color, mock_fetch):
+        """Night mode uses configured night_brightness."""
+        mock_fetch.return_value = {
+            "temperature_2m": 15.0,
+            "weather_code": 2,
+            "is_day": 0,
+        }
+        config = self._make_config(brightness=50)
+        config["weather"]["patterns_enabled"] = False
+        config["weather"]["night_brightness"] = 40
+
+        weather_sync.run(config, once=True)
+
+        # Night brightness should be 40 (configured)
+        mock_brightness.assert_called_with("192.168.1.50", 40)
+
+    @mock.patch("weather_sync.fetch_weather")
+    @mock.patch("govee.color")
+    @mock.patch("govee.brightness")
+    @mock.patch("time.sleep")
+    @mock.patch("time.time")
+    def test_day_night_transition_switches_pattern(self, mock_time, mock_sleep, mock_brightness, mock_color, mock_fetch):
+        """When is_day changes, pattern and brightness switch."""
+        mock_time.return_value = 1000.0
+
+        # First fetch: day, cloudy
+        # Second fetch: night, cloudy (same code, different is_day)
+        fetch_count = [0]
+        def fetch_side_effect(*args, **kwargs):
+            fetch_count[0] += 1
+            if fetch_count[0] == 1:
+                return {"temperature_2m": 20.0, "weather_code": 2, "is_day": 1}
+            else:
+                return {"temperature_2m": 15.0, "weather_code": 2, "is_day": 0}
+
+        mock_fetch.side_effect = fetch_side_effect
+
+        config = self._make_config(brightness=50)
+        config["weather"]["patterns_enabled"] = False
+
+        # Advance time past interval on second sleep
+        sleep_count = [0]
+        def sleep_side_effect(seconds):
+            sleep_count[0] += 1
+            if sleep_count[0] == 1:
+                mock_time.return_value = 2000.0  # advance past 900s interval
+            if sleep_count[0] >= 2:
+                raise KeyboardInterrupt()
+
+        mock_sleep.side_effect = sleep_side_effect
+
+        try:
+            weather_sync.run(config, once=False, interval=900)
+        except KeyboardInterrupt:
+            pass
+
+        # Should have fetched twice
+        self.assertEqual(mock_fetch.call_count, 2)
+
+        # First call: day color #546e7a, brightness 50
+        # Second call: night color #37474f, brightness 30
+        self.assertEqual(mock_color.call_count, 2)
+        self.assertEqual(mock_color.call_args_list[0][0], ("192.168.1.50", 84, 110, 122))  # #546e7a
+        self.assertEqual(mock_color.call_args_list[1][0], ("192.168.1.50", 55, 71, 79))  # #37474f
+
+        # Brightness should switch from 50 to 30
+        self.assertEqual(mock_brightness.call_count, 2)
+        self.assertEqual(mock_brightness.call_args_list[0][0], ("192.168.1.50", 50))
+        self.assertEqual(mock_brightness.call_args_list[1][0], ("192.168.1.50", 30))
 
 
 class TestZeroLocation(unittest.TestCase):
@@ -1019,6 +1136,34 @@ class TestGetPatternForCode(unittest.TestCase):
         self.assertEqual(pattern["type"], "wave")
         self.assertEqual(pattern["color1"], "#ff0000")
         self.assertEqual(pattern["brightness"], 60)
+
+    def test_cloudy_day_pattern_colors(self):
+        """Day cloudy pattern uses #546e7a/#90a4ae."""
+        pattern = weather_sync.get_pattern_for_code(2, {}, is_day=1)
+        self.assertEqual(pattern["color1"], "#546e7a")
+        self.assertEqual(pattern["color2"], "#90a4ae")
+
+    def test_cloudy_night_pattern_colors(self):
+        """Night cloudy pattern uses #37474f/#5c6bc0."""
+        pattern = weather_sync.get_pattern_for_code(2, {}, is_day=0)
+        self.assertEqual(pattern["color1"], "#37474f")
+        self.assertEqual(pattern["color2"], "#5c6bc0")
+
+    def test_cloudy_night_pattern_override(self):
+        """patterns_cfg cloudy_night override is used at night."""
+        custom = {
+            "cloudy_night": {
+                "type": "drift",
+                "color1": "#ff0000",
+                "color2": "#00ff00",
+                "period": 10.0,
+                "brightness": 50,
+                "phase_offset": 0.0,
+            }
+        }
+        pattern = weather_sync.get_pattern_for_code(2, custom, is_day=0)
+        self.assertEqual(pattern["color1"], "#ff0000")
+        self.assertEqual(pattern["color2"], "#00ff00")
 
 
 class TestPatternLoop(StateDirMixin, unittest.TestCase):
