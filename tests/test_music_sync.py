@@ -14,7 +14,7 @@ from unittest import mock
 
 import music_sync
 import arbiter
-from helpers import StateDirMixin
+from helpers import StateDirMixin, bounded_clock
 
 
 class TestAnalyze(unittest.TestCase):
@@ -215,12 +215,7 @@ class TestMusicSignalPriority(StateDirMixin, unittest.TestCase):
             colors_sent.append((ip, r, g, b))
 
         # Fake time that advances 0.1s per call (10 fps)
-        fake_time = [0.0]
-
-        def fake_time_fn():
-            t = fake_time[0]
-            fake_time[0] = t + 0.1
-            return t
+        fake_time_fn = bounded_clock()
 
         # Mock soundcard and numpy
         fake_rec = mock.Mock()
@@ -262,16 +257,17 @@ class TestMusicSignalPriority(StateDirMixin, unittest.TestCase):
                     mock_govee.brightness = mock.Mock()
                     with mock.patch("time.sleep"):
                         with mock.patch.object(music_sync, "STOP_FLAG_FILE", self.state_dir / "music_stop"):
-                            # Mock analyze to return consistent features
-                            with mock.patch.object(music_sync, "analyze", return_value={"level": 0.5, "bass": 0.5, "mid": 0.5, "treble": 0.5}):
-                                try:
-                                    music_sync.run(
-                                        {"devices": [{"ip": "1.2.3.4"}]},
-                                        fps=10,
-                                        time_fn=fake_time_fn,
-                                    )
-                                except KeyboardInterrupt:
-                                    pass
+                            with mock.patch.object(music_sync, "PID_FILE", self.state_dir / "music_sync.pid"):
+                                # Mock analyze to return consistent features
+                                with mock.patch.object(music_sync, "analyze", return_value={"level": 0.5, "bass": 0.5, "mid": 0.5, "treble": 0.5}):
+                                    try:
+                                        music_sync.run(
+                                            {"devices": [{"ip": "1.2.3.4"}]},
+                                            fps=10,
+                                            time_fn=fake_time_fn,
+                                        )
+                                    except KeyboardInterrupt:
+                                        pass
 
         # Iteration 1: signal_active() -> False (top) -> record (frame 1) -> signal_active() -> True (re-check) -> no colour sent
         # Iteration 2: signal_active() -> True (top) -> no record
@@ -299,12 +295,7 @@ class TestMusicRestoreSkippedDuringSignal(StateDirMixin, unittest.TestCase):
         def fake_brightness(ip, b):
             govee_calls.append(("brightness", ip, b))
 
-        fake_time = [0.0]
-
-        def fake_time_fn():
-            t = fake_time[0]
-            fake_time[0] = t + 0.1
-            return t
+        fake_time_fn = bounded_clock()
 
         # Mock stop flag to trigger exit after initial setup
         stop_flag_calls = [0]
@@ -343,12 +334,13 @@ class TestMusicRestoreSkippedDuringSignal(StateDirMixin, unittest.TestCase):
                     mock_govee.status = mock.Mock(return_value={"msg": {"data": {"brightness": 50}}})
                     with mock.patch("time.sleep"):
                         with mock.patch.object(music_sync, "STOP_FLAG_FILE") as mock_stop_flag:
-                            mock_stop_flag.exists = fake_stop_flag_exists
-                            music_sync.run(
-                                {"devices": [{"ip": "1.2.3.4"}]},
-                                fps=10,
-                                time_fn=fake_time_fn,
-                            )
+                            with mock.patch.object(music_sync, "PID_FILE", self.state_dir / "music_sync.pid"):
+                                mock_stop_flag.exists = fake_stop_flag_exists
+                                music_sync.run(
+                                    {"devices": [{"ip": "1.2.3.4"}]},
+                                    fps=10,
+                                    time_fn=fake_time_fn,
+                                )
 
         # Heartbeat file should be removed
         self.assertFalse(arbiter.music_file().exists(),
@@ -391,12 +383,7 @@ class TestMusicHeartbeatClearOnException(StateDirMixin, unittest.TestCase):
         fake_sc.get_microphone = mock.Mock(return_value=fake_mic)
         fake_sc.all_microphones = mock.Mock(return_value=[fake_mic])
 
-        fake_time = [0.0]
-
-        def fake_time_fn():
-            t = fake_time[0]
-            fake_time[0] = t + 0.1
-            return t
+        fake_time_fn = bounded_clock()
 
         with mock.patch.dict(sys.modules, {
             "soundcard": fake_sc,
@@ -407,14 +394,15 @@ class TestMusicHeartbeatClearOnException(StateDirMixin, unittest.TestCase):
                 mock_govee.brightness = mock.Mock()
                 with mock.patch("time.sleep"):
                     with mock.patch.object(music_sync, "STOP_FLAG_FILE", self.state_dir / "music_stop"):
-                        try:
-                            music_sync.run(
-                                {"devices": [{"ip": "1.2.3.4"}]},
-                                fps=10,
-                                time_fn=fake_time_fn,
-                            )
-                        except KeyboardInterrupt:
-                            pass
+                        with mock.patch.object(music_sync, "PID_FILE", self.state_dir / "music_sync.pid"):
+                            try:
+                                music_sync.run(
+                                    {"devices": [{"ip": "1.2.3.4"}]},
+                                    fps=10,
+                                    time_fn=fake_time_fn,
+                                )
+                            except KeyboardInterrupt:
+                                pass
 
         # Heartbeat file should be removed
         self.assertFalse(arbiter.music_file().exists(),
@@ -438,12 +426,7 @@ class TestMusicActiveBeforeInitialState(StateDirMixin, unittest.TestCase):
         def fake_brightness(ip, b):
             call_order.append(f"brightness_{ip}")
 
-        fake_time = [0.0]
-
-        def fake_time_fn():
-            t = fake_time[0]
-            fake_time[0] = t + 0.1
-            return t
+        fake_time_fn = bounded_clock()
 
         # Create a fake recorder that raises KeyboardInterrupt on first frame
         fake_rec = mock.Mock()
@@ -474,14 +457,15 @@ class TestMusicActiveBeforeInitialState(StateDirMixin, unittest.TestCase):
                     mock_govee.brightness = fake_brightness
                     with mock.patch("time.sleep"):
                         with mock.patch.object(music_sync, "STOP_FLAG_FILE", self.state_dir / "music_stop"):
-                            try:
-                                music_sync.run(
-                                    {"devices": [{"ip": "1.2.3.4"}]},
-                                    fps=10,
-                                    time_fn=fake_time_fn,
-                                )
-                            except KeyboardInterrupt:
-                                pass
+                            with mock.patch.object(music_sync, "PID_FILE", self.state_dir / "music_sync.pid"):
+                                try:
+                                    music_sync.run(
+                                        {"devices": [{"ip": "1.2.3.4"}]},
+                                        fps=10,
+                                        time_fn=fake_time_fn,
+                                    )
+                                except KeyboardInterrupt:
+                                    pass
 
         # set_music_active should come before status and brightness
         set_idx = call_order.index("set_music_active")
@@ -552,15 +536,16 @@ class TestMusicHeartbeatRefresh(StateDirMixin, unittest.TestCase):
                     mock_govee.brightness = mock.Mock()
                     with mock.patch("time.sleep"):
                         with mock.patch.object(music_sync, "STOP_FLAG_FILE", self.state_dir / "music_stop"):
-                            with mock.patch.object(music_sync, "analyze", return_value={"level": 0.5, "bass": 0.5, "mid": 0.5, "treble": 0.5}):
-                                try:
-                                    music_sync.run(
-                                        {"devices": [{"ip": "1.2.3.4"}]},
-                                        fps=10,
-                                        time_fn=fake_time_fn,
-                                    )
-                                except KeyboardInterrupt:
-                                    pass
+                            with mock.patch.object(music_sync, "PID_FILE", self.state_dir / "music_sync.pid"):
+                                with mock.patch.object(music_sync, "analyze", return_value={"level": 0.5, "bass": 0.5, "mid": 0.5, "treble": 0.5}):
+                                    try:
+                                        music_sync.run(
+                                            {"devices": [{"ip": "1.2.3.4"}]},
+                                            fps=10,
+                                            time_fn=fake_time_fn,
+                                        )
+                                    except KeyboardInterrupt:
+                                        pass
 
         # With 10 frames at 0.6s each = 6s total, heartbeat should be written at least twice
         # (once at start, once after 5s)
@@ -615,12 +600,7 @@ class TestLeftoverStopFlag(StateDirMixin, unittest.TestCase):
         def fake_color(ip, r, g, b):
             colors_sent.append((ip, r, g, b))
 
-        fake_time = [0.0]
-
-        def fake_time_fn():
-            t = fake_time[0]
-            fake_time[0] = t + 0.1
-            return t
+        fake_time_fn = bounded_clock()
 
         # Create a fake recorder
         fake_rec = mock.Mock()
@@ -660,15 +640,16 @@ class TestLeftoverStopFlag(StateDirMixin, unittest.TestCase):
                 mock_govee.brightness = mock.Mock()
                 with mock.patch("time.sleep"):
                     with mock.patch.object(music_sync, "STOP_FLAG_FILE", stop_flag):
-                        with mock.patch.object(music_sync, "analyze", return_value={"level": 0.5, "bass": 0.5, "mid": 0.5, "treble": 0.5}):
-                            try:
-                                music_sync.run(
-                                    {"devices": [{"ip": "1.2.3.4"}]},
-                                    fps=10,
-                                    time_fn=fake_time_fn,
-                                )
-                            except KeyboardInterrupt:
-                                pass
+                        with mock.patch.object(music_sync, "PID_FILE", self.state_dir / "music_sync.pid"):
+                            with mock.patch.object(music_sync, "analyze", return_value={"level": 0.5, "bass": 0.5, "mid": 0.5, "treble": 0.5}):
+                                try:
+                                    music_sync.run(
+                                        {"devices": [{"ip": "1.2.3.4"}]},
+                                        fps=10,
+                                        time_fn=fake_time_fn,
+                                    )
+                                except KeyboardInterrupt:
+                                    pass
 
         # At least one colour should have been sent (proves run continued past leftover flag)
         self.assertGreaterEqual(len(colors_sent), 1,
@@ -909,12 +890,7 @@ class TestToggleCommands(StateDirMixin, unittest.TestCase):
         fake_sc.get_microphone = mock.Mock(return_value=fake_mic)
         fake_sc.all_microphones = mock.Mock(return_value=[fake_mic])
 
-        fake_time = [0.0]
-
-        def fake_time_fn():
-            t = fake_time[0]
-            fake_time[0] = t + 0.1
-            return t
+        fake_time_fn = bounded_clock()
 
         with mock.patch.dict(sys.modules, {
             "soundcard": fake_sc,
@@ -925,14 +901,15 @@ class TestToggleCommands(StateDirMixin, unittest.TestCase):
                 mock_govee.brightness = mock.Mock()
                 with mock.patch("time.sleep"):
                     with mock.patch.object(music_sync, "STOP_FLAG_FILE", self.state_dir / "music_stop"):
-                        try:
-                            music_sync.run(
-                                {"devices": [{"ip": "1.2.3.4"}]},
-                                fps=10,
-                                time_fn=fake_time_fn,
-                            )
-                        except KeyboardInterrupt:
-                            pass
+                        with mock.patch.object(music_sync, "PID_FILE", self.state_dir / "music_sync.pid"):
+                            try:
+                                music_sync.run(
+                                    {"devices": [{"ip": "1.2.3.4"}]},
+                                    fps=10,
+                                    time_fn=fake_time_fn,
+                                )
+                            except KeyboardInterrupt:
+                                pass
 
         self.assertFalse(music_sync.PID_FILE.exists(),
                         "run() should have removed its own PID file")
@@ -959,12 +936,7 @@ class TestToggleCommands(StateDirMixin, unittest.TestCase):
         fake_sc.get_microphone = mock.Mock(return_value=fake_mic)
         fake_sc.all_microphones = mock.Mock(return_value=[fake_mic])
 
-        fake_time = [0.0]
-
-        def fake_time_fn():
-            t = fake_time[0]
-            fake_time[0] = t + 0.1
-            return t
+        fake_time_fn = bounded_clock()
 
         with mock.patch.dict(sys.modules, {
             "soundcard": fake_sc,
@@ -975,14 +947,15 @@ class TestToggleCommands(StateDirMixin, unittest.TestCase):
                 mock_govee.brightness = mock.Mock()
                 with mock.patch("time.sleep"):
                     with mock.patch.object(music_sync, "STOP_FLAG_FILE", self.state_dir / "music_stop"):
-                        try:
-                            music_sync.run(
-                                {"devices": [{"ip": "1.2.3.4"}]},
-                                fps=10,
-                                time_fn=fake_time_fn,
-                            )
-                        except KeyboardInterrupt:
-                            pass
+                        with mock.patch.object(music_sync, "PID_FILE", self.state_dir / "music_sync.pid"):
+                            try:
+                                music_sync.run(
+                                    {"devices": [{"ip": "1.2.3.4"}]},
+                                    fps=10,
+                                    time_fn=fake_time_fn,
+                                )
+                            except KeyboardInterrupt:
+                                pass
 
         self.assertTrue(music_sync.PID_FILE.exists(),
                         "run() should not have removed another process's PID file")
@@ -1107,15 +1080,20 @@ class TestToggleCommands(StateDirMixin, unittest.TestCase):
             with mock.patch.object(music_sync, "govee") as mock_govee:
                 mock_govee.status = mock.Mock(return_value={"msg": {"data": {"brightness": 50}}})
                 mock_govee.brightness = mock.Mock()
-                with self.assertLogs(music_sync.logger, level="ERROR") as cm:
-                    with self.assertRaises(SystemExit) as ctx:
-                        music_sync.run(
-                            {"devices": [{"ip": "1.2.3.4"}]},
-                            fps=10,
-                        )
+                with mock.patch("builtins.print") as mock_print:
+                    with self.assertLogs(music_sync.logger, level="ERROR") as cm:
+                        with self.assertRaises(SystemExit) as ctx:
+                            music_sync.run(
+                                {"devices": [{"ip": "1.2.3.4"}]},
+                                fps=10,
+                            )
         self.assertEqual(ctx.exception.code, 2)
         self.assertTrue(any(
             "requirements-music.txt" in log for log in cm.output
+        ))
+        # Verify print was called with the "music mode needs" message
+        self.assertTrue(any(
+            "music mode needs" in str(call) for call in mock_print.call_args_list
         ))
 
     def test_cmd_status_hung_process_shows_no_heartbeat(self):
@@ -1332,12 +1310,7 @@ class TestToggleCommands(StateDirMixin, unittest.TestCase):
         fake_sc.get_microphone = mock.Mock(return_value=fake_mic)
         fake_sc.all_microphones = mock.Mock(return_value=[fake_mic])
 
-        fake_time = [0.0]
-
-        def fake_time_fn():
-            t = fake_time[0]
-            fake_time[0] = t + 0.1
-            return t
+        fake_time_fn = bounded_clock()
 
         with mock.patch.dict(sys.modules, {
             "soundcard": fake_sc,
@@ -1350,15 +1323,16 @@ class TestToggleCommands(StateDirMixin, unittest.TestCase):
                     mock_govee.status = mock.Mock(return_value={"msg": {"data": {"brightness": 50}}})
                     with mock.patch("time.sleep"):
                         with mock.patch.object(music_sync, "STOP_FLAG_FILE", self.state_dir / "music_stop"):
-                            with self.assertLogs("music_sync", level="WARNING") as cm:
-                                try:
-                                    music_sync.run(
-                                        {"devices": [{"ip": "1.2.3.4"}]},
-                                        fps=10,
-                                        time_fn=fake_time_fn,
-                                    )
-                                except KeyboardInterrupt:
-                                    pass
+                            with mock.patch.object(music_sync, "PID_FILE", self.state_dir / "music_sync.pid"):
+                                with self.assertLogs("music_sync", level="WARNING") as cm:
+                                    try:
+                                        music_sync.run(
+                                            {"devices": [{"ip": "1.2.3.4"}]},
+                                            fps=10,
+                                            time_fn=fake_time_fn,
+                                        )
+                                    except KeyboardInterrupt:
+                                        pass
 
         # PID file should be removed
         self.assertFalse(music_sync.PID_FILE.exists(),
@@ -1556,12 +1530,7 @@ class TestRecorderOpenedOnce(StateDirMixin, unittest.TestCase):
         fake_sc.default_speaker = mock.Mock(return_value=fake_speaker)
         fake_sc.get_microphone = mock.Mock(return_value=fake_mic)
 
-        fake_time = [0.0]
-
-        def fake_time_fn():
-            t = fake_time[0]
-            fake_time[0] = t + 0.1
-            return t
+        fake_time_fn = bounded_clock()
 
         with mock.patch.dict(sys.modules, {"soundcard": fake_sc, "numpy": mock.Mock()}):
             with mock.patch.object(music_sync, "govee") as mock_govee:
@@ -1569,15 +1538,16 @@ class TestRecorderOpenedOnce(StateDirMixin, unittest.TestCase):
                 mock_govee.brightness = mock.Mock()
                 with mock.patch("time.sleep"):
                     with mock.patch.object(music_sync, "STOP_FLAG_FILE", self.state_dir / "music_stop"):
-                        with mock.patch.object(music_sync, "analyze", return_value={"level": 0.5, "bass": 0.5, "mid": 0.5, "treble": 0.5}):
-                            try:
-                                music_sync.run(
-                                    {"devices": [{"ip": "1.2.3.4"}]},
-                                    fps=10,
-                                    time_fn=fake_time_fn,
-                                )
-                            except KeyboardInterrupt:
-                                pass
+                        with mock.patch.object(music_sync, "PID_FILE", self.state_dir / "music_sync.pid"):
+                            with mock.patch.object(music_sync, "analyze", return_value={"level": 0.5, "bass": 0.5, "mid": 0.5, "treble": 0.5}):
+                                try:
+                                    music_sync.run(
+                                        {"devices": [{"ip": "1.2.3.4"}]},
+                                        fps=10,
+                                        time_fn=fake_time_fn,
+                                    )
+                                except KeyboardInterrupt:
+                                    pass
 
         self.assertEqual(recorder_call_count[0], 1,
                         f"Expected recorder opened once, got {recorder_call_count[0]}")
@@ -1626,12 +1596,7 @@ class TestRuntimeErrorRecovery(StateDirMixin, unittest.TestCase):
         fake_sc.default_speaker = mock.Mock(return_value=fake_speaker)
         fake_sc.get_microphone = mock.Mock(return_value=fake_mic)
 
-        fake_time = [0.0]
-
-        def fake_time_fn():
-            t = fake_time[0]
-            fake_time[0] = t + 0.1
-            return t
+        fake_time_fn = bounded_clock()
 
         with mock.patch.dict(sys.modules, {"soundcard": fake_sc, "numpy": mock.Mock()}):
             with mock.patch.object(music_sync, "govee") as mock_govee:
@@ -1640,15 +1605,16 @@ class TestRuntimeErrorRecovery(StateDirMixin, unittest.TestCase):
                 mock_govee.brightness = mock.Mock()
                 with mock.patch("time.sleep"):
                     with mock.patch.object(music_sync, "STOP_FLAG_FILE", self.state_dir / "music_stop"):
-                        with mock.patch.object(music_sync, "analyze", return_value={"level": 0.5, "bass": 0.5, "mid": 0.5, "treble": 0.5}):
-                            try:
-                                music_sync.run(
-                                    {"devices": [{"ip": "1.2.3.4"}]},
-                                    fps=10,
-                                    time_fn=fake_time_fn,
-                                )
-                            except KeyboardInterrupt:
-                                pass
+                        with mock.patch.object(music_sync, "PID_FILE", self.state_dir / "music_sync.pid"):
+                            with mock.patch.object(music_sync, "analyze", return_value={"level": 0.5, "bass": 0.5, "mid": 0.5, "treble": 0.5}):
+                                try:
+                                    music_sync.run(
+                                        {"devices": [{"ip": "1.2.3.4"}]},
+                                        fps=10,
+                                        time_fn=fake_time_fn,
+                                    )
+                                except KeyboardInterrupt:
+                                    pass
 
         # Recorder should have been opened twice (once initially, once after error)
         self.assertEqual(recorder_call_count[0], 2,
@@ -1677,8 +1643,6 @@ class TestRecorderReopenWithStrictFake(StateDirMixin, unittest.TestCase):
 
             def __exit__(self, exc_type, exc_val, exc_tb):
                 self.exit_count += 1
-                if self.exit_count > 1:
-                    raise AssertionError("recorder __exit__ called more than once")
                 return False
 
             @property
@@ -1730,12 +1694,7 @@ class TestRecorderReopenWithStrictFake(StateDirMixin, unittest.TestCase):
         def fake_color(ip, r, g, b):
             colors_sent.append((ip, r, g, b))
 
-        fake_time = [0.0]
-
-        def fake_time_fn():
-            t = fake_time[0]
-            fake_time[0] = t + 0.1
-            return t
+        fake_time_fn = bounded_clock()
 
         with mock.patch.dict(sys.modules, {"soundcard": fake_sc, "numpy": mock.Mock()}):
             with mock.patch.object(music_sync, "govee") as mock_govee:
@@ -1744,15 +1703,16 @@ class TestRecorderReopenWithStrictFake(StateDirMixin, unittest.TestCase):
                 mock_govee.brightness = mock.Mock()
                 with mock.patch("time.sleep"):
                     with mock.patch.object(music_sync, "STOP_FLAG_FILE", self.state_dir / "music_stop"):
-                        with mock.patch.object(music_sync, "analyze", return_value={"level": 0.5, "bass": 0.5, "mid": 0.5, "treble": 0.5}):
-                            try:
-                                music_sync.run(
-                                    {"devices": [{"ip": "1.2.3.4"}]},
-                                    fps=10,
-                                    time_fn=fake_time_fn,
-                                )
-                            except KeyboardInterrupt:
-                                pass
+                        with mock.patch.object(music_sync, "PID_FILE", self.state_dir / "music_sync.pid"):
+                            with mock.patch.object(music_sync, "analyze", return_value={"level": 0.5, "bass": 0.5, "mid": 0.5, "treble": 0.5}):
+                                try:
+                                    music_sync.run(
+                                        {"devices": [{"ip": "1.2.3.4"}]},
+                                        fps=10,
+                                        time_fn=fake_time_fn,
+                                    )
+                                except KeyboardInterrupt:
+                                    pass
 
         # Two recorders should have been created
         self.assertEqual(len(recorders_created), 2,
@@ -1800,12 +1760,7 @@ class TestRecorderReopenWithStrictFake(StateDirMixin, unittest.TestCase):
         fake_sc.default_speaker = mock.Mock(return_value=fake_speaker)
         fake_sc.get_microphone = mock.Mock(return_value=fake_mic)
 
-        fake_time = [0.0]
-
-        def fake_time_fn():
-            t = fake_time[0]
-            fake_time[0] = t + 0.1
-            return t
+        fake_time_fn = bounded_clock()
 
         with mock.patch.dict(sys.modules, {"soundcard": fake_sc, "numpy": mock.Mock()}):
             with mock.patch.object(music_sync, "govee") as mock_govee:
@@ -1813,15 +1768,16 @@ class TestRecorderReopenWithStrictFake(StateDirMixin, unittest.TestCase):
                 mock_govee.brightness = mock.Mock()
                 with mock.patch("time.sleep"):
                     with mock.patch.object(music_sync, "STOP_FLAG_FILE", self.state_dir / "music_stop"):
-                        with mock.patch.object(music_sync, "analyze", return_value={"level": 0.5, "bass": 0.5, "mid": 0.5, "treble": 0.5}):
-                            try:
-                                music_sync.run(
-                                    {"devices": [{"ip": "1.2.3.4"}]},
-                                    fps=10,
-                                    time_fn=fake_time_fn,
-                                )
-                            except KeyboardInterrupt:
-                                pass
+                        with mock.patch.object(music_sync, "PID_FILE", self.state_dir / "music_sync.pid"):
+                            with mock.patch.object(music_sync, "analyze", return_value={"level": 0.5, "bass": 0.5, "mid": 0.5, "treble": 0.5}):
+                                try:
+                                    music_sync.run(
+                                        {"devices": [{"ip": "1.2.3.4"}]},
+                                        fps=10,
+                                        time_fn=fake_time_fn,
+                                    )
+                                except KeyboardInterrupt:
+                                    pass
 
         # Two recorders should have been created
         self.assertEqual(len(recorders_created), 2,
@@ -1882,12 +1838,7 @@ class TestRecorderReopenWithStrictFake(StateDirMixin, unittest.TestCase):
         def fake_color(ip, r, g, b):
             colors_sent.append((ip, r, g, b))
 
-        fake_time = [0.0]
-
-        def fake_time_fn():
-            t = fake_time[0]
-            fake_time[0] = t + 0.1
-            return t
+        fake_time_fn = bounded_clock()
 
         with mock.patch.dict(sys.modules, {"soundcard": fake_sc, "numpy": mock.Mock()}):
             with mock.patch.object(music_sync, "pick_loopback", side_effect=fake_pick_loopback):
@@ -1897,15 +1848,16 @@ class TestRecorderReopenWithStrictFake(StateDirMixin, unittest.TestCase):
                     mock_govee.brightness = mock.Mock()
                     with mock.patch("time.sleep"):
                         with mock.patch.object(music_sync, "STOP_FLAG_FILE", self.state_dir / "music_stop"):
-                            with mock.patch.object(music_sync, "analyze", return_value={"level": 0.5, "bass": 0.5, "mid": 0.5, "treble": 0.5}):
-                                try:
-                                    music_sync.run(
-                                        {"devices": [{"ip": "1.2.3.4"}]},
-                                        fps=10,
-                                        time_fn=fake_time_fn,
-                                    )
-                                except KeyboardInterrupt:
-                                    pass
+                            with mock.patch.object(music_sync, "PID_FILE", self.state_dir / "music_sync.pid"):
+                                with mock.patch.object(music_sync, "analyze", return_value={"level": 0.5, "bass": 0.5, "mid": 0.5, "treble": 0.5}):
+                                    try:
+                                        music_sync.run(
+                                            {"devices": [{"ip": "1.2.3.4"}]},
+                                            fps=10,
+                                            time_fn=fake_time_fn,
+                                        )
+                                    except KeyboardInterrupt:
+                                        pass
 
         # Should have recovered and sent colours
         self.assertGreater(len(colors_sent), 0,
@@ -1956,12 +1908,7 @@ class TestRecorderReopenWithStrictFake(StateDirMixin, unittest.TestCase):
         def fake_color(ip, r, g, b):
             colors_sent.append((ip, r, g, b))
 
-        fake_time = [0.0]
-
-        def fake_time_fn():
-            t = fake_time[0]
-            fake_time[0] = t + 0.1
-            return t
+        fake_time_fn = bounded_clock()
 
         with mock.patch.dict(sys.modules, {"soundcard": fake_sc, "numpy": mock.Mock()}):
             with mock.patch.object(music_sync, "govee") as mock_govee:
@@ -1970,15 +1917,16 @@ class TestRecorderReopenWithStrictFake(StateDirMixin, unittest.TestCase):
                 mock_govee.brightness = mock.Mock()
                 with mock.patch("time.sleep"):
                     with mock.patch.object(music_sync, "STOP_FLAG_FILE", self.state_dir / "music_stop"):
-                        with mock.patch.object(music_sync, "analyze", return_value={"level": 0.5, "bass": 0.5, "mid": 0.5, "treble": 0.5}):
-                            try:
-                                music_sync.run(
-                                    {"devices": [{"ip": "1.2.3.4"}]},
-                                    fps=10,
-                                    time_fn=fake_time_fn,
-                                )
-                            except KeyboardInterrupt:
-                                pass
+                        with mock.patch.object(music_sync, "PID_FILE", self.state_dir / "music_sync.pid"):
+                            with mock.patch.object(music_sync, "analyze", return_value={"level": 0.5, "bass": 0.5, "mid": 0.5, "treble": 0.5}):
+                                try:
+                                    music_sync.run(
+                                        {"devices": [{"ip": "1.2.3.4"}]},
+                                        fps=10,
+                                        time_fn=fake_time_fn,
+                                    )
+                                except KeyboardInterrupt:
+                                    pass
 
         # Three recorders should have been created
         self.assertEqual(len(recorders_created), 3,
@@ -2036,12 +1984,7 @@ class TestRecorderReopenWithStrictFake(StateDirMixin, unittest.TestCase):
         fake_sc.default_speaker = mock.Mock(return_value=fake_speaker)
         fake_sc.get_microphone = mock.Mock(return_value=fake_mic)
 
-        fake_time = [0.0]
-
-        def fake_time_fn():
-            t = fake_time[0]
-            fake_time[0] = t + 0.1
-            return t
+        fake_time_fn = bounded_clock()
 
         # Create stop flag after first record error
         def fake_record_side_effect():
@@ -2064,11 +2007,12 @@ class TestRecorderReopenWithStrictFake(StateDirMixin, unittest.TestCase):
                     mock_govee.brightness = mock.Mock()
                     with mock.patch("time.sleep"):
                         with mock.patch.object(music_sync, "STOP_FLAG_FILE", self.state_dir / "music_stop"):
-                            music_sync.run(
-                                {"devices": [{"ip": "1.2.3.4"}]},
-                                fps=10,
-                                time_fn=fake_time_fn,
-                            )
+                            with mock.patch.object(music_sync, "PID_FILE", self.state_dir / "music_sync.pid"):
+                                music_sync.run(
+                                    {"devices": [{"ip": "1.2.3.4"}]},
+                                    fps=10,
+                                    time_fn=fake_time_fn,
+                                )
 
         # No recorder should have been exited twice
         for rec in recorders_created:

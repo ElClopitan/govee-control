@@ -6,6 +6,26 @@ from pathlib import Path
 from unittest import mock
 
 
+def bounded_clock(step=0.1, limit=1000.0):
+    """Return a fake clock function that raises AssertionError past `limit` seconds.
+
+    Each call returns the current fake time and advances by `step`.
+    Once the time passes `limit`, raises AssertionError to catch infinite loops.
+    """
+    state = {"time": 0.0}
+
+    def clock():
+        t = state["time"]
+        state["time"] = t + step
+        if state["time"] > limit:
+            raise AssertionError(
+                "run() did not terminate (fake clock passed %s s)" % limit
+            )
+        return t
+
+    return clock
+
+
 class StateDirMixin:
     """Mixin that provides a temporary state directory for tests.
 
