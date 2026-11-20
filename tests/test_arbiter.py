@@ -210,6 +210,82 @@ class TestWeatherBlocked(StateDirMixin, unittest.TestCase):
         self.assertFalse(arbiter.weather_blocked())
 
 
+class TestGetMode(StateDirMixin, unittest.TestCase):
+    """Test get_mode() function."""
+
+    def test_missing_file_returns_off(self):
+        """get_mode returns 'off' when mode.json doesn't exist."""
+        self.assertEqual(arbiter.get_mode(), "off")
+
+    def test_empty_file_returns_off(self):
+        """get_mode returns 'off' when mode.json is empty."""
+        (arbiter.STATE_DIR / "mode.json").write_text("")
+        self.assertEqual(arbiter.get_mode(), "off")
+
+    def test_bad_json_returns_off(self):
+        """get_mode returns 'off' when mode.json has bad JSON."""
+        (arbiter.STATE_DIR / "mode.json").write_text("not json")
+        self.assertEqual(arbiter.get_mode(), "off")
+
+    def test_wrong_shape_returns_off(self):
+        """get_mode returns 'off' when mode.json is not an object."""
+        (arbiter.STATE_DIR / "mode.json").write_text("[]")
+        self.assertEqual(arbiter.get_mode(), "off")
+
+    def test_unknown_mode_returns_off(self):
+        """get_mode returns 'off' for unknown mode."""
+        (arbiter.STATE_DIR / "mode.json").write_text('{"mode": "disco"}')
+        self.assertEqual(arbiter.get_mode(), "off")
+
+    def test_valid_mode_returns_mode(self):
+        """get_mode returns the mode for valid mode.json."""
+        (arbiter.STATE_DIR / "mode.json").write_text('{"mode": "weather"}')
+        self.assertEqual(arbiter.get_mode(), "weather")
+
+    def test_all_modes_valid(self):
+        """get_mode returns each valid mode."""
+        for mode in arbiter.MODES:
+            (arbiter.STATE_DIR / "mode.json").write_text(json.dumps({"mode": mode}))
+            self.assertEqual(arbiter.get_mode(), mode)
+
+
+class TestSetMode(StateDirMixin, unittest.TestCase):
+    """Test set_mode() function."""
+
+    def test_round_trip_all_modes(self):
+        """set_mode then get_mode returns the same mode for all modes."""
+        for mode in arbiter.MODES:
+            arbiter.set_mode(mode)
+            self.assertEqual(arbiter.get_mode(), mode)
+
+    def test_unknown_mode_raises(self):
+        """set_mode raises ValueError for unknown mode."""
+        with self.assertRaises(ValueError):
+            arbiter.set_mode("disco")
+
+    def test_unknown_mode_leaves_file_unchanged(self):
+        """set_mode with unknown mode doesn't change mode.json."""
+        arbiter.set_mode("weather")
+        try:
+            arbiter.set_mode("disco")
+        except ValueError:
+            pass
+        self.assertEqual(arbiter.get_mode(), "weather")
+
+    def test_creates_state_dir(self):
+        """set_mode creates state directory if needed."""
+        import shutil
+        shutil.rmtree(self.state_dir)
+        arbiter.set_mode("game")
+        self.assertEqual(arbiter.get_mode(), "game")
+
+    def test_no_temp_file_left(self):
+        """set_mode doesn't leave temp files behind."""
+        arbiter.set_mode("music")
+        tmp_files = list(self.state_dir.glob("mode.json.tmp.*"))
+        self.assertEqual(len(tmp_files), 0)
+
+
 class TestCapBrightness(unittest.TestCase):
     """Test cap_brightness() function."""
 

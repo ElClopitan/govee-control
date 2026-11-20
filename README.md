@@ -313,6 +313,34 @@ Concurrent `needs-input` and `clear` hooks are serialised with `state/agent_sign
 
 When a higher-priority source becomes inactive, the next source in the priority chain re-applies its colour on the next sync cycle.
 
+## Modes
+
+The owner picks ONE mode by hand; only that mode may drive the strips. The agent
+signal (orange) stays above everything.
+
+```bash
+# Get the current mode
+python mode.py get
+
+# Set a mode
+python mode.py set weather
+python mode.py set game
+python mode.py set music
+python mode.py set off
+
+# Dry-run (print what would be done without doing it)
+python mode.py set off --dry-run
+```
+
+Modes:
+- `off` — no mode drives the strips; turns lights off if no signal is active
+- `weather` — weather_sync.py may drive the strips
+- `game` — game_sync.py may drive the strips
+- `music` — music_sync.py may drive the strips
+
+If `state/mode.json` is missing, unreadable, or contains an unknown mode, the
+current mode is treated as `off`.
+
 ### Per-session signal markers
 
 When multiple Claude sessions are running, each session that raises the signal

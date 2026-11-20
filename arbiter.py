@@ -13,6 +13,8 @@ State files:
 - state/game_active.json: exists when game sync is active, contains {"profile": "<name>"}
   The file's mtime is used as a heartbeat; if it's older than GAME_STALE_SECONDS,
   game_active() returns False so weather sync can resume.
+- state/mode.json: contains {"mode": "<mode>"} where mode is one of off/weather/game/music.
+  The owner picks ONE mode by hand; only that mode may drive the strips.
 """
 
 import json
@@ -38,6 +40,10 @@ BUILTIN_DEFAULT = {"color": "white", "brightness": 40}
 # Default maximum brightness for automatic scripts (agent signal, game sync,
 # weather sync). Manual CLI brightness commands are not capped.
 MAX_BRIGHTNESS_DEFAULT = 80
+
+# Mode switch: the owner picks ONE mode by hand.
+# Only that mode may drive the strips (agent signal stays above everything).
+MODES = ("off", "weather", "game", "music")
 
 
 def cap_brightness(value, cfg, allow_flash=False):
@@ -188,6 +194,70 @@ def clear_music_active():
     path = music_file()
     if path.exists():
         path.unlink()
+
+
+def mode_file():
+    """Return the path to the mode state file."""
+    return STATE_DIR / "mode.json"
+
+
+def get_mode():
+    """Get the current mode from mode.json.
+
+    Returns the mode string ("off", "weather", "game", or "music").
+    Missing file, unreadable file, bad JSON, wrong shape, or unknown mode
+    all return "off". Never raises.
+    """
+    path = mode_file()
+    if not path.exists():
+        return "off"
+    try:
+        with open(path, "r") as f:
+            data = json.load(f)
+    except (ValueError, OSError):
+        return "off"
+    if not isinstance(data, dict):
+        return "off"
+    mode = data.get("mode")
+    if mode not in MODES:
+        return "off"
+    return mode
+
+
+def set_mode(mode):
+    """Set the current mode.
+
+    Args:
+        mode: One of "off", "weather", "game", "music".
+
+    Raises:
+        ValueError: If mode is not in MODES.
+    """
+    if mode not in MODES:
+        raise ValueError(f"mode must be one of {MODES}, got {mode!r}")
+    STATE_DIR.mkdir(parents=True, exist_ok=True)
+    target = mode_file()
+    tmp = target.with_name(f"mode.json.tmp.{os.getpid()}")
+    with open(tmp, "w") as f:
+        json.dump({"mode": mode}, f)
+        f.flush()
+        os.fsync(f.fileno())
+    # Atomic replace; retry on Windows PermissionError (reader has file open)
+    for attempt in range(3):
+        try:
+            os.replace(tmp, target)
+            return
+        except PermissionError:
+            if attempt < 2:
+                time.sleep(0.01)
+            else:
+                # Fall back: update mtime of existing file
+                if target.exists():
+                    os.utime(target, None)
+                else:
+                    raise
+                # Clean up the temp file that couldn't be replaced
+                tmp.unlink(missing_ok=True)
 
 
 def weather_blocked():
