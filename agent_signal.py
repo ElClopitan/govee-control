@@ -415,6 +415,17 @@ def sweep_and_restore(config_path=None, dry_run=False):
             print("no active signal; nothing to do")
             return False
 
+        # Re-check for active markers under the lock (race condition fix).
+        # A needs-input command may have written saved_state.json but not yet
+        # its session marker; if we restored now we'd clear a signal that's
+        # being set right now.
+        active = get_active_session_markers(max_age_hours)
+        if active:
+            if stale_count > 0:
+                log_signal_event("clear", f"stale-swept n={stale_count}")
+                print(f"clear stale-swept n={stale_count}")
+            return False
+
         saved = load_saved_state()
         try:
             restore_state(devices, signal_cfg, cfg, default_cfg=default_cfg, dry_run=dry_run, saved=saved)
