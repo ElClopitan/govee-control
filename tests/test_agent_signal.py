@@ -3284,6 +3284,91 @@ class TestSweepAndRestore(StateDirMixin, unittest.TestCase):
         result = agent_signal.sweep_and_restore(config_path=str(no_devices_path))
         self.assertFalse(result)
 
+    @mock.patch("agent_signal.govee.color")
+    @mock.patch("agent_signal.govee.brightness")
+    @mock.patch("agent_signal.govee.turn")
+    def test_sweep_and_restore_race_with_needs_input(
+        self, mock_turn, mock_brightness, mock_color
+    ):
+        """sweep_and_restore does not clear a signal being set right now.
+
+        Simulates the race: needs-input has written saved_state.json but not
+        yet its session marker. sweep_and_restore acquires the lock, sees the
+        signal, and would restore — but the re-check under the lock catches
+        the marker that needs-input writes while holding the lock.
+        """
+        # Create signal file (saved_state.json) but no session markers yet
+        signal_path = arbiter.signal_file()
+        signal_path.parent.mkdir(parents=True, exist_ok=True)
+        signal_path.write_text("[]")
+
+        # Patch acquire_lock to write a marker (simulating needs-input writing
+        # its marker while sweep is waiting for the lock)
+        def fake_acquire_lock(dry_run=False):
+            sessions_dir = agent_signal.signal_sessions_dir()
+            sessions_dir.mkdir(parents=True, exist_ok=True)
+            from datetime import datetime, timezone
+            now = datetime.now(timezone.utc).isoformat()
+            (sessions_dir / "live-session").write_text(
+                json.dumps({"pid": os.getpid(), "created": now})
+            )
+            return True
+
+        with mock.patch("agent_signal.acquire_lock", side_effect=fake_acquire_lock):
+            with mock.patch("agent_signal.pid_alive", return_value=True):
+                result = agent_signal.sweep_and_restore(config_path=str(self.config_path))
+
+        # Should NOT have restored (live marker was detected under the lock)
+        self.assertFalse(result)
+        mock_color.assert_not_called()
+        # Signal file should still be there
+        self.assertTrue(signal_path.exists())
+        # Marker should still be there
+        sessions_dir = agent_signal.signal_sessions_dir()
+        self.assertTrue((sessions_dir / "live-session").exists())
+
+    def test_marker_is_stale_handles_corrupt_json(self):
+        """_marker_is_stale handles null, number, and naive timestamp markers."""
+        sessions_dir = agent_signal.signal_sessions_dir()
+        sessions_dir.mkdir(parents=True, exist_ok=True)
+        from datetime import datetime, timezone
+
+        now = datetime.now(timezone.utc)
+
+        # null JSON -> AttributeError on .get -> stale
+        null_marker = sessions_dir / "null-marker"
+        null_marker.write_text("null")
+        self.assertTrue(agent_signal._marker_is_stale(null_marker, now, 2))
+
+        # Number JSON -> AttributeError on .get -> stale
+        num_marker = sessions_dir / "num-marker"
+        num_marker.write_text("42")
+        self.assertTrue(agent_signal._marker_is_stale(num_marker, now, 2))
+
+        # Naive ISO timestamp (no offset) -> TypeError on aware - naive -> stale
+        naive_marker = sessions_dir / "naive-marker"
+        naive_marker.write_text("2026-01-01T00:00:00")
+        self.assertTrue(agent_signal._marker_is_stale(naive_marker, now, 2))
+
+    def test_get_active_session_markers_handles_corrupt_markers(self):
+        """get_active_session_markers does not raise on corrupt markers."""
+        sessions_dir = agent_signal.signal_sessions_dir()
+        sessions_dir.mkdir(parents=True, exist_ok=True)
+
+        # Write corrupt markers
+        (sessions_dir / "null-marker").write_text("null")
+        (sessions_dir / "num-marker").write_text("42")
+        (sessions_dir / "naive-marker").write_text("2026-01-01T00:00:00")
+
+        # Should not raise
+        active = agent_signal.get_active_session_markers()
+
+        # All corrupt markers should be treated as stale and deleted
+        self.assertEqual(active, [])
+        self.assertFalse((sessions_dir / "null-marker").exists())
+        self.assertFalse((sessions_dir / "num-marker").exists())
+        self.assertFalse((sessions_dir / "naive-marker").exists())
+
 
 class TestSweepThrottle(unittest.TestCase):
     """Test sweep_and_restore throttle in game_sync and weather_sync loops."""
@@ -3393,6 +3478,61 @@ class TestSweepThrottle(unittest.TestCase):
 
             # sweep_and_restore should be called twice: at t=0 and t=60
             self.assertEqual(mock_sweep.call_count, 2)
+
+    @mock.patch("agent_signal.sweep_and_restore")
+    @mock.patch("game_sync.running_processes")
+    @mock.patch("govee.color")
+    @mock.patch("govee.brightness")
+    @mock.patch("time.monotonic")
+    @mock.patch("time.sleep")
+    def test_game_sync_logs_sweep_failure(
+        self, mock_sleep, mock_monotonic, mock_brightness, mock_color, mock_processes, mock_sweep
+    ):
+        """game_sync logs a warning when sweep_and_restore raises."""
+        import arbiter
+
+        # Create a temp state dir
+        import tempfile
+        from pathlib import Path
+        tmpdir = tempfile.TemporaryDirectory()
+        self.addCleanup(tmpdir.cleanup)
+        state_dir = Path(tmpdir.name)
+
+        with mock.patch.object(arbiter, "STATE_DIR", state_dir):
+            # Create signal file
+            signal_path = arbiter.signal_file()
+            signal_path.parent.mkdir(parents=True, exist_ok=True)
+            signal_path.write_text("[]")
+
+            mock_processes.return_value = {"testgame.exe"}
+            config = {
+                "devices": [{"name": "left", "ip": "192.168.1.50"}],
+                "games": [
+                    {"name": "Test Game", "exe": "testgame.exe", "color": "red", "brightness": 80},
+                ],
+                "default": {"color": "white", "brightness": 40},
+            }
+
+            # Make sweep_and_restore raise
+            mock_sweep.side_effect = RuntimeError("test sweep failure")
+
+            mock_monotonic.return_value = 0
+
+            call_count = [0]
+            def sleep_side_effect(seconds):
+                call_count[0] += 1
+                if call_count[0] >= 2:
+                    raise KeyboardInterrupt()
+            mock_sleep.side_effect = sleep_side_effect
+
+            with self.assertLogs("game_sync", level="WARNING") as log_ctx:
+                try:
+                    game_sync.run(config, interval=1)
+                except KeyboardInterrupt:
+                    pass
+
+            # Should have logged the warning
+            self.assertTrue(any("sweep_and_restore failed" in record.message for record in log_ctx.records))
 
 
 if __name__ == "__main__":
