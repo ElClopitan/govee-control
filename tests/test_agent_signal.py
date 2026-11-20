@@ -445,7 +445,7 @@ class TestSignalClear(StateDirMixin, unittest.TestCase):
     ):
         """clear with corrupt JSON prints only 'signal cleared' (no 'no active signal' message)."""
         import io
-        from contextlib import redirect_stdout
+        from contextlib import redirect_stdout, redirect_stderr
 
         arbiter.signal_file().parent.mkdir(parents=True, exist_ok=True)
         arbiter.signal_file().write_text("{")
@@ -455,12 +455,14 @@ class TestSignalClear(StateDirMixin, unittest.TestCase):
         args.config = str(self.config_path)
         args.dry_run = False
 
-        # Capture stdout
-        output = io.StringIO()
-        with redirect_stdout(output):
+        # Capture stdout and stderr
+        stdout_capture = io.StringIO()
+        stderr_capture = io.StringIO()
+        with redirect_stdout(stdout_capture), redirect_stderr(stderr_capture):
             agent_signal.cmd_clear(args)
 
-        stdout = output.getvalue()
+        stdout = stdout_capture.getvalue()
+        stderr = stderr_capture.getvalue()
         # Should print "signal cleared" exactly once
         self.assertEqual(stdout.count("signal cleared"), 1)
         # Should NOT print "no active signal; nothing to do"
@@ -469,6 +471,8 @@ class TestSignalClear(StateDirMixin, unittest.TestCase):
         self.assertNotIn("restored saved state", stdout)
         # Should NOT print "deleted ..."
         self.assertNotIn("deleted", stdout)
+        # stderr should contain the parse warning
+        self.assertIn("failed to parse saved state", stderr)
 
 
 class TestOSErrorHandling(StateDirMixin, unittest.TestCase):
@@ -1217,6 +1221,80 @@ class TestSignalStateFiltering(StateDirMixin, unittest.TestCase):
         # Device 2 (non-signal colour) should be restored
         mock_color.assert_any_call("192.168.1.51", 176, 190, 197, kelvin=0)
         mock_brightness.assert_any_call("192.168.1.51", 50)
+
+    @mock.patch("agent_signal.time.sleep")
+    @mock.patch("agent_signal.govee.status")
+    @mock.patch("agent_signal.govee.turn")
+    @mock.patch("agent_signal.govee.brightness")
+    @mock.patch("agent_signal.govee.color")
+    def test_save_state_all_signal_color_logs_skipped(
+        self, mock_color, mock_brightness, mock_turn, mock_status, mock_sleep
+    ):
+        """When all strips show the signal colour, log 'already shows the signal colour' for each,
+        and do NOT log 'no device answered'."""
+        import io
+        from contextlib import redirect_stderr
+
+        # Both devices show the signal colour (#ff6a00 = 255, 106, 0)
+        mock_status.side_effect = [
+            {"msg": {"data": {"onOff": 1, "brightness": 100, "color": {"r": 255, "g": 106, "b": 0}}}},
+            {"msg": {"data": {"onOff": 1, "brightness": 100, "color": {"r": 255, "g": 106, "b": 0}}}},
+        ]
+
+        args = mock.Mock()
+        args.command = "needs-input"
+        args.config = str(self.config_path)
+        args.dry_run = False
+
+        stderr_capture = io.StringIO()
+        with redirect_stderr(stderr_capture):
+            agent_signal.cmd_needs_input(args)
+
+        stderr = stderr_capture.getvalue()
+
+        # Should log "already shows the signal colour" twice
+        self.assertEqual(stderr.count("already shows the signal colour"), 2)
+        # Should NOT log "no device answered"
+        self.assertNotIn("no device answered", stderr)
+
+        # Saved file should be []
+        saved = json.loads(arbiter.signal_file().read_text())
+        self.assertEqual(saved, [])
+
+    @mock.patch("agent_signal.time.sleep")
+    @mock.patch("agent_signal.govee.turn")
+    @mock.patch("agent_signal.govee.brightness")
+    @mock.patch("agent_signal.govee.color")
+    def test_clear_object_not_list_stderr_warning(
+        self, mock_color, mock_brightness, mock_turn, mock_sleep
+    ):
+        """clear with a file containing an object (not a list): stderr has 'saved state is not a list',
+        stdout is exactly 'signal cleared'."""
+        import io
+        from contextlib import redirect_stdout, redirect_stderr
+
+        arbiter.signal_file().parent.mkdir(parents=True, exist_ok=True)
+        arbiter.signal_file().write_text('{"ip": "192.168.1.50"}')
+
+        args = mock.Mock()
+        args.command = "clear"
+        args.config = str(self.config_path)
+        args.dry_run = False
+
+        stdout_capture = io.StringIO()
+        stderr_capture = io.StringIO()
+        with redirect_stdout(stdout_capture), redirect_stderr(stderr_capture):
+            agent_signal.cmd_clear(args)
+
+        stdout = stdout_capture.getvalue()
+        stderr = stderr_capture.getvalue()
+
+        # stderr should contain the warning
+        self.assertIn("saved state is not a list", stderr)
+        # stdout should be exactly "signal cleared" on one line
+        self.assertEqual(stdout.strip(), "signal cleared")
+        # No "deleted" in stdout
+        self.assertNotIn("deleted", stdout)
 
 
 class TestClearWithNullDefault(StateDirMixin, unittest.TestCase):

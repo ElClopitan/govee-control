@@ -209,6 +209,8 @@ def save_state(devices, signal_cfg, dry_run=False):
 
     deadline = time.time() + SAVE_STATE_BUDGET
     states = []
+    answered = 0
+    skipped = 0
     for dev in devices:
         ip = dev["ip"]
         resp = None
@@ -229,6 +231,7 @@ def save_state(devices, signal_cfg, dry_run=False):
                 time.sleep(sleep_time)
 
         if resp:
+            answered += 1
             data = resp.get("msg", {}).get("data", {})
             entry = {
                 "ip": ip,
@@ -240,10 +243,13 @@ def save_state(devices, signal_cfg, dry_run=False):
             # Skip saving if the device is already showing the signal colour
             if not is_signal_state(entry, signal_cfg):
                 states.append(entry)
+            else:
+                skipped += 1
+                print(f"info: {ip} already shows the signal colour; not saving it (clear will apply the default)", file=sys.stderr)
         else:
             print(f"warning: no status response from {ip}", file=sys.stderr)
 
-    if not states:
+    if answered == 0:
         print("warning: no device answered devStatus; writing empty marker", file=sys.stderr)
 
     with open(signal_path, "w") as f:
@@ -350,9 +356,13 @@ def set_signal_color(devices, signal_cfg, cfg, dry_run=False):
             print(f"[dry-run] set {color_str} at {brightness}% on all devices")
 
 
-def restore_state(devices, signal_cfg, cfg, default_cfg=None, dry_run=False, quiet=False):
-    """Restore saved state. Returns True if state was restored, False if none."""
-    saved = load_saved_state(quiet=quiet)
+def restore_state(devices, signal_cfg, cfg, default_cfg=None, dry_run=False, saved=None):
+    """Restore saved state. Returns True if state was restored, False if none.
+
+    If saved is None, loads it from the saved state file.
+    """
+    if saved is None:
+        saved = load_saved_state()
 
     if saved is not None:
         # Build a map of saved states by IP
@@ -505,17 +515,16 @@ def cmd_clear(args):
             print("no active signal; nothing to do")
             return
 
-        # Check if the saved state is corrupt before restoring
-        saved = load_saved_state(quiet=True)
-        was_corrupt = saved == []
+        # Load saved state once, without quiet, so warnings go to stderr
+        saved = load_saved_state()
 
         try:
-            restore_state(devices, signal_cfg, cfg, default_cfg=default_cfg, dry_run=args.dry_run, quiet=was_corrupt)
+            restore_state(devices, signal_cfg, cfg, default_cfg=default_cfg, dry_run=args.dry_run, saved=saved)
         except OSError as e:
             print(f"warning: could not restore lights: {e}", file=sys.stderr)
             log_signal_event("clear", "oserror", hook_input)
             return
-        delete_saved_state(dry_run=args.dry_run, quiet=was_corrupt)
+        delete_saved_state(dry_run=args.dry_run, quiet=not saved)
         log_signal_event("clear", "applied", hook_input)
         print("signal cleared")
     finally:
