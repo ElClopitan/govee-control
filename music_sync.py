@@ -691,6 +691,15 @@ def run(config, fps=None, verbose=False, log_file=None, time_fn=None):
         # Clear music active state
         arbiter.clear_music_active()
 
+        # Clean up our own PID file if we wrote it
+        try:
+            if PID_FILE.exists():
+                content = PID_FILE.read_text().strip()
+                if content == str(os.getpid()):
+                    PID_FILE.unlink(missing_ok=True)
+        except (OSError, ValueError):
+            pass
+
         # Don't restore over an active signal (agent_signal clear will handle it)
         if arbiter.signal_active():
             logger.info("signal active; not restoring (agent_signal clear will)")
