@@ -454,6 +454,20 @@ def _remove_pid():
     PID_FILE.unlink(missing_ok=True)
 
 
+def _remove_own_pid_file():
+    """Remove the PID file only if it contains our own PID.
+
+    Safe to call on every exit path; ignores errors.
+    """
+    try:
+        if PID_FILE.exists():
+            content = PID_FILE.read_text().strip()
+            if content == str(os.getpid()):
+                PID_FILE.unlink(missing_ok=True)
+    except (OSError, ValueError):
+        pass
+
+
 def _remove_stop_flag():
     """Remove the stop flag file."""
     STOP_FLAG_FILE.unlink(missing_ok=True)
@@ -612,268 +626,268 @@ def run(config, fps=None, verbose=False, log_file=None, time_fn=None):
             format="%(asctime)s %(levelname)s %(message)s",
         )
 
-    # Get music config
-    music_cfg = config.get("music", {})
-    if fps is None:
-        fps = music_cfg.get("fps", DEFAULT_FPS)
-    fps = max(MIN_FPS, min(MAX_FPS, fps))
-    smoothing = music_cfg.get("smoothing", DEFAULT_SMOOTHING)
-
-    devices = config.get("devices", [])
-    if not devices:
-        logger.error("No devices configured")
-        sys.exit(1)
-
-    # Try to import soundcard/numpy
     try:
-        import soundcard as sc
-        import numpy as np
-    except ImportError:
-        msg = "music mode needs: python -m pip install --user -r requirements-music.txt"
-        print(msg)
-        logger.error(msg)
-        sys.exit(2)
+        # Get music config
+        music_cfg = config.get("music", {})
+        if fps is None:
+            fps = music_cfg.get("fps", DEFAULT_FPS)
+        fps = max(MIN_FPS, min(MAX_FPS, fps))
+        smoothing = music_cfg.get("smoothing", DEFAULT_SMOOTHING)
 
-    # Find loopback microphone for the default speaker
-    loopback = pick_loopback(sc)
-    if loopback is None:
-        logger.error("No loopback audio device found")
-        sys.exit(1)
+        devices = config.get("devices", [])
+        if not devices:
+            logger.error("No devices configured")
+            sys.exit(1)
 
-    logger.info("Using audio device: %s", loopback.name)
+        # Try to import soundcard/numpy
+        try:
+            import soundcard as sc
+            import numpy as np
+        except ImportError:
+            msg = "music mode needs: python -m pip install --user -r requirements-music.txt"
+            print(msg)
+            logger.error(msg)
+            sys.exit(2)
 
-    # Analysis parameters
-    sample_rate = 44100
-    frame_duration = 1.0 / fps
-    samples_per_frame = int(sample_rate * frame_duration)
+        # Find loopback microphone for the default speaker
+        loopback = pick_loopback(sc)
+        if loopback is None:
+            logger.error("No loopback audio device found")
+            sys.exit(1)
 
-    # Smoothing state
-    prev_features = None
-    last_color = None
-    last_frame_time = {}
-    last_error_time = None
-    last_heartbeat_time = 0.0
-    signal_was_active = False
+        logger.info("Using audio device: %s", loopback.name)
 
-    logger.info("Music sync started (fps=%d, smoothing=%.2f)", fps, smoothing)
-    logger.info("Press Ctrl+C to stop")
+        # Analysis parameters
+        sample_rate = 44100
+        frame_duration = 1.0 / fps
+        samples_per_frame = int(sample_rate * frame_duration)
 
-    # Clear any leftover stop flag from a previous run
-    _remove_stop_flag()
+        # Smoothing state
+        prev_features = None
+        last_color = None
+        last_frame_time = {}
+        last_error_time = None
+        last_heartbeat_time = 0.0
+        signal_was_active = False
 
-    # Mark music sync as active BEFORE reading initial state, so weather/game
-    # don't send during the status/brightness queries
-    arbiter.set_music_active()
+        logger.info("Music sync started (fps=%d, smoothing=%.2f)", fps, smoothing)
+        logger.info("Press Ctrl+C to stop")
 
-    # Recorder is opened lazily; None means "not currently open"
-    rec = None
+        # Clear any leftover stop flag from a previous run
+        _remove_stop_flag()
 
-    try:
-        # Record initial state for restoration
-        initial_states = []
-        for dev in devices:
-            ip = dev["ip"]
-            try:
-                resp = govee.status(ip, timeout=2)
-                if resp:
-                    initial_states.append({"ip": ip, "state": resp})
-                    logger.info("Recorded initial state for %s", ip)
-                else:
-                    logger.warning("No response from %s, will not restore", ip)
+        # Mark music sync as active BEFORE reading initial state, so weather/game
+        # don't send during the status/brightness queries
+        arbiter.set_music_active()
+
+        # Recorder is opened lazily; None means "not currently open"
+        rec = None
+
+        try:
+            # Record initial state for restoration
+            initial_states = []
+            for dev in devices:
+                ip = dev["ip"]
+                try:
+                    resp = govee.status(ip, timeout=2)
+                    if resp:
+                        initial_states.append({"ip": ip, "state": resp})
+                        logger.info("Recorded initial state for %s", ip)
+                    else:
+                        logger.warning("No response from %s, will not restore", ip)
+                        initial_states.append({"ip": ip, "state": None})
+                except OSError as e:
+                    logger.warning("Failed to get status from %s: %s", ip, e)
                     initial_states.append({"ip": ip, "state": None})
-            except OSError as e:
-                logger.warning("Failed to get status from %s: %s", ip, e)
-                initial_states.append({"ip": ip, "state": None})
 
-        # Set brightness once at start
-        brightness = arbiter.cap_brightness(80, config)
-        for dev in devices:
-            ip = dev["ip"]
-            try:
-                govee.brightness(ip, brightness)
-                logger.info("Set brightness %d on %s", brightness, ip)
-            except OSError as e:
-                logger.error("Failed to set brightness on %s: %s", ip, e)
+            # Set brightness once at start
+            brightness = arbiter.cap_brightness(80, config)
+            for dev in devices:
+                ip = dev["ip"]
+                try:
+                    govee.brightness(ip, brightness)
+                    logger.info("Set brightness %d on %s", brightness, ip)
+                except OSError as e:
+                    logger.error("Failed to set brightness on %s: %s", ip, e)
 
-        while True:
-                frame_start = time_fn()
+            while True:
+                    frame_start = time_fn()
 
-                # Check for stop flag first (before signal check) so stop works
-                # even while an agent signal is active
-                if STOP_FLAG_FILE.exists():
-                    logger.info("stop flag detected; exiting")
-                    break
+                    # Check for stop flag first (before signal check) so stop works
+                    # even while an agent signal is active
+                    if STOP_FLAG_FILE.exists():
+                        logger.info("stop flag detected; exiting")
+                        break
 
-                # Refresh heartbeat at least every HEARTBEAT_INTERVAL seconds
-                if frame_start - last_heartbeat_time >= HEARTBEAT_INTERVAL:
-                    arbiter.set_music_active()
-                    last_heartbeat_time = frame_start
+                    # Refresh heartbeat at least every HEARTBEAT_INTERVAL seconds
+                    if frame_start - last_heartbeat_time >= HEARTBEAT_INTERVAL:
+                        arbiter.set_music_active()
+                        last_heartbeat_time = frame_start
 
-                # Check signal priority: if agent signal is active, don't send frames
-                if arbiter.signal_active():
-                    if not signal_was_active:
-                        logger.info("signal active; pausing music sync")
-                    signal_was_active = True
-                    # Don't send any frames while signal is active
+                    # Check signal priority: if agent signal is active, don't send frames
+                    if arbiter.signal_active():
+                        if not signal_was_active:
+                            logger.info("signal active; pausing music sync")
+                        signal_was_active = True
+                        # Don't send any frames while signal is active
+                        # Sleep to maintain frame rate
+                        elapsed = time_fn() - frame_start
+                        sleep_time = frame_duration - elapsed
+                        if sleep_time > 0:
+                            time.sleep(sleep_time)
+                        continue
+
+                    signal_was_active = False
+
+                    # If no recorder is open, try to open one
+                    if rec is None:
+                        new_loopback = pick_loopback(sc)
+                        if new_loopback is not None:
+                            logger.info("Opening recorder on %s", new_loopback.name)
+                            try:
+                                rec = new_loopback.recorder(
+                                    samplerate=sample_rate, channels=1
+                                ).__enter__()
+                            except Exception as enter_err:
+                                if last_error_time is None or (frame_start - last_error_time) >= ERROR_LOG_INTERVAL:
+                                    logger.error("Failed to enter recorder: %s", enter_err)
+                                    last_error_time = frame_start
+                                time.sleep(1.0)
+                                continue
+                        else:
+                            if last_error_time is None or (frame_start - last_error_time) >= ERROR_LOG_INTERVAL:
+                                logger.error("No loopback device found")
+                                last_error_time = frame_start
+                            time.sleep(1.0)
+                            continue
+
+                    # Capture audio
+                    try:
+                        raw = rec.record(numframes=samples_per_frame)
+                    except Exception as e:
+                        if last_error_time is None or (frame_start - last_error_time) >= ERROR_LOG_INTERVAL:
+                            logger.error("Audio capture error: %s", e)
+                            last_error_time = frame_start
+                        time.sleep(1.0)
+                        # Exit the old recorder and forget it
+                        try:
+                            rec.__exit__(None, None, None)
+                        except Exception:
+                            pass
+                        rec = None
+                        continue
+
+                    # Mixdown to mono if needed
+                    if raw.ndim > 1 and raw.shape[1] > 1:
+                        samples = np.mean(raw, axis=1)
+                    else:
+                        samples = raw.flatten()
+
+                    # Normalize to -1..1
+                    if samples.dtype == np.int16:
+                        samples = samples.astype(np.float64) / 32768.0
+                    elif samples.dtype == np.int32:
+                        samples = samples.astype(np.float64) / 2147483648.0
+
+                    # Analyze
+                    features = analyze(samples, sample_rate)
+
+                    # Smooth
+                    features = smooth_features(prev_features, features, smoothing)
+                    prev_features = features
+
+                    # Map to colour
+                    rgb = features_to_rgb(features, config)
+
+                    # Re-check signal before sending (signal may have become active
+                    # during audio capture/analysis)
+                    if arbiter.signal_active():
+                        if not signal_was_active:
+                            logger.info("signal active; pausing music sync")
+                        signal_was_active = True
+                        # Don't send this frame; sleep to maintain frame rate
+                        elapsed = time_fn() - frame_start
+                        sleep_time = frame_duration - elapsed
+                        if sleep_time > 0:
+                            time.sleep(sleep_time)
+                        continue
+
+                    # Check if colour changed enough
+                    if last_color is not None and color_distance(rgb, last_color) < COLOR_CHANGE_THRESHOLD:
+                        # Not enough change, skip send
+                        pass
+                    else:
+                        # Send to all devices
+                        for dev in devices:
+                            ip = dev["ip"]
+                            # Rate-limit per device
+                            if ip in last_frame_time and (frame_start - last_frame_time[ip]) < frame_duration:
+                                continue
+
+                            try:
+                                govee.color(ip, rgb[0], rgb[1], rgb[2])
+                                last_frame_time[ip] = frame_start
+                                logger.debug("Sent %s to %s (level=%.2f bass=%.2f mid=%.2f treble=%.2f)",
+                                             "#{:02x}{:02x}{:02x}".format(*rgb), ip,
+                                             features["level"], features["bass"],
+                                             features["mid"], features["treble"])
+                            except OSError as e:
+                                if last_error_time is None or (frame_start - last_error_time) >= ERROR_LOG_INTERVAL:
+                                    logger.error("Failed to send to %s: %s", ip, e)
+                                    last_error_time = frame_start
+
+                        last_color = rgb
+
                     # Sleep to maintain frame rate
                     elapsed = time_fn() - frame_start
                     sleep_time = frame_duration - elapsed
                     if sleep_time > 0:
                         time.sleep(sleep_time)
-                    continue
 
-                signal_was_active = False
-
-                # If no recorder is open, try to open one
-                if rec is None:
-                    new_loopback = pick_loopback(sc)
-                    if new_loopback is not None:
-                        logger.info("Opening recorder on %s", new_loopback.name)
-                        try:
-                            rec = new_loopback.recorder(
-                                samplerate=sample_rate, channels=1
-                            ).__enter__()
-                        except Exception as enter_err:
-                            if last_error_time is None or (frame_start - last_error_time) >= ERROR_LOG_INTERVAL:
-                                logger.error("Failed to enter recorder: %s", enter_err)
-                                last_error_time = frame_start
-                            time.sleep(1.0)
-                            continue
-                    else:
-                        if last_error_time is None or (frame_start - last_error_time) >= ERROR_LOG_INTERVAL:
-                            logger.error("No loopback device found")
-                            last_error_time = frame_start
-                        time.sleep(1.0)
-                        continue
-
-                # Capture audio
+        except KeyboardInterrupt:
+            logger.info("Interrupted, restoring initial state")
+        finally:
+            # Exit the recorder if it's open
+            if rec is not None:
                 try:
-                    raw = rec.record(numframes=samples_per_frame)
-                except Exception as e:
-                    if last_error_time is None or (frame_start - last_error_time) >= ERROR_LOG_INTERVAL:
-                        logger.error("Audio capture error: %s", e)
-                        last_error_time = frame_start
-                    time.sleep(1.0)
-                    # Exit the old recorder and forget it
-                    try:
-                        rec.__exit__(None, None, None)
-                    except Exception:
-                        pass
-                    rec = None
-                    continue
-
-                # Mixdown to mono if needed
-                if raw.ndim > 1 and raw.shape[1] > 1:
-                    samples = np.mean(raw, axis=1)
-                else:
-                    samples = raw.flatten()
-
-                # Normalize to -1..1
-                if samples.dtype == np.int16:
-                    samples = samples.astype(np.float64) / 32768.0
-                elif samples.dtype == np.int32:
-                    samples = samples.astype(np.float64) / 2147483648.0
-
-                # Analyze
-                features = analyze(samples, sample_rate)
-
-                # Smooth
-                features = smooth_features(prev_features, features, smoothing)
-                prev_features = features
-
-                # Map to colour
-                rgb = features_to_rgb(features, config)
-
-                # Re-check signal before sending (signal may have become active
-                # during audio capture/analysis)
-                if arbiter.signal_active():
-                    if not signal_was_active:
-                        logger.info("signal active; pausing music sync")
-                    signal_was_active = True
-                    # Don't send this frame; sleep to maintain frame rate
-                    elapsed = time_fn() - frame_start
-                    sleep_time = frame_duration - elapsed
-                    if sleep_time > 0:
-                        time.sleep(sleep_time)
-                    continue
-
-                # Check if colour changed enough
-                if last_color is not None and color_distance(rgb, last_color) < COLOR_CHANGE_THRESHOLD:
-                    # Not enough change, skip send
+                    rec.__exit__(None, None, None)
+                except Exception:
                     pass
-                else:
-                    # Send to all devices
-                    for dev in devices:
-                        ip = dev["ip"]
-                        # Rate-limit per device
-                        if ip in last_frame_time and (frame_start - last_frame_time[ip]) < frame_duration:
-                            continue
 
-                        try:
-                            govee.color(ip, rgb[0], rgb[1], rgb[2])
-                            last_frame_time[ip] = frame_start
-                            logger.debug("Sent %s to %s (level=%.2f bass=%.2f mid=%.2f treble=%.2f)",
-                                         "#{:02x}{:02x}{:02x}".format(*rgb), ip,
-                                         features["level"], features["bass"],
-                                         features["mid"], features["treble"])
-                        except OSError as e:
-                            if last_error_time is None or (frame_start - last_error_time) >= ERROR_LOG_INTERVAL:
-                                logger.error("Failed to send to %s: %s", ip, e)
-                                last_error_time = frame_start
-
-                    last_color = rgb
-
-                # Sleep to maintain frame rate
-                elapsed = time_fn() - frame_start
-                sleep_time = frame_duration - elapsed
-                if sleep_time > 0:
-                    time.sleep(sleep_time)
-
-    except KeyboardInterrupt:
-        logger.info("Interrupted, restoring initial state")
-    finally:
-        # Exit the recorder if it's open
-        if rec is not None:
+            # Clear music active state (wrap in try/except so PID cleanup and
+            # restore still run even if this fails, e.g. PermissionError on
+            # Windows when another process has the file open)
             try:
-                rec.__exit__(None, None, None)
-            except Exception:
-                pass
+                arbiter.clear_music_active()
+            except OSError as e:
+                logger.warning("could not clear music heartbeat: %s", e)
 
-        # Clear music active state
-        arbiter.clear_music_active()
+            # Don't restore over an active signal (agent_signal clear will handle it)
+            if arbiter.signal_active():
+                logger.info("signal active; not restoring (agent_signal clear will)")
+            else:
+                # Restore initial state
+                for state in initial_states:
+                    ip = state["ip"]
+                    if state["state"] is None:
+                        continue
+                    try:
+                        data = state["state"].get("msg", {}).get("data", {})
+                        # Restore brightness
+                        if "brightness" in data:
+                            govee.brightness(ip, data["brightness"])
+                        # Restore colour
+                        if "color" in data:
+                            c = data["color"]
+                            govee.color(ip, c.get("r", 255), c.get("g", 255), c.get("b", 255))
+                        logger.info("Restored state for %s", ip)
+                    except OSError as e:
+                        logger.error("Failed to restore %s: %s", ip, e)
 
-        # Clean up our own PID file if we wrote it
-        try:
-            if PID_FILE.exists():
-                content = PID_FILE.read_text().strip()
-                if content == str(os.getpid()):
-                    PID_FILE.unlink(missing_ok=True)
-        except (OSError, ValueError):
-            pass
-
-        # Don't restore over an active signal (agent_signal clear will handle it)
-        if arbiter.signal_active():
-            logger.info("signal active; not restoring (agent_signal clear will)")
-        else:
-            # Restore initial state
-            for state in initial_states:
-                ip = state["ip"]
-                if state["state"] is None:
-                    continue
-                try:
-                    data = state["state"].get("msg", {}).get("data", {})
-                    # Restore brightness
-                    if "brightness" in data:
-                        govee.brightness(ip, data["brightness"])
-                    # Restore colour
-                    if "color" in data:
-                        c = data["color"]
-                        govee.color(ip, c.get("r", 255), c.get("g", 255), c.get("b", 255))
-                    logger.info("Restored state for %s", ip)
-                except OSError as e:
-                    logger.error("Failed to restore %s: %s", ip, e)
-
-        logger.info("Music sync stopped")
+            logger.info("Music sync stopped")
+    finally:
+        # Clean up our own PID file on every exit path
+        _remove_own_pid_file()
 
 
 def main():
