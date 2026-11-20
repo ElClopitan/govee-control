@@ -297,13 +297,15 @@ Weather conditions are mapped to colours using WMO weather codes:
 
 When multiple light sources are active, they follow this priority order:
 
-1. **Agent signal** (highest) — `agent_signal.py needs-input` sets the lights to the signal colour. While active, game sync and weather sync do not send any commands.
-2. **Game sync** — When a game is running, `game_sync.py` sets the lights to the game's colour. Weather sync does not send commands while a game is active.
-3. **Weather sync** (lowest) — `weather_sync.py` sets the lights based on current weather conditions.
+1. **Agent signal** (highest) — `agent_signal.py needs-input` sets the lights to the signal colour. While active, music sync, game sync, and weather sync do not send any commands.
+2. **Music sync** — When music sync is running, `music_sync.py` sets the lights based on audio analysis. Game sync and weather sync do not send commands while music is active.
+3. **Game sync** — When a game is running, `game_sync.py` sets the lights to the game's colour. Weather sync does not send commands while a game is active.
+4. **Weather sync** (lowest) — `weather_sync.py` sets the lights based on current weather conditions.
 
 The priority system uses file-based state in the `state/` directory:
 - `state/saved_state.json` — exists when an agent signal is active
 - `state/signal_sessions/` — per-session marker files; one file per Claude session that raised the signal
+- `state/music_active.json` — exists when music sync is active (contains pid and timestamp); music sync rewrites this file at least every 5 seconds as a heartbeat, and if it's older than 15 seconds it's considered stale so game/weather sync can resume
 - `state/game_active.json` — exists when game sync is active (contains the profile name); game sync rewrites this file every loop iteration as a heartbeat, and if it's older than 60 seconds it's considered stale so weather sync can resume
 - `state/agent_signal.lock` — lock file used to serialise concurrent agent signal hooks
 

@@ -26,6 +26,9 @@ from pathlib import Path
 import arbiter
 import govee
 
+# Heartbeat interval: refresh music_active.json at least this often
+HEARTBEAT_INTERVAL = 5.0
+
 logger = logging.getLogger(__name__)
 
 # Default frame rate (frames per second)
@@ -317,13 +320,38 @@ def run(config, fps=None, verbose=False, log_file=None, time_fn=None):
     last_color = None
     last_frame_time = {}
     last_error_time = None
+    last_heartbeat_time = 0.0
+    signal_was_active = False
 
     logger.info("Music sync started (fps=%d, smoothing=%.2f)", fps, smoothing)
     logger.info("Press Ctrl+C to stop")
 
+    # Mark music sync as active
+    arbiter.set_music_active()
+
     try:
         while True:
             frame_start = time_fn()
+
+            # Refresh heartbeat at least every HEARTBEAT_INTERVAL seconds
+            if frame_start - last_heartbeat_time >= HEARTBEAT_INTERVAL:
+                arbiter.set_music_active()
+                last_heartbeat_time = frame_start
+
+            # Check signal priority: if agent signal is active, don't send frames
+            if arbiter.signal_active():
+                if not signal_was_active:
+                    logger.info("signal active; pausing music sync")
+                signal_was_active = True
+                # Don't send any frames while signal is active
+                # Sleep to maintain frame rate
+                elapsed = time_fn() - frame_start
+                sleep_time = frame_duration - elapsed
+                if sleep_time > 0:
+                    time.sleep(sleep_time)
+                continue
+
+            signal_was_active = False
 
             # Capture audio
             try:
@@ -393,6 +421,9 @@ def run(config, fps=None, verbose=False, log_file=None, time_fn=None):
     except KeyboardInterrupt:
         logger.info("Interrupted, restoring initial state")
     finally:
+        # Clear music active state
+        arbiter.clear_music_active()
+
         # Restore initial state
         for state in initial_states:
             ip = state["ip"]

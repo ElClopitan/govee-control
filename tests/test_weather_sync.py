@@ -2418,5 +2418,76 @@ class TestFetchOnTheHour(StateDirMixin, unittest.TestCase):
         self.assertGreaterEqual(first_sleep[0], 1.0)
 
 
+class TestMusicPriority(StateDirMixin, unittest.TestCase):
+    """Test that weather sync yields to music sync."""
+
+    def _make_config(self):
+        return {
+            "devices": [{"name": "left", "ip": "192.168.1.50"}],
+            "weather": {
+                "latitude": 51.5074,
+                "longitude": -0.1278,
+                "brightness": 80,
+            },
+        }
+
+    @mock.patch("weather_sync.fetch_weather")
+    @mock.patch("govee.color")
+    @mock.patch("govee.brightness")
+    @mock.patch("arbiter.music_active", return_value=True)
+    def test_music_active_skips_weather(self, mock_music, mock_brightness, mock_color, mock_fetch):
+        """When music is active, weather sync should not send."""
+        mock_fetch.return_value = {
+            "temperature_2m": 20.0,
+            "weather_code": 0,
+            "is_day": 1,
+        }
+        config = self._make_config()
+
+        weather_sync.run(config, once=True)
+
+        # Should NOT have sent any commands because music is active
+        mock_color.assert_not_called()
+        mock_brightness.assert_not_called()
+
+    @mock.patch("weather_sync.fetch_weather")
+    @mock.patch("govee.color")
+    @mock.patch("govee.brightness")
+    @mock.patch("arbiter.music_active", return_value=False)
+    def test_music_inactive_allows_weather(self, mock_music, mock_brightness, mock_color, mock_fetch):
+        """When music is not active, weather sync should send."""
+        mock_fetch.return_value = {
+            "temperature_2m": 20.0,
+            "weather_code": 0,
+            "is_day": 1,
+        }
+        config = self._make_config()
+
+        weather_sync.run(config, once=True)
+
+        # Should have sent commands because music is not active
+        self.assertGreater(mock_color.call_count, 0)
+
+    @mock.patch("weather_sync.fetch_weather")
+    @mock.patch("govee.color")
+    @mock.patch("govee.brightness")
+    @mock.patch("arbiter.signal_active", return_value=True)
+    @mock.patch("arbiter.music_active", return_value=True)
+    def test_signal_beats_music(self, mock_music, mock_signal, mock_brightness, mock_color, mock_fetch):
+        """Signal should beat music (both active, signal wins)."""
+        mock_fetch.return_value = {
+            "temperature_2m": 20.0,
+            "weather_code": 0,
+            "is_day": 1,
+        }
+        config = self._make_config()
+
+        weather_sync.run(config, once=True)
+
+        # Should NOT have sent any commands because signal is active
+        mock_color.assert_not_called()
+        mock_brightness.assert_not_called()
+
+
 if __name__ == "__main__":
     unittest.main()

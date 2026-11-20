@@ -75,7 +75,17 @@ before making changes and saves the state for later restoration.
 
 ## Priority
 
-Music mode is a foreground process. It does not participate in the priority
-system (agent signal > game sync > weather sync). When music_sync is running,
-it controls the strips directly. Other sync scripts should not be running
-simultaneously.
+Music mode participates in the priority system:
+**agent signal > music sync > game sync > weather sync**.
+
+When music_sync is running, it writes a heartbeat file (`state/music_active.json`)
+at least every 5 seconds. Game sync and weather sync check this file and yield
+to music while it's active. If music_sync crashes or exits without clearing the
+file, it becomes stale after 15 seconds and game/weather sync resume.
+
+When an agent signal becomes active (e.g., `needs-input`), music_sync pauses
+sending frames and lets the signal colour show. When the signal clears, music
+sync resumes on the next frame.
+
+Music sync clears its heartbeat file on every exit path (Ctrl+C, error, or
+normal exit), so game/weather sync can take over immediately.

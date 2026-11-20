@@ -113,6 +113,103 @@ class TestGameActiveStaleness(StateDirMixin, unittest.TestCase):
         self.assertTrue(arbiter.game_active())
 
 
+class TestMusicActive(StateDirMixin, unittest.TestCase):
+    """Test music_active() function."""
+
+    def test_false_when_no_file(self):
+        """music_active returns False when music_active.json doesn't exist."""
+        self.assertFalse(arbiter.music_active())
+
+    def test_true_when_file_exists(self):
+        """music_active returns True when music_active.json exists."""
+        arbiter.set_music_active()
+        self.assertTrue(arbiter.music_active())
+
+
+class TestSetMusicActive(StateDirMixin, unittest.TestCase):
+    """Test set_music_active() function."""
+
+    def test_creates_file(self):
+        """set_music_active creates music_active.json with pid and since."""
+        arbiter.set_music_active()
+        self.assertTrue(arbiter.music_active())
+        with open(arbiter.STATE_DIR / "music_active.json") as f:
+            data = json.load(f)
+        self.assertIn("pid", data)
+        self.assertIn("since", data)
+
+    def test_creates_state_dir(self):
+        """set_music_active creates state directory if needed."""
+        import shutil
+        shutil.rmtree(self.state_dir)
+        arbiter.set_music_active()
+        self.assertTrue(arbiter.music_active())
+
+
+class TestClearMusicActive(StateDirMixin, unittest.TestCase):
+    """Test clear_music_active() function."""
+
+    def test_removes_file(self):
+        """clear_music_active removes music_active.json."""
+        arbiter.set_music_active()
+        self.assertTrue(arbiter.music_active())
+        arbiter.clear_music_active()
+        self.assertFalse(arbiter.music_active())
+
+    def test_no_error_when_missing(self):
+        """clear_music_active raises nothing when file is missing."""
+        arbiter.clear_music_active()  # Should not raise
+
+
+class TestMusicActiveStaleness(StateDirMixin, unittest.TestCase):
+    """Test that stale music_active.json is ignored (mtime heartbeat)."""
+
+    def test_fresh_file_is_active(self):
+        """A music_active.json with recent mtime is considered active."""
+        arbiter.set_music_active()
+        self.assertTrue(arbiter.music_active())
+
+    def test_stale_file_is_inactive(self):
+        """A music_active.json with mtime > 15s old is considered inactive."""
+        arbiter.set_music_active()
+        path = arbiter.STATE_DIR / "music_active.json"
+        # Set mtime to 30 seconds ago
+        old_time = time.time() - 30
+        os.utime(path, (old_time, old_time))
+        self.assertFalse(arbiter.music_active())
+
+    def test_boundary_just_within_stale(self):
+        """A music_active.json with mtime 5s old is active."""
+        arbiter.set_music_active()
+        path = arbiter.STATE_DIR / "music_active.json"
+        recent_time = time.time() - 5
+        os.utime(path, (recent_time, recent_time))
+        self.assertTrue(arbiter.music_active())
+
+
+class TestWeatherBlocked(StateDirMixin, unittest.TestCase):
+    """Test weather_blocked() function with music priority."""
+
+    def test_blocked_by_signal(self):
+        """weather_blocked returns True when signal is active."""
+        (arbiter.STATE_DIR / "saved_state.json").write_text("[]")
+        self.assertTrue(arbiter.weather_blocked())
+
+    def test_blocked_by_music(self):
+        """weather_blocked returns True when music is active."""
+        arbiter.set_music_active()
+        self.assertTrue(arbiter.weather_blocked())
+
+    def test_blocked_by_game(self):
+        """weather_blocked returns True when game is active."""
+        arbiter.set_game_active("Test Game")
+        self.assertTrue(arbiter.weather_blocked())
+
+    def test_not_blocked_when_none_active(self):
+        """weather_blocked returns False when no higher priority is active."""
+        self.assertFalse(arbiter.weather_blocked())
+
+
 class TestCapBrightness(unittest.TestCase):
     """Test cap_brightness() function."""
 

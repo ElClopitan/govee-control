@@ -770,5 +770,64 @@ class TestLogFileArgument(unittest.TestCase):
             self.assertFalse(os.path.exists(log_path))
 
 
+class TestMusicPriority(StateDirMixin, unittest.TestCase):
+    """Test that game sync yields to music sync."""
+
+    def _make_config(self):
+        return {
+            "devices": [{"name": "left", "ip": "192.168.1.50"}],
+            "games": [
+                {"name": "Test Game", "exe": "testgame.exe", "color": "red", "brightness": 80},
+            ],
+            "default": {"color": "white", "brightness": 40},
+        }
+
+    @mock.patch("game_sync.running_processes")
+    @mock.patch("govee.color")
+    @mock.patch("govee.brightness")
+    @mock.patch("arbiter.music_active", return_value=True)
+    def test_music_active_skips_game(self, mock_music, mock_brightness, mock_color, mock_processes):
+        """When music is active, game sync should not send."""
+        mock_processes.return_value = {"testgame.exe"}
+        config = self._make_config()
+
+        game_sync.run(config, once=True)
+
+        # Should NOT have sent any commands because music is active
+        mock_color.assert_not_called()
+        mock_brightness.assert_not_called()
+
+    @mock.patch("game_sync.running_processes")
+    @mock.patch("govee.color")
+    @mock.patch("govee.brightness")
+    @mock.patch("arbiter.music_active", return_value=False)
+    def test_music_inactive_allows_game(self, mock_music, mock_brightness, mock_color, mock_processes):
+        """When music is not active, game sync should send."""
+        mock_processes.return_value = {"testgame.exe"}
+        config = self._make_config()
+
+        game_sync.run(config, once=True)
+
+        # Should have sent commands because music is not active
+        self.assertEqual(mock_color.call_count, 1)
+        self.assertEqual(mock_brightness.call_count, 1)
+
+    @mock.patch("game_sync.running_processes")
+    @mock.patch("govee.color")
+    @mock.patch("govee.brightness")
+    @mock.patch("arbiter.signal_active", return_value=True)
+    @mock.patch("arbiter.music_active", return_value=True)
+    def test_signal_beats_music(self, mock_music, mock_signal, mock_brightness, mock_color, mock_processes):
+        """Signal should beat music (both active, signal wins)."""
+        mock_processes.return_value = {"testgame.exe"}
+        config = self._make_config()
+
+        game_sync.run(config, once=True)
+
+        # Should NOT have sent any commands because signal is active
+        mock_color.assert_not_called()
+        mock_brightness.assert_not_called()
+
+
 if __name__ == "__main__":
     unittest.main()

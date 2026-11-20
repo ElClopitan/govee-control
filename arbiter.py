@@ -1,18 +1,22 @@
 """Light-source priority arbiter.
 
-Determines which light source (agent signal, game sync, weather sync)
+Determines which light source (agent signal, music sync, game sync, weather sync)
 should control the lights based on file-based state.
 
-Priority: agent signal > game sync > weather sync.
+Priority: agent signal > music sync > game sync > weather sync.
 
 State files:
 - state/saved_state.json: exists when agent signal is active
+- state/music_active.json: exists when music sync is active, contains {"pid": <pid>, "since": <ts>}
+  The file's mtime is used as a heartbeat; if it's older than MUSIC_STALE_SECONDS,
+  music_active() returns False so game/weather sync can resume.
 - state/game_active.json: exists when game sync is active, contains {"profile": "<name>"}
   The file's mtime is used as a heartbeat; if it's older than GAME_STALE_SECONDS,
   game_active() returns False so weather sync can resume.
 """
 
 import json
+import os
 import time
 from pathlib import Path
 
@@ -21,6 +25,10 @@ STATE_DIR = Path(__file__).parent / "state"
 # game_active.json must be rewritten at least this often (by game_sync's loop)
 # or it's considered stale and weather sync takes over.
 GAME_STALE_SECONDS = 60
+
+# music_active.json must be rewritten at least this often (by music_sync's loop)
+# or it's considered stale and game/weather sync takes over.
+MUSIC_STALE_SECONDS = 15
 
 # Built-in default profile used when config has no "default" key or it is null.
 # Used by game_sync (when no game is running) and agent_signal (when restoring
@@ -107,11 +115,54 @@ def clear_game_active():
         path.unlink()
 
 
+def music_file():
+    """Return the path to the music active state file."""
+    return STATE_DIR / "music_active.json"
+
+
+def music_active():
+    """Check if music sync is active.
+
+    Returns True if state/music_active.json exists AND its mtime is within
+    MUSIC_STALE_SECONDS. A stale file (e.g. left behind by a crashed music_sync)
+    does not block game or weather sync.
+    """
+    path = music_file()
+    if not path.exists():
+        return False
+    try:
+        mtime = path.stat().st_mtime
+    except OSError:
+        return False
+    return time.time() - mtime <= MUSIC_STALE_SECONDS
+
+
+def set_music_active():
+    """Mark music sync as active.
+
+    Creates state directory if needed and writes music_active.json with
+    the current process ID and timestamp. The file's mtime serves as the
+    heartbeat that music_active() checks.
+    """
+    STATE_DIR.mkdir(parents=True, exist_ok=True)
+    with open(music_file(), "w") as f:
+        json.dump({"pid": os.getpid(), "since": time.time()}, f)
+
+
+def clear_music_active():
+    """Mark music sync as inactive.
+
+    Deletes music_active.json if present; no error if missing.
+    """
+    path = music_file()
+    if path.exists():
+        path.unlink()
+
+
 def weather_blocked():
     """Check if weather sync should be blocked by higher-priority sources.
 
-    Returns True if either an agent signal or game sync is active.
-    This is the single place where weather sync checks for priority,
-    making it easy to add more sources (e.g., music sync) later.
+    Returns True if an agent signal, music sync, or game sync is active.
+    This is the single place where weather sync checks for priority.
     """
-    return signal_active() or game_active()
+    return signal_active() or music_active() or game_active()

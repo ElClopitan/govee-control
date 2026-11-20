@@ -128,6 +128,7 @@ def run(config, interval=5, once=False, dry_run=False):
 
     last_profile_name = None
     signal_was_active = False
+    music_was_active = False
 
     try:
         while True:
@@ -149,23 +150,37 @@ def run(config, interval=5, once=False, dry_run=False):
                 elif arbiter.game_active():
                     arbiter.clear_game_active()
 
-            # Check signal priority
+            # Check signal priority (highest)
             if arbiter.signal_active():
                 if not signal_was_active:
                     logger.info("signal active; skipping game sync")
                     print("signal active; skipping game sync")
                 signal_was_active = True
+                music_was_active = False
                 # Reset last_profile_name so the first successful pass after
                 # the signal clears always sends, even if the profile hasn't changed.
                 last_profile_name = None
+            # Check music priority (second highest)
+            elif arbiter.music_active():
+                if not music_was_active:
+                    logger.info("music active; skipping game sync")
+                    print("music active; skipping game sync")
+                music_was_active = True
+                signal_was_active = False
+                last_profile_name = None
             else:
                 signal_was_active = False
+                music_was_active = False
                 if profile_name != last_profile_name:
                     # Re-check signal just before applying (race condition fix).
                     # A signal could have become active since we last checked.
                     if arbiter.signal_active():
                         logger.info("signal active; skipping game sync")
                         print("signal active; skipping game sync")
+                        last_profile_name = None
+                    elif arbiter.music_active():
+                        logger.info("music active; skipping game sync")
+                        print("music active; skipping game sync")
                         last_profile_name = None
                     else:
                         # If default is null (no game -> leave lights alone),
