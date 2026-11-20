@@ -39,6 +39,7 @@ def running_processes():
             encoding="oem",
             errors="replace",
             timeout=10,
+            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
         )
         if result.returncode != 0:
             return set()

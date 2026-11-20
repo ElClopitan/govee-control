@@ -335,6 +335,21 @@ class TestRunningProcessesEncoding(unittest.TestCase):
         call_kwargs = mock_run.call_args[1]
         self.assertEqual(call_kwargs["encoding"], "oem")
 
+    @mock.patch("subprocess.run")
+    def test_uses_create_no_window(self, mock_run):
+        """running_processes passes CREATE_NO_WINDOW to avoid console window under pythonw."""
+        import subprocess
+        mock_result = mock.Mock()
+        mock_result.returncode = 0
+        mock_result.stdout = '"chrome.exe","1","Console","1","1 K"\n'
+        mock_run.return_value = mock_result
+
+        game_sync.running_processes()
+
+        # Verify creationflags=CREATE_NO_WINDOW was passed to subprocess.run
+        call_kwargs = mock_run.call_args[1]
+        self.assertEqual(call_kwargs["creationflags"], subprocess.CREATE_NO_WINDOW)
+
 
 class TestDefaultNull(StateDirMixin, unittest.TestCase):
     """Test that "default": null means no game -> send nothing."""
