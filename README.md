@@ -538,6 +538,6 @@ out to pin it. Errors are logged to `state/tray.log`.
 
 ## Autostart
 
-Run weather sync and game sync automatically at Windows logon (hidden, no console
-window). See [docs/autostart.md](docs/autostart.md) for install, uninstall, and
-troubleshooting instructions.
+Run weather sync, game sync, and the tray icon automatically at Windows logon
+(hidden, no console window). See [docs/autostart.md](docs/autostart.md) for
+install, uninstall, and troubleshooting instructions.

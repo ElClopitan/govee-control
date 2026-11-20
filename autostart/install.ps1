@@ -3,9 +3,9 @@
     Install or uninstall Govee autostart scheduled tasks for the current user.
 
 .DESCRIPTION
-    Registers two scheduled tasks that run weather_sync.py and game_sync.py
-    at logon, hidden (via pythonw.exe). Tasks run for the current user only
-    and do not require admin rights.
+    Registers three scheduled tasks that run weather_sync.py, game_sync.py,
+    and tray.py at logon, hidden (via pythonw.exe). Tasks run for the current
+    user only and do not require admin rights.
 
 .PARAMETER Uninstall
     Remove the scheduled tasks instead of installing them.
@@ -18,7 +18,7 @@
 
 .EXAMPLE
     .\install.ps1
-    Installs both tasks and starts them.
+    Installs all three tasks and starts them.
 
 .EXAMPLE
     .\install.ps1 -DryRun
@@ -26,7 +26,7 @@
 
 .EXAMPLE
     .\install.ps1 -Uninstall
-    Removes both tasks.
+    Removes all three tasks.
 #>
 
 param(
@@ -56,14 +56,20 @@ $tasks = @(
     @{
         Name = "Govee weather sync"
         Script = "weather_sync.py"
-        LogFile = "state\weather_sync.log"
+        Arguments = "--log-file state\weather_sync.log"
         Description = "Run Govee weather sync at logon (hidden)"
     },
     @{
         Name = "Govee game sync"
         Script = "game_sync.py"
-        LogFile = "state\game_sync.log"
+        Arguments = "--log-file state\game_sync.log"
         Description = "Run Govee game sync at logon (hidden)"
+    },
+    @{
+        Name = "Govee tray"
+        Script = "tray.py"
+        Arguments = "--config config.json"
+        Description = "Run the Govee mode tray icon at logon (hidden)"
     }
 )
 
@@ -116,7 +122,7 @@ if ($Uninstall) {
     $anyFailed = $false
 
     foreach ($t in $tasks) {
-        $arg = "$($t.Script) --log-file $($t.LogFile)"
+        $arg = "$($t.Script) $($t.Arguments)"
         if ($DryRun) {
             Write-Host "[dry-run] Would register task: $($t.Name)"
             Write-Host "  Trigger: AtLogOn, user $user"

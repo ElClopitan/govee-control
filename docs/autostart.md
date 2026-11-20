@@ -1,16 +1,17 @@
 # Autostart at logon
 
-Run `weather_sync.py` and `game_sync.py` automatically when you log in to Windows,
-hidden in the background (no console window).
+Run `weather_sync.py`, `game_sync.py`, and `tray.py` automatically when you log in
+to Windows, hidden in the background (no console window).
 
 ## How it works
 
-Two Windows scheduled tasks are registered for your user account:
+Three Windows scheduled tasks are registered for your user account:
 
 - **Govee weather sync** — runs `pythonw.exe weather_sync.py` directly
 - **Govee game sync** — runs `pythonw.exe game_sync.py` directly
+- **Govee tray** — runs `pythonw.exe tray.py --config config.json` directly
 
-Both tasks:
+All three tasks:
 - Trigger at logon (current user only)
 - Run hidden (no console window)
 - Have no time limit
@@ -29,6 +30,15 @@ powershell -NoProfile -File autostart\install.ps1
 
 This registers the tasks and starts them immediately. The tasks will also run
 at each logon.
+
+Before installing, install the tray dependencies:
+
+```powershell
+python -m pip install --user -r requirements-tray.txt
+```
+
+Windows hides new tray icons under the "^" arrow in the taskbar; drag the icon
+out to pin it.
 
 To preview what would be installed without making changes:
 
@@ -71,6 +81,7 @@ so output is written to log files with size rotation (1MB per file, 2 backups):
 
 - `state/weather_sync.log` — weather sync log
 - `state/game_sync.log` — game sync log
+- `state/tray.log` — tray icon log
 
 Both scripts use Python's `logging` module. `weather_sync.py` logs weather
 fetches, colour changes, and errors. `game_sync.py` logs profile switches,
@@ -81,10 +92,12 @@ To see output in real time, run the scripts manually from a terminal:
 ```powershell
 python weather_sync.py
 python game_sync.py
+python tray.py --config config.json
 ```
 
-The `autostart/run_weather_sync.cmd` and `autostart/run_game_sync.cmd` files
-remain as manual launchers that redirect output to `state/*.out.log` files.
+The `autostart/run_weather_sync.cmd`, `autostart/run_game_sync.cmd`, and
+`autostart/run_tray.cmd` files remain as manual launchers that redirect output
+to `state/*.out.log` files.
 
 ## Stop running scripts
 
@@ -92,7 +105,7 @@ The scheduled tasks run `pythonw.exe` processes. To stop them:
 
 ```powershell
 # Find the processes
-Get-Process pythonw | Where-Object { $_.CommandLine -like "*weather_sync*" -or $_.CommandLine -like "*game_sync*" }
+Get-Process pythonw | Where-Object { $_.CommandLine -like "*weather_sync*" -or $_.CommandLine -like "*game_sync*" -or $_.CommandLine -like "*tray*" }
 
 # Kill them (replace PID with actual process ID)
 Stop-Process -Id <PID>
@@ -103,6 +116,7 @@ Or disable the tasks temporarily:
 ```powershell
 Disable-ScheduledTask -TaskName "Govee weather sync"
 Disable-ScheduledTask -TaskName "Govee game sync"
+Disable-ScheduledTask -TaskName "Govee tray"
 ```
 
 Re-enable with `Enable-ScheduledTask`.
@@ -119,6 +133,7 @@ If the tasks don't seem to be running:
 2. Check the log files for errors:
    - `state/weather_sync.log`
    - `state/game_sync.log`
+   - `state/tray.log`
 
 3. If registration failed with "Access is denied", make sure you're running
    the install script as a normal user (not admin) and that the script is
