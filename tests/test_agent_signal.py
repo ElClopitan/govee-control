@@ -1928,6 +1928,70 @@ class TestPerSessionMarkers(StateDirMixin, unittest.TestCase):
     @mock.patch("agent_signal.govee.turn")
     @mock.patch("agent_signal.govee.brightness")
     @mock.patch("agent_signal.govee.color")
+    def test_sessionend_hook_clears_marker(
+        self, mock_color, mock_brightness, mock_turn, mock_status, mock_sleep
+    ):
+        """SessionEnd hook input clears only that session's marker."""
+        mock_status.return_value = {
+            "msg": {"data": {"on": True, "brightness": 50, "color": {"r": 255, "g": 255, "b": 255}}}
+        }
+
+        # Session A sets signal
+        args_a = mock.Mock()
+        args_a.command = "needs-input"
+        args_a.config = str(self.config_path)
+        args_a.dry_run = False
+        args_a.force = False
+        fake_stdin_a = json.dumps({"session_id": "session-A"})
+        with mock.patch("sys.stdin", mock.Mock(isatty=lambda: False, read=lambda: fake_stdin_a)):
+            with mock.patch.dict(os.environ, {"CLAUDE_CODE_SESSION_ATTENDED": "1"}):
+                agent_signal.cmd_needs_input(args_a)
+
+        # Session B sets signal
+        mock_status.reset_mock()
+        args_b = mock.Mock()
+        args_b.command = "needs-input"
+        args_b.config = str(self.config_path)
+        args_b.dry_run = False
+        args_b.force = False
+        fake_stdin_b = json.dumps({"session_id": "session-B"})
+        with mock.patch("sys.stdin", mock.Mock(isatty=lambda: False, read=lambda: fake_stdin_b)):
+            with mock.patch.dict(os.environ, {"CLAUDE_CODE_SESSION_ATTENDED": "1"}):
+                agent_signal.cmd_needs_input(args_b)
+
+        sessions_dir = agent_signal.signal_sessions_dir()
+        self.assertTrue((sessions_dir / "session-A").exists())
+        self.assertTrue((sessions_dir / "session-B").exists())
+
+        # Session A ends (SessionEnd hook) — no message field, has reason
+        mock_color.reset_mock()
+        mock_brightness.reset_mock()
+        mock_turn.reset_mock()
+        args_clear = mock.Mock()
+        args_clear.command = "clear"
+        args_clear.config = str(self.config_path)
+        args_clear.dry_run = False
+        args_clear.all = False
+        fake_stdin_sessionend = json.dumps({
+            "session_id": "session-A",
+            "hook_event_name": "SessionEnd",
+            "reason": "user closed session"
+        })
+        with mock.patch("sys.stdin", mock.Mock(isatty=lambda: False, read=lambda: fake_stdin_sessionend)):
+            agent_signal.cmd_clear(args_clear)
+
+        # Session A's marker should be gone
+        self.assertFalse((sessions_dir / "session-A").exists())
+        # Session B's marker should still exist
+        self.assertTrue((sessions_dir / "session-B").exists())
+        # Signal should NOT be restored (session B still waiting)
+        mock_color.assert_not_called()
+        self.assertTrue(arbiter.signal_file().exists())
+
+    @mock.patch("agent_signal.govee.status")
+    @mock.patch("agent_signal.govee.turn")
+    @mock.patch("agent_signal.govee.brightness")
+    @mock.patch("agent_signal.govee.color")
     def test_last_session_clear_restores(
         self, mock_color, mock_brightness, mock_turn, mock_status, mock_sleep
     ):
@@ -2056,10 +2120,10 @@ class TestPerSessionMarkers(StateDirMixin, unittest.TestCase):
             with mock.patch.dict(os.environ, {"CLAUDE_CODE_SESSION_ATTENDED": "1"}):
                 agent_signal.cmd_needs_input(args_a)
 
-        # Make session A's marker stale (older than 8 hours)
+        # Make session A's marker stale (older than 2 hours)
         sessions_dir = agent_signal.signal_sessions_dir()
         marker = sessions_dir / "session-A"
-        old_time = time.time() - (9 * 3600)  # 9 hours ago
+        old_time = time.time() - (3 * 3600)  # 3 hours ago
         os.utime(str(marker), (old_time, old_time))
 
         # Clear from session A (marker is stale)

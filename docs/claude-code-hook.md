@@ -9,6 +9,9 @@ light signal when an agent needs input, and clear it when the user responds.
   agent is waiting for user input). Use this to turn on the signal light.
 - **UserPromptSubmit**: Fires when the user submits a prompt. Use this to clear
   the signal light.
+- **SessionEnd**: Fires when a Claude session ends. Use this to clear the signal
+  light if the session ended while waiting for input (so the lights don't stay
+  orange after the session is gone).
 
 ## Configuration
 
@@ -27,6 +30,13 @@ for global, or `.claude/settings.json` for project-specific):
       }
     ],
     "UserPromptSubmit": [
+      {
+        "hooks": [
+          { "type": "command", "command": "python C:/path/to/govee-control/agent_signal.py clear" }
+        ]
+      }
+    ],
+    "SessionEnd": [
       {
         "hooks": [
           { "type": "command", "command": "python C:/path/to/govee-control/agent_signal.py clear" }
@@ -55,9 +65,17 @@ If your settings.json already has a `hooks` key, merge these two events into it 
    When the last session's marker is removed, the lights are restored to their
    previous state.
 
+3. When a Claude session ends (e.g., the user closes it while the agent was
+   waiting), the `SessionEnd` hook fires and runs `agent_signal.py clear`. This
+   removes the session's marker so the lights don't stay orange after the session
+   is gone. Without this, a session that ends while waiting would leave its
+   marker behind until it expired (after 2 hours by default).
+
 If multiple Claude sessions are running and one raises the signal while another
 is idle, the idle session's prompt submission will not clear the signal — only
 the session that raised it (or `clear --all`) can.
+
+To manually reset the lights at any time, run `python agent_signal.py clear --all`.
 
 ## Notes
 

@@ -294,7 +294,12 @@ writes a marker file to `state/signal_sessions/<session_id>`. When a session
 clears the signal, only its own marker is removed. The lights stay orange until
 the last session's marker is removed.
 
-- Markers older than 8 hours (configurable via `signal.marker_max_age_hours`)
+The signal is cleared by three Claude Code hook events:
+- `Notification` → `needs-input` (turns the signal on)
+- `UserPromptSubmit` → `clear` (user responded)
+- `SessionEnd` → `clear` (session ended while waiting, so the marker is removed)
+
+- Markers older than 2 hours (configurable via `signal.marker_max_age_hours`)
   are considered stale and are automatically deleted.
 - If `saved_state.json` exists but the marker directory is empty or missing
   (legacy state from before this feature), the next `clear` restores the lights
