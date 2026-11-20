@@ -1,7 +1,12 @@
 """Tests for the socket guard in tests/helpers.py."""
 
 import socket
+import sys
 import unittest
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).parent))
+import helpers  # noqa: F401  installs the socket guard when run on its own
 
 
 class TestSocketGuard(unittest.TestCase):
