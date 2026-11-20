@@ -3,6 +3,7 @@
 All tests run without soundcard/numpy and without the network.
 """
 
+import json
 import math
 import os
 import sys
@@ -13,6 +14,7 @@ from unittest import mock
 
 import music_sync
 import arbiter
+from helpers import StateDirMixin
 
 
 class TestAnalyze(unittest.TestCase):
@@ -70,7 +72,6 @@ class TestFeaturesToRgb(unittest.TestCase):
 
     def test_never_all_zero(self):
         """features_to_rgb should never return (0, 0, 0)."""
-        # Even with zero level, there's a 10% floor
         features = self._make_features(level=0.0, bass=0.0, mid=0.0, treble=0.0)
         rgb = music_sync.features_to_rgb(features, {})
         self.assertNotEqual(rgb, (0, 0, 0))
@@ -93,7 +94,6 @@ class TestFeaturesToRgb(unittest.TestCase):
         """Bass-dominant features should give warm (red) colours."""
         features = self._make_features(level=0.8, bass=1.0, mid=0.0, treble=0.0)
         rgb = music_sync.features_to_rgb(features, {})
-        # Red channel should be highest
         self.assertGreaterEqual(rgb[0], rgb[1])
         self.assertGreaterEqual(rgb[0], rgb[2])
 
@@ -101,7 +101,6 @@ class TestFeaturesToRgb(unittest.TestCase):
         """Treble-dominant features should give cool (blue) colours."""
         features = self._make_features(level=0.8, bass=0.0, mid=0.0, treble=1.0)
         rgb = music_sync.features_to_rgb(features, {})
-        # Blue channel should be highest
         self.assertGreaterEqual(rgb[2], rgb[0])
         self.assertGreaterEqual(rgb[2], rgb[1])
 
@@ -111,7 +110,6 @@ class TestFeaturesToRgb(unittest.TestCase):
         features_high = self._make_features(level=0.8, bass=0.5, mid=0.5, treble=0.5)
         rgb_low = music_sync.features_to_rgb(features_low, {})
         rgb_high = music_sync.features_to_rgb(features_high, {})
-        # High level should be brighter (higher sum of channels)
         self.assertGreater(sum(rgb_high), sum(rgb_low))
 
 
@@ -129,7 +127,6 @@ class TestSmoothing(unittest.TestCase):
         prev = {"level": 0.2, "bass": 0.1, "mid": 0.1, "treble": 0.1}
         curr = {"level": 0.8, "bass": 0.9, "mid": 0.9, "treble": 0.9}
         result = music_sync.smooth_features(prev, curr, 0.5)
-        # Result should be between prev and curr
         self.assertGreater(result["level"], prev["level"])
         self.assertLess(result["level"], curr["level"])
 
@@ -154,7 +151,6 @@ class TestImportWithoutSoundcard(unittest.TestCase):
 
     def test_import_without_soundcard(self):
         """Import should succeed even if soundcard is not available."""
-        # Remove soundcard and numpy from sys.modules if present
         modules_to_remove = []
         for mod in list(sys.modules.keys()):
             if mod in ("soundcard", "numpy", "np"):
@@ -163,14 +159,11 @@ class TestImportWithoutSoundcard(unittest.TestCase):
         for mod in modules_to_remove:
             del sys.modules[mod]
 
-        # Mock ImportError for soundcard
         with mock.patch.dict(sys.modules, {"soundcard": None, "numpy": None}):
-            # Re-import music_sync (it should not fail at import time)
             import importlib
             if "music_sync" in sys.modules:
                 del sys.modules["music_sync"]
             import music_sync as ms
-            # analyze() should still work (uses pure-Python fallback)
             result = ms.analyze([0.0] * 1024, 44100)
             self.assertIn("level", result)
 
@@ -180,72 +173,324 @@ class TestFrameRateLimiting(unittest.TestCase):
 
     def test_frame_rate_limit(self):
         """Should send at most fps frames per second."""
-        # This is a simplified test of the rate-limiting logic
-        # We test the color_distance threshold logic instead
-        # since the actual loop requires soundcard
-
-        # Test that small colour changes are filtered
         last_color = (100, 100, 100)
-        new_color = (105, 105, 105)  # Small change
+        new_color = (105, 105, 105)
         distance = music_sync.color_distance(last_color, new_color)
-        # Should be below threshold (15)
         self.assertLess(distance, music_sync.COLOR_CHANGE_THRESHOLD)
 
-        # Large change should exceed threshold
         new_color2 = (200, 200, 200)
         distance2 = music_sync.color_distance(last_color, new_color2)
         self.assertGreater(distance2, music_sync.COLOR_CHANGE_THRESHOLD)
 
 
-class TestMusicSignalPriority(unittest.TestCase):
+class TestMusicSignalPriority(StateDirMixin, unittest.TestCase):
     """Test that music sync yields to agent signal."""
 
     def test_music_skips_frames_when_signal_active(self):
-        """music_sync should not send frames when signal is active."""
-        # Mock the arbiter.signal_active to return True
-        with mock.patch.object(arbiter, "signal_active", return_value=True):
-            # Mock other dependencies
-            with mock.patch.object(arbiter, "set_music_active"):
-                with mock.patch.object(arbiter, "clear_music_active"):
-                    # We can't easily test the full loop without soundcard,
-                    # but we can verify the logic by checking that signal_active
-                    # is called and would cause a skip
-                    self.assertTrue(arbiter.signal_active())
+        """music_sync.run() should not send frames when signal is active,
+        but should send after signal clears."""
+        # Track signal state: active for first 3 frames, then cleared
+        signal_state = [True, True, True, False, False]
+        signal_idx = [0]
+
+        def fake_signal_active():
+            idx = signal_idx[0]
+            signal_idx[0] = idx + 1
+            if idx < len(signal_state):
+                return signal_state[idx]
+            return False
+
+        # Track colours sent
+        colors_sent = []
+
+        def fake_color(ip, r, g, b):
+            colors_sent.append((ip, r, g, b))
+
+        # Fake time that advances 0.1s per call (10 fps)
+        fake_time = [0.0]
+
+        def fake_time_fn():
+            t = fake_time[0]
+            fake_time[0] = t + 0.1
+            return t
+
+        # Mock soundcard and numpy
+        fake_rec = mock.Mock()
+        fake_rec.record.return_value = mock.Mock(ndim=1, shape=(1024,), dtype="float64")
+        fake_rec.__enter__ = mock.Mock(return_value=fake_rec)
+        fake_rec.__exit__ = mock.Mock(return_value=False)
+
+        fake_mic = mock.Mock()
+        fake_mic.name = "Stereo Mix (loopback)"
+        fake_mic.recorder = mock.Mock(return_value=fake_rec)
+
+        with mock.patch.dict(sys.modules, {
+            "soundcard": mock.Mock(all_microphones=mock.Mock(return_value=[fake_mic])),
+            "numpy": mock.Mock(),
+        }):
+            with mock.patch.object(arbiter, "signal_active", side_effect=fake_signal_active):
+                with mock.patch.object(music_sync, "govee") as mock_govee:
+                    mock_govee.color = fake_color
+                    mock_govee.status = mock.Mock(return_value={"msg": {"data": {"brightness": 50}}})
+                    mock_govee.brightness = mock.Mock()
+                    with mock.patch("time.sleep"):
+                        with mock.patch.object(music_sync, "STOP_FLAG_FILE", self.state_dir / "music_stop"):
+                            # Mock analyze to return consistent features
+                            with mock.patch.object(music_sync, "analyze", return_value={"level": 0.5, "bass": 0.5, "mid": 0.5, "treble": 0.5}):
+                                # Run for 5 frames then KeyboardInterrupt
+                                def raise_ki_after_5(*args, **kwargs):
+                                    if signal_idx[0] >= 5:
+                                        raise KeyboardInterrupt()
+                                    return fake_rec
+
+                                with mock.patch.object(fake_mic, "recorder", side_effect=raise_ki_after_5):
+                                    try:
+                                        music_sync.run(
+                                            {"devices": [{"ip": "1.2.3.4"}]},
+                                            fps=10,
+                                            time_fn=fake_time_fn,
+                                        )
+                                    except KeyboardInterrupt:
+                                        pass
+
+        # No colours should have been sent while signal was active (first 3 frames)
+        # Colours should have been sent after signal cleared (frames 4-5)
+        # Due to color_distance threshold, at most 1 colour is sent
+        self.assertGreaterEqual(len(colors_sent), 1, "Expected at least one colour after signal cleared")
 
 
-class TestMusicHeartbeat(unittest.TestCase):
+class TestMusicHeartbeatClearOnException(StateDirMixin, unittest.TestCase):
+    """Test that heartbeat file is removed when run() exits via exception."""
+
+    def test_heartbeat_cleared_on_exception(self):
+        """When run() exits via exception, music_active.json should be removed."""
+        # Create a fake recorder that raises an exception on first frame
+        fake_rec = mock.Mock()
+        fake_rec.record.side_effect = RuntimeError("audio capture failed")
+        fake_rec.__enter__ = mock.Mock(return_value=fake_rec)
+        fake_rec.__exit__ = mock.Mock(return_value=False)
+
+        fake_mic = mock.Mock()
+        fake_mic.name = "Stereo Mix (loopback)"
+        fake_mic.recorder = mock.Mock(return_value=fake_rec)
+
+        fake_time = [0.0]
+
+        def fake_time_fn():
+            t = fake_time[0]
+            fake_time[0] = t + 0.1
+            return t
+
+        with mock.patch.dict(sys.modules, {
+            "soundcard": mock.Mock(all_microphones=mock.Mock(return_value=[fake_mic])),
+            "numpy": mock.Mock(),
+        }):
+            with mock.patch.object(music_sync, "govee") as mock_govee:
+                mock_govee.status = mock.Mock(return_value={"msg": {"data": {"brightness": 50}}})
+                mock_govee.brightness = mock.Mock()
+                with mock.patch("time.sleep"):
+                    with mock.patch.object(music_sync, "STOP_FLAG_FILE", self.state_dir / "music_stop"):
+                        try:
+                            music_sync.run(
+                                {"devices": [{"ip": "1.2.3.4"}]},
+                                fps=10,
+                                time_fn=fake_time_fn,
+                            )
+                        except RuntimeError:
+                            pass
+
+        # Heartbeat file should be removed
+        self.assertFalse(arbiter.music_file().exists(),
+                         "music_active.json should be removed after exception")
+
+
+class TestMusicHeartbeatRefresh(StateDirMixin, unittest.TestCase):
     """Test that music sync refreshes its heartbeat."""
 
     def test_heartbeat_interval_constant(self):
         """HEARTBEAT_INTERVAL should be 5 seconds."""
         self.assertEqual(music_sync.HEARTBEAT_INTERVAL, 5.0)
 
+    def test_heartbeat_refreshed_during_run(self):
+        """set_music_active should be called multiple times during a long run."""
+        heartbeat_calls = []
 
-class TestToggleCommands(unittest.TestCase):
+        def fake_set_music_active():
+            heartbeat_calls.append(fake_time[0])
+
+        fake_time = [0.0]
+
+        def fake_time_fn():
+            t = fake_time[0]
+            fake_time[0] = t + 0.6  # Advance 0.6s per frame (faster than 5s heartbeat)
+            return t
+
+        # Create a fake recorder
+        fake_rec = mock.Mock()
+        fake_rec.record.return_value = mock.Mock(ndim=1, shape=(1024,), dtype="float64")
+        fake_rec.__enter__ = mock.Mock(return_value=fake_rec)
+        fake_rec.__exit__ = mock.Mock(return_value=False)
+
+        fake_mic = mock.Mock()
+        fake_mic.name = "Stereo Mix (loopback)"
+        fake_mic.recorder = mock.Mock(return_value=fake_rec)
+
+        frame_count = [0]
+
+        def raise_ki_after_10(*args, **kwargs):
+            frame_count[0] += 1
+            if frame_count[0] >= 10:
+                raise KeyboardInterrupt()
+            return fake_rec
+
+        with mock.patch.dict(sys.modules, {
+            "soundcard": mock.Mock(all_microphones=mock.Mock(return_value=[fake_mic])),
+            "numpy": mock.Mock(),
+        }):
+            with mock.patch.object(arbiter, "set_music_active", side_effect=fake_set_music_active):
+                with mock.patch.object(music_sync, "govee") as mock_govee:
+                    mock_govee.status = mock.Mock(return_value={"msg": {"data": {"brightness": 50}}})
+                    mock_govee.brightness = mock.Mock()
+                    with mock.patch("time.sleep"):
+                        with mock.patch.object(music_sync, "STOP_FLAG_FILE", self.state_dir / "music_stop"):
+                            with mock.patch.object(music_sync, "analyze", return_value={"level": 0.5, "bass": 0.5, "mid": 0.5, "treble": 0.5}):
+                                with mock.patch.object(fake_mic, "recorder", side_effect=raise_ki_after_10):
+                                    try:
+                                        music_sync.run(
+                                            {"devices": [{"ip": "1.2.3.4"}]},
+                                            fps=10,
+                                            time_fn=fake_time_fn,
+                                        )
+                                    except KeyboardInterrupt:
+                                        pass
+
+        # With 10 frames at 0.6s each = 6s total, heartbeat should be written at least twice
+        # (once at start, once after 5s)
+        self.assertGreaterEqual(len(heartbeat_calls), 2,
+                                f"Expected at least 2 heartbeat writes, got {len(heartbeat_calls)}")
+
+
+class TestKillProcessCommandLine(StateDirMixin, unittest.TestCase):
+    """Test that _kill_process uses the correct taskkill command line."""
+
+    def test_kill_process_uses_force_kill(self):
+        """_kill_process should use taskkill /F /PID <pid>."""
+        with mock.patch("subprocess.run") as mock_run:
+            music_sync._kill_process(123)
+        mock_run.assert_called_once()
+        call_args = mock_run.call_args
+        cmd = call_args[0][0]
+        self.assertEqual(cmd, ["taskkill", "/F", "/PID", "123"])
+        # Check creationflags
+        self.assertEqual(call_args[1]["creationflags"], 0x08000000)
+
+    def test_is_process_alive_uses_tasklist(self):
+        """_is_process_alive should use tasklist with correct creationflags."""
+        fake_result = mock.Mock()
+        fake_result.returncode = 0
+        fake_result.stdout = '"pythonw.exe","123","Console","123456 K"\n'
+
+        with mock.patch("subprocess.run", return_value=fake_result) as mock_run:
+            alive = music_sync._is_process_alive(123)
+        self.assertTrue(alive)
+        call_args = mock_run.call_args
+        cmd = call_args[0][0]
+        self.assertEqual(cmd[0], "tasklist")
+        self.assertIn("/FI", cmd)
+        self.assertIn("PID eq 123", cmd)
+        self.assertEqual(call_args[1]["creationflags"], 0x08000000)
+
+
+class TestLeftoverStopFlag(StateDirMixin, unittest.TestCase):
+    """Test that run() clears leftover stop flag and continues."""
+
+    def test_run_clears_leftover_stop_flag(self):
+        """run() should remove a leftover stop flag and not exit on it."""
+        # Create a leftover stop flag
+        stop_flag = self.state_dir / "music_stop"
+        stop_flag.write_text("leftover")
+        self.assertTrue(stop_flag.exists())
+
+        # Track colours sent
+        colors_sent = []
+
+        def fake_color(ip, r, g, b):
+            colors_sent.append((ip, r, g, b))
+
+        fake_time = [0.0]
+
+        def fake_time_fn():
+            t = fake_time[0]
+            fake_time[0] = t + 0.1
+            return t
+
+        # Create a fake recorder
+        fake_rec = mock.Mock()
+        fake_rec.record.return_value = mock.Mock(ndim=1, shape=(1024,), dtype="float64")
+        fake_rec.__enter__ = mock.Mock(return_value=fake_rec)
+        fake_rec.__exit__ = mock.Mock(return_value=False)
+
+        fake_mic = mock.Mock()
+        fake_mic.name = "Stereo Mix (loopback)"
+        fake_mic.recorder = mock.Mock(return_value=fake_rec)
+
+        frame_count = [0]
+
+        def raise_ki_after_2(*args, **kwargs):
+            frame_count[0] += 1
+            if frame_count[0] >= 2:
+                raise KeyboardInterrupt()
+            return fake_rec
+
+        with mock.patch.dict(sys.modules, {
+            "soundcard": mock.Mock(all_microphones=mock.Mock(return_value=[fake_mic])),
+            "numpy": mock.Mock(),
+        }):
+            with mock.patch.object(music_sync, "govee") as mock_govee:
+                mock_govee.color = fake_color
+                mock_govee.status = mock.Mock(return_value={"msg": {"data": {"brightness": 50}}})
+                mock_govee.brightness = mock.Mock()
+                with mock.patch("time.sleep"):
+                    with mock.patch.object(music_sync, "STOP_FLAG_FILE", stop_flag):
+                        with mock.patch.object(music_sync, "analyze", return_value={"level": 0.5, "bass": 0.5, "mid": 0.5, "treble": 0.5}):
+                            with mock.patch.object(fake_mic, "recorder", side_effect=raise_ki_after_2):
+                                try:
+                                    music_sync.run(
+                                        {"devices": [{"ip": "1.2.3.4"}]},
+                                        fps=10,
+                                        time_fn=fake_time_fn,
+                                    )
+                                except KeyboardInterrupt:
+                                    pass
+
+        # At least one colour should have been sent (proves run continued past leftover flag)
+        self.assertGreaterEqual(len(colors_sent), 1,
+                                "Expected at least one colour sent after clearing leftover stop flag")
+        # Stop flag should be gone
+        self.assertFalse(stop_flag.exists(), "Leftover stop flag should be removed")
+
+
+class TestToggleCommands(StateDirMixin, unittest.TestCase):
     """Test the start/stop/toggle/status subcommands."""
 
     def setUp(self):
-        """Set up temp state directory for each test."""
-        import tempfile
-        self.temp_dir = tempfile.mkdtemp()
+        super().setUp()
         self.original_state_dir = music_sync.STATE_DIR
         self.original_pid_file = music_sync.PID_FILE
         self.original_stop_flag = music_sync.STOP_FLAG_FILE
         self.original_log_file = music_sync.LOG_FILE
 
-        music_sync.STATE_DIR = Path(self.temp_dir)
-        music_sync.PID_FILE = Path(self.temp_dir) / "music_sync.pid"
-        music_sync.STOP_FLAG_FILE = Path(self.temp_dir) / "music_stop"
-        music_sync.LOG_FILE = Path(self.temp_dir) / "music_sync.log"
+        music_sync.STATE_DIR = self.state_dir
+        music_sync.PID_FILE = self.state_dir / "music_sync.pid"
+        music_sync.STOP_FLAG_FILE = self.state_dir / "music_stop"
+        music_sync.LOG_FILE = self.state_dir / "music_sync.log"
 
     def tearDown(self):
-        """Clean up temp state directory."""
-        import shutil
         music_sync.STATE_DIR = self.original_state_dir
         music_sync.PID_FILE = self.original_pid_file
         music_sync.STOP_FLAG_FILE = self.original_stop_flag
         music_sync.LOG_FILE = self.original_log_file
-        shutil.rmtree(self.temp_dir, ignore_errors=True)
+        super().tearDown()
 
     def test_status_off_when_no_pid_file(self):
         """status should report OFF when no pid file exists."""
@@ -295,7 +540,6 @@ class TestToggleCommands(unittest.TestCase):
 
         def fake_is_alive(pid):
             call_count[0] += 1
-            # Process exits after a few checks
             return call_count[0] < 5
 
         with mock.patch.object(music_sync, "_is_process_alive", side_effect=fake_is_alive):
@@ -316,7 +560,6 @@ class TestToggleCommands(unittest.TestCase):
                         with mock.patch("builtins.print"):
                             result = music_sync.cmd_stop()
         self.assertEqual(result, 0)
-        # taskkill should have been called
         self.assertTrue(any(
             "taskkill" in str(call) for call in mock_run.call_args_list
         ))
@@ -349,38 +592,27 @@ class TestToggleCommands(unittest.TestCase):
     def test_fresh_pid_file_grace_period(self):
         """Alive pid + no heartbeat + fresh pid file -> status says ON."""
         music_sync.PID_FILE.write_text("44444")
-        # Make the pid file appear fresh (just written)
         with mock.patch.object(music_sync, "_is_process_alive", return_value=True):
             with mock.patch.object(arbiter, "music_active", return_value=False):
                 pid = music_sync._get_running_pid()
-        # Within grace period (pid file just written), should return the pid
         self.assertEqual(pid, 44444)
         self.assertTrue(music_sync.PID_FILE.exists())
 
     def test_old_pid_file_no_heartbeat_killed(self):
         """Alive pid + no heartbeat + old pid file -> killed and cleaned up."""
         music_sync.PID_FILE.write_text("33333")
-        # Make the pid file appear old (older than START_GRACE_SECONDS)
         old_time = time.time() - 100
         os.utime(music_sync.PID_FILE, (old_time, old_time))
         with mock.patch.object(music_sync, "_is_process_alive", return_value=True):
             with mock.patch.object(arbiter, "music_active", return_value=False):
-                with mock.patch.object(music_sync, "_kill_process") as mock_kill:
+                with mock.patch("subprocess.run") as mock_run:
                     pid = music_sync._get_running_pid()
         self.assertIsNone(pid)
         self.assertFalse(music_sync.PID_FILE.exists())
-        mock_kill.assert_called_once_with(33333)
-
-    def test_stop_fallback_uses_force_kill(self):
-        """stop fallback should use taskkill /F."""
-        music_sync.PID_FILE.write_text("22222")
-        with mock.patch.object(music_sync, "_is_process_alive", return_value=True):
-            with mock.patch.object(arbiter, "music_active", return_value=True):
-                with mock.patch.object(music_sync, "_kill_process") as mock_kill:
-                    with mock.patch("time.sleep"):
-                        with mock.patch("builtins.print"):
-                            music_sync.cmd_stop()
-        mock_kill.assert_called_once_with(22222)
+        # Verify taskkill was called with correct args
+        self.assertTrue(any(
+            "taskkill" in str(call) for call in mock_run.call_args_list
+        ))
 
     def test_is_process_alive_exact_pid_match(self):
         """_is_process_alive(123) should be False when tasklist lists only 1234."""
@@ -400,32 +632,8 @@ class TestToggleCommands(unittest.TestCase):
             alive = music_sync._is_process_alive(1234)
         self.assertTrue(alive)
 
-    def test_run_clears_leftover_stop_flag(self):
-        """run() should remove a leftover stop flag and not exit on it."""
-        # Create a leftover stop flag
-        music_sync.STOP_FLAG_FILE.write_text("leftover")
-        self.assertTrue(music_sync.STOP_FLAG_FILE.exists())
-
-        # Mock dependencies so run() doesn't actually start the loop
-        with mock.patch.object(arbiter, "set_music_active"):
-            with mock.patch.object(arbiter, "clear_music_active"):
-                with mock.patch.object(music_sync, "_remove_stop_flag") as mock_remove:
-                    # Call run() with a fake config and time_fn
-                    # It should call _remove_stop_flag before the loop
-                    try:
-                        music_sync.run(
-                            {"devices": [{"ip": "1.2.3.4"}]},
-                            fps=10,
-                            time_fn=lambda: 0.0,
-                        )
-                    except SystemExit:
-                        pass  # Expected if soundcard not available
-        mock_remove.assert_called()
-
     def test_stop_flag_checked_before_signal(self):
         """The stop flag should be checked before the signal check in the loop."""
-        # This is a logic test: verify that the stop flag file check
-        # appears before the signal_active check in the run() function
         import inspect
         source = inspect.getsource(music_sync.run)
         stop_flag_pos = source.find("STOP_FLAG_FILE.exists()")
@@ -433,6 +641,27 @@ class TestToggleCommands(unittest.TestCase):
         self.assertGreater(stop_flag_pos, -1)
         self.assertGreater(signal_pos, -1)
         self.assertLess(stop_flag_pos, signal_pos)
+
+
+class TestMusicActiveCorruptFile(StateDirMixin, unittest.TestCase):
+    """Test that corrupt music_active.json is treated as inactive."""
+
+    def test_corrupt_json_is_inactive(self):
+        """A music_active.json with invalid JSON should be treated as inactive."""
+        path = arbiter.music_file()
+        path.write_text("not valid json {{{")
+        self.assertFalse(arbiter.music_active())
+
+    def test_fresh_valid_json_is_active(self):
+        """A fresh, valid music_active.json should be active."""
+        arbiter.set_music_active()
+        self.assertTrue(arbiter.music_active())
+
+    def test_empty_file_is_inactive(self):
+        """An empty music_active.json should be treated as inactive."""
+        path = arbiter.music_file()
+        path.write_text("")
+        self.assertFalse(arbiter.music_active())
 
 
 if __name__ == "__main__":

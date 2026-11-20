@@ -123,9 +123,9 @@ def music_file():
 def music_active():
     """Check if music sync is active.
 
-    Returns True if state/music_active.json exists AND its mtime is within
-    MUSIC_STALE_SECONDS. A stale file (e.g. left behind by a crashed music_sync)
-    does not block game or weather sync.
+    Returns True if state/music_active.json exists, is valid JSON, and its mtime
+    is within MUSIC_STALE_SECONDS. A stale or corrupt file (e.g. left behind by
+    a crashed music_sync) does not block game or weather sync.
     """
     path = music_file()
     if not path.exists():
@@ -134,7 +134,15 @@ def music_active():
         mtime = path.stat().st_mtime
     except OSError:
         return False
-    return time.time() - mtime <= MUSIC_STALE_SECONDS
+    if time.time() - mtime > MUSIC_STALE_SECONDS:
+        return False
+    # Validate JSON content; a corrupt file means the process crashed mid-write
+    try:
+        with open(path, "r") as f:
+            json.load(f)
+    except (ValueError, OSError):
+        return False
+    return True
 
 
 def set_music_active():
