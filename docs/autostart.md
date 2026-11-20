@@ -7,8 +7,8 @@ hidden in the background (no console window).
 
 Two Windows scheduled tasks are registered for your user account:
 
-- **Govee weather sync** — runs `weather_sync.py` via `pythonw.exe`
-- **Govee game sync** — runs `game_sync.py` via `pythonw.exe`
+- **Govee weather sync** — runs `pythonw.exe weather_sync.py` directly
+- **Govee game sync** — runs `pythonw.exe game_sync.py` directly
 
 Both tasks:
 - Trigger at logon (current user only)
@@ -16,6 +16,9 @@ Both tasks:
 - Have no time limit
 - Restart up to 3 times on failure (1 minute apart)
 - Don't start a second instance if one is already running
+- Run with the repo root as the working directory
+
+The install script is re-runnable: running it again replaces the existing tasks.
 
 ## Install
 
@@ -52,12 +55,20 @@ Start-ScheduledTask -TaskName "Govee weather sync"
 
 ## Logs
 
-Output from both scripts is appended to log files in the `state/` directory:
+The scheduled tasks run `pythonw.exe` directly, so there is no console output
+and no redirected log files. `weather_sync.py` uses Python's `logging` module
+and writes to stderr; `game_sync.py` prints status messages to stdout. When
+run via the scheduled tasks, this output is discarded.
 
-- `state/weather_sync.out.log`
-- `state/game_sync.out.log`
+To see output, run the scripts manually from a terminal:
 
-These files are not tracked by git.
+```powershell
+python weather_sync.py
+python game_sync.py
+```
+
+The `autostart/run_weather_sync.cmd` and `autostart/run_game_sync.cmd` files
+remain as manual launchers that redirect output to `state/*.out.log` files.
 
 ## Stop running scripts
 

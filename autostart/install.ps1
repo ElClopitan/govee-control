@@ -37,18 +37,23 @@ $ErrorActionPreference = "Stop"
 $scriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
 $repoRoot = Split-Path -Parent $scriptDir
 
-$weatherCmd = Join-Path $scriptDir "run_weather_sync.cmd"
-$gameCmd = Join-Path $scriptDir "run_game_sync.cmd"
+# Resolve pythonw.exe
+try {
+    $pythonw = (Get-Command pythonw.exe).Source
+} catch {
+    Write-Error "pythonw.exe not found in PATH. Install Python or add it to PATH."
+    exit 1
+}
 
 $tasks = @(
     @{
         Name = "Govee weather sync"
-        Cmd = $weatherCmd
+        Script = "weather_sync.py"
         Description = "Run Govee weather sync at logon (hidden)"
     },
     @{
         Name = "Govee game sync"
-        Cmd = $gameCmd
+        Script = "game_sync.py"
         Description = "Run Govee game sync at logon (hidden)"
     }
 )
@@ -89,12 +94,15 @@ if ($Uninstall) {
         if ($DryRun) {
             Write-Host "[dry-run] Would register task: $($t.Name)"
             Write-Host "  Trigger: AtLogOn (current user)"
-            Write-Host "  Action: cmd /c `"$($t.Cmd)`""
+            Write-Host "  Execute: $pythonw"
+            Write-Host "  Argument: $($t.Script)"
+            Write-Host "  WorkingDirectory: $repoRoot"
             Write-Host "  Settings: no time limit, restart 3x on failure (1 min apart), ignore new instances"
         } else {
             $action = New-ScheduledTaskAction `
-                -Execute "cmd.exe" `
-                -Argument "/c `"$($t.Cmd)`""
+                -Execute $pythonw `
+                -Argument $t.Script `
+                -WorkingDirectory $repoRoot
 
             Register-ScheduledTask `
                 -TaskName $t.Name `
@@ -103,7 +111,8 @@ if ($Uninstall) {
                 -Settings $settings `
                 -Description $t.Description `
                 -User (whoami) `
-                -RunLevel Limited
+                -RunLevel Limited `
+                -Force
 
             Write-Host "Registered task: $($t.Name)"
         }
