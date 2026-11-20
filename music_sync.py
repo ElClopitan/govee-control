@@ -603,6 +603,9 @@ def run(config, fps=None, verbose=False, log_file=None, time_fn=None):
     # don't send during the status/brightness queries
     arbiter.set_music_active()
 
+    # Recorder is opened lazily; None means "not currently open"
+    rec = None
+
     try:
         # Record initial state for restoration
         initial_states = []
@@ -630,8 +633,6 @@ def run(config, fps=None, verbose=False, log_file=None, time_fn=None):
             except OSError as e:
                 logger.error("Failed to set brightness on %s: %s", ip, e)
 
-        # Open the recorder once for the entire run
-        rec = loopback.recorder(samplerate=sample_rate, channels=1).__enter__()
         while True:
                 frame_start = time_fn()
 
@@ -661,6 +662,28 @@ def run(config, fps=None, verbose=False, log_file=None, time_fn=None):
 
                 signal_was_active = False
 
+                # If no recorder is open, try to open one
+                if rec is None:
+                    new_loopback = pick_loopback(sc)
+                    if new_loopback is not None:
+                        logger.info("Opening recorder on %s", new_loopback.name)
+                        try:
+                            rec = new_loopback.recorder(
+                                samplerate=sample_rate, channels=1
+                            ).__enter__()
+                        except Exception as enter_err:
+                            if last_error_time is None or (frame_start - last_error_time) >= ERROR_LOG_INTERVAL:
+                                logger.error("Failed to enter recorder: %s", enter_err)
+                                last_error_time = frame_start
+                            time.sleep(1.0)
+                            continue
+                    else:
+                        if last_error_time is None or (frame_start - last_error_time) >= ERROR_LOG_INTERVAL:
+                            logger.error("No loopback device found")
+                            last_error_time = frame_start
+                        time.sleep(1.0)
+                        continue
+
                 # Capture audio
                 try:
                     raw = rec.record(numframes=samples_per_frame)
@@ -669,23 +692,12 @@ def run(config, fps=None, verbose=False, log_file=None, time_fn=None):
                         logger.error("Audio capture error: %s", e)
                         last_error_time = frame_start
                     time.sleep(1.0)
-                    # Try to re-pick the loopback device and reopen the recorder
-                    new_loopback = pick_loopback(sc)
-                    if new_loopback is not None:
-                        logger.info("Reopening recorder on %s", new_loopback.name)
-                        # Exit the old recorder (ignore exceptions from exit)
-                        try:
-                            rec.__exit__(None, None, None)
-                        except Exception:
-                            pass
-                        # Enter the new recorder
-                        try:
-                            rec = new_loopback.recorder(
-                                samplerate=sample_rate, channels=1
-                            ).__enter__()
-                        except Exception as enter_err:
-                            logger.error("Failed to enter new recorder: %s", enter_err)
-                            continue
+                    # Exit the old recorder and forget it
+                    try:
+                        rec.__exit__(None, None, None)
+                    except Exception:
+                        pass
+                    rec = None
                     continue
 
                 # Mixdown to mono if needed
@@ -758,11 +770,12 @@ def run(config, fps=None, verbose=False, log_file=None, time_fn=None):
     except KeyboardInterrupt:
         logger.info("Interrupted, restoring initial state")
     finally:
-        # Exit the recorder
-        try:
-            rec.__exit__(None, None, None)
-        except Exception:
-            pass
+        # Exit the recorder if it's open
+        if rec is not None:
+            try:
+                rec.__exit__(None, None, None)
+            except Exception:
+                pass
 
         # Clear music active state
         arbiter.clear_music_active()

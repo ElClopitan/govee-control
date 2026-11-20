@@ -1404,18 +1404,27 @@ class TestRecorderReopenWithStrictFake(StateDirMixin, unittest.TestCase):
         class StrictRecorder:
             def __init__(self):
                 self.entered = False
-                self.exited = False
+                self.exit_count = 0
+                self.fail_enter = False
 
             def __enter__(self):
+                if getattr(self, "fail_enter", False):
+                    raise RuntimeError("enter failed")
                 self.entered = True
                 return self
 
             def __exit__(self, exc_type, exc_val, exc_tb):
-                self.exited = True
+                self.exit_count += 1
+                if self.exit_count > 1:
+                    raise AssertionError("recorder __exit__ called more than once")
                 return False
 
+            @property
+            def exited(self):
+                return self.exit_count > 0
+
             def record(self, numframes):
-                if not self.entered or self.exited:
+                if not self.entered or self.exit_count > 0:
                     raise RuntimeError("not entered")
                 if record_side_effect is not None:
                     record_side_effect()
@@ -1642,6 +1651,173 @@ class TestRecorderReopenWithStrictFake(StateDirMixin, unittest.TestCase):
         # pick_loopback should have been called multiple times
         self.assertGreater(pick_call_count[0], 1,
                           "pick_loopback should have been called multiple times")
+
+    def test_reopen_enter_fails_once_then_works(self):
+        """record fails on frame 2; the new recorder's __enter__ raises once,
+        then works: run() recovers, colours are sent afterwards, every
+        recorder's __exit__ count is <= 1, and the one in use at the end
+        has count exactly 1."""
+        recorders_created = []
+        record_call_count = [0]
+        enter_call_count = [0]
+
+        def record_side_effect():
+            record_call_count[0] += 1
+            if record_call_count[0] == 1:
+                # First record call: RuntimeError
+                raise RuntimeError("WASAPI error")
+            if record_call_count[0] >= 4:
+                raise KeyboardInterrupt()
+
+        def make_recorder(samplerate, channels):
+            rec = self._make_strict_recorder(record_side_effect)
+            # Second recorder's __enter__ raises once
+            if len(recorders_created) == 1:
+                rec.fail_enter = True
+            recorders_created.append(rec)
+            return rec
+
+        fake_speaker = mock.Mock()
+        fake_speaker.name = "Speakers X"
+
+        fake_mic = mock.Mock()
+        fake_mic.name = "Speakers X"
+        fake_mic.isloopback = True
+        fake_mic.recorder = make_recorder
+
+        fake_sc = mock.Mock()
+        fake_sc.default_speaker = mock.Mock(return_value=fake_speaker)
+        fake_sc.get_microphone = mock.Mock(return_value=fake_mic)
+
+        colors_sent = []
+
+        def fake_color(ip, r, g, b):
+            colors_sent.append((ip, r, g, b))
+
+        fake_time = [0.0]
+
+        def fake_time_fn():
+            t = fake_time[0]
+            fake_time[0] = t + 0.1
+            return t
+
+        with mock.patch.dict(sys.modules, {"soundcard": fake_sc, "numpy": mock.Mock()}):
+            with mock.patch.object(music_sync, "govee") as mock_govee:
+                mock_govee.color = fake_color
+                mock_govee.status = mock.Mock(return_value={"msg": {"data": {"brightness": 50}}})
+                mock_govee.brightness = mock.Mock()
+                with mock.patch("time.sleep"):
+                    with mock.patch.object(music_sync, "STOP_FLAG_FILE", self.state_dir / "music_stop"):
+                        with mock.patch.object(music_sync, "analyze", return_value={"level": 0.5, "bass": 0.5, "mid": 0.5, "treble": 0.5}):
+                            try:
+                                music_sync.run(
+                                    {"devices": [{"ip": "1.2.3.4"}]},
+                                    fps=10,
+                                    time_fn=fake_time_fn,
+                                )
+                            except KeyboardInterrupt:
+                                pass
+
+        # Three recorders should have been created
+        self.assertEqual(len(recorders_created), 3,
+                        f"Expected 3 recorders, got {len(recorders_created)}")
+        # First recorder should have been exited exactly once
+        self.assertEqual(recorders_created[0].exit_count, 1,
+                        "First recorder should have been exited exactly once")
+        # Second recorder (enter failed) should not have been exited
+        self.assertEqual(recorders_created[1].exit_count, 0,
+                        "Second recorder (enter failed) should not have been exited")
+        # Third recorder should have been entered and exited by finally
+        self.assertTrue(recorders_created[2].entered,
+                       "Third recorder should have been entered")
+        self.assertEqual(recorders_created[2].exit_count, 1,
+                        "Third recorder should have been exited by finally")
+        # Every recorder exit_count <= 1
+        for i, rec in enumerate(recorders_created):
+            self.assertLessEqual(rec.exit_count, 1,
+                               f"Recorder {i} exit_count should be <= 1")
+        # Colours should have been sent after the error
+        self.assertGreater(len(colors_sent), 0,
+                          "Expected colours sent after RuntimeError recovery")
+
+    def test_stop_flag_while_rec_is_none(self):
+        """Stop flag while rec is None (pick_loopback returns None):
+        run() exits cleanly, no recorder exited twice."""
+        recorders_created = []
+        pick_call_count = [0]
+        record_call_count = [0]
+
+        def fake_pick_loopback(sc):
+            pick_call_count[0] += 1
+            # First call (startup check): return mic
+            # Second call (first in-loop open): return mic, recorder opens
+            # Third call (after error, rec is None): return None
+            if pick_call_count[0] <= 2:
+                return fake_mic
+            else:
+                return None
+
+        def make_recorder(samplerate, channels):
+            rec = self._make_strict_recorder()
+            recorders_created.append(rec)
+            return rec
+
+        fake_speaker = mock.Mock()
+        fake_speaker.name = "Speakers X"
+
+        fake_mic = mock.Mock()
+        fake_mic.name = "Speakers X"
+        fake_mic.isloopback = True
+        fake_mic.recorder = make_recorder
+
+        fake_sc = mock.Mock()
+        fake_sc.default_speaker = mock.Mock(return_value=fake_speaker)
+        fake_sc.get_microphone = mock.Mock(return_value=fake_mic)
+
+        fake_time = [0.0]
+
+        def fake_time_fn():
+            t = fake_time[0]
+            fake_time[0] = t + 0.1
+            return t
+
+        # Create stop flag after first record error
+        def fake_record_side_effect():
+            record_call_count[0] += 1
+            if record_call_count[0] == 1:
+                # First record call: create stop flag and raise error
+                stop_flag = self.state_dir / "music_stop"
+                stop_flag.write_text("stop")
+                raise RuntimeError("WASAPI error")
+            raise RuntimeError("should not reach here")
+
+        fake_rec = self._make_strict_recorder(fake_record_side_effect)
+        recorders_created.append(fake_rec)
+        fake_mic.recorder = mock.Mock(return_value=fake_rec)
+
+        with mock.patch.dict(sys.modules, {"soundcard": fake_sc, "numpy": mock.Mock()}):
+            with mock.patch.object(music_sync, "pick_loopback", side_effect=fake_pick_loopback):
+                with mock.patch.object(music_sync, "govee") as mock_govee:
+                    mock_govee.status = mock.Mock(return_value={"msg": {"data": {"brightness": 50}}})
+                    mock_govee.brightness = mock.Mock()
+                    with mock.patch("time.sleep"):
+                        with mock.patch.object(music_sync, "STOP_FLAG_FILE", self.state_dir / "music_stop"):
+                            music_sync.run(
+                                {"devices": [{"ip": "1.2.3.4"}]},
+                                fps=10,
+                                time_fn=fake_time_fn,
+                            )
+
+        # No recorder should have been exited twice
+        for rec in recorders_created:
+            self.assertLessEqual(rec.exit_count, 1,
+                               "No recorder should be exited more than once")
+        # The recorder that opened should have been exited exactly once
+        self.assertEqual(fake_rec.exit_count, 1,
+                        "Recorder should have been exited exactly once")
+        # pick_loopback should have been called at least twice
+        self.assertGreaterEqual(pick_call_count[0], 2,
+                               "pick_loopback should have been called at least twice")
 
 
 if __name__ == "__main__":
