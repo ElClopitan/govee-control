@@ -144,6 +144,28 @@ def has_other_active_markers(session_id, max_age_hours=None):
         active.remove(marker_name)
     return len(active) > 0
 
+
+def delete_all_session_markers(dry_run=False):
+    """Delete all session marker files.
+
+    Called after a successful restore to ensure no leftover markers
+    block future clears.
+    """
+    if dry_run:
+        print("[dry-run] would delete all session markers")
+        return
+
+    sessions_dir = signal_sessions_dir()
+    if not sessions_dir.exists():
+        return
+
+    for marker_path in sessions_dir.iterdir():
+        if marker_path.is_file():
+            try:
+                marker_path.unlink()
+            except OSError:
+                pass
+
 DEFAULT_SIGNAL = {
     "color": "#ff6a00",
     "brightness": 80,
@@ -647,6 +669,9 @@ def cmd_clear(args):
             log_signal_event("clear", "oserror", hook_input)
             return
         delete_saved_state(dry_run=args.dry_run, quiet=not saved)
+        # Delete all session markers so a future needs-input/clear cycle
+        # isn't blocked by leftover markers from this cycle.
+        delete_all_session_markers(dry_run=args.dry_run)
         log_signal_event("clear", "applied", hook_input)
         print("signal cleared")
     finally:

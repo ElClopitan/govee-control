@@ -2161,6 +2161,222 @@ class TestPerSessionMarkers(StateDirMixin, unittest.TestCase):
         self.assertEqual(mock_color.call_count, 1)
         self.assertFalse(arbiter.signal_file().exists())
 
+    @mock.patch("agent_signal.govee.status")
+    @mock.patch("agent_signal.govee.turn")
+    @mock.patch("agent_signal.govee.brightness")
+    @mock.patch("agent_signal.govee.color")
+    def test_clear_all_deletes_all_session_markers(
+        self, mock_color, mock_brightness, mock_turn, mock_status, mock_sleep
+    ):
+        """clear --all deletes all session marker files after restoring."""
+        mock_status.return_value = {
+            "msg": {"data": {"on": True, "brightness": 50, "color": {"r": 255, "g": 255, "b": 255}}}
+        }
+
+        # Session A sets signal
+        args_a = mock.Mock()
+        args_a.command = "needs-input"
+        args_a.config = str(self.config_path)
+        args_a.dry_run = False
+        args_a.force = False
+        fake_stdin_a = json.dumps({"session_id": "session-A"})
+        with mock.patch("sys.stdin", mock.Mock(isatty=lambda: False, read=lambda: fake_stdin_a)):
+            with mock.patch.dict(os.environ, {"CLAUDE_CODE_SESSION_ATTENDED": "1"}):
+                agent_signal.cmd_needs_input(args_a)
+
+        # Session B sets signal
+        mock_status.reset_mock()
+        args_b = mock.Mock()
+        args_b.command = "needs-input"
+        args_b.config = str(self.config_path)
+        args_b.dry_run = False
+        args_b.force = False
+        fake_stdin_b = json.dumps({"session_id": "session-B"})
+        with mock.patch("sys.stdin", mock.Mock(isatty=lambda: False, read=lambda: fake_stdin_b)):
+            with mock.patch.dict(os.environ, {"CLAUDE_CODE_SESSION_ATTENDED": "1"}):
+                agent_signal.cmd_needs_input(args_b)
+
+        # Both markers should exist
+        sessions_dir = agent_signal.signal_sessions_dir()
+        self.assertTrue((sessions_dir / "session-A").exists())
+        self.assertTrue((sessions_dir / "session-B").exists())
+
+        # Clear --all
+        mock_color.reset_mock()
+        mock_brightness.reset_mock()
+        mock_turn.reset_mock()
+        args_clear = mock.Mock()
+        args_clear.command = "clear"
+        args_clear.config = str(self.config_path)
+        args_clear.dry_run = False
+        args_clear.all = True
+        fake_stdin_clear = json.dumps({"session_id": "session-A"})
+        with mock.patch("sys.stdin", mock.Mock(isatty=lambda: False, read=lambda: fake_stdin_clear)):
+            agent_signal.cmd_clear(args_clear)
+
+        # Signal should be restored
+        self.assertEqual(mock_color.call_count, 1)
+        # All session markers should be deleted
+        self.assertFalse((sessions_dir / "session-A").exists())
+        self.assertFalse((sessions_dir / "session-B").exists())
+
+    @mock.patch("agent_signal.govee.status")
+    @mock.patch("agent_signal.govee.turn")
+    @mock.patch("agent_signal.govee.brightness")
+    @mock.patch("agent_signal.govee.color")
+    def test_clear_all_then_new_session_clears_correctly(
+        self, mock_color, mock_brightness, mock_turn, mock_status, mock_sleep
+    ):
+        """After clear --all, a new session's clear should restore (not be blocked by leftover markers)."""
+        mock_status.return_value = {
+            "msg": {"data": {"on": True, "brightness": 50, "color": {"r": 255, "g": 255, "b": 255}}}
+        }
+
+        # Session A sets signal
+        args_a = mock.Mock()
+        args_a.command = "needs-input"
+        args_a.config = str(self.config_path)
+        args_a.dry_run = False
+        args_a.force = False
+        fake_stdin_a = json.dumps({"session_id": "session-A"})
+        with mock.patch("sys.stdin", mock.Mock(isatty=lambda: False, read=lambda: fake_stdin_a)):
+            with mock.patch.dict(os.environ, {"CLAUDE_CODE_SESSION_ATTENDED": "1"}):
+                agent_signal.cmd_needs_input(args_a)
+
+        # Session B sets signal
+        mock_status.reset_mock()
+        args_b = mock.Mock()
+        args_b.command = "needs-input"
+        args_b.config = str(self.config_path)
+        args_b.dry_run = False
+        args_b.force = False
+        fake_stdin_b = json.dumps({"session_id": "session-B"})
+        with mock.patch("sys.stdin", mock.Mock(isatty=lambda: False, read=lambda: fake_stdin_b)):
+            with mock.patch.dict(os.environ, {"CLAUDE_CODE_SESSION_ATTENDED": "1"}):
+                agent_signal.cmd_needs_input(args_b)
+
+        # Clear --all
+        mock_color.reset_mock()
+        mock_brightness.reset_mock()
+        mock_turn.reset_mock()
+        args_clear_all = mock.Mock()
+        args_clear_all.command = "clear"
+        args_clear_all.config = str(self.config_path)
+        args_clear_all.dry_run = False
+        args_clear_all.all = True
+        fake_stdin_clear_all = json.dumps({"session_id": "session-A"})
+        with mock.patch("sys.stdin", mock.Mock(isatty=lambda: False, read=lambda: fake_stdin_clear_all)):
+            agent_signal.cmd_clear(args_clear_all)
+
+        # Signal should be restored
+        self.assertEqual(mock_color.call_count, 1)
+        self.assertFalse(arbiter.signal_file().exists())
+
+        # Now session C sets signal
+        mock_status.reset_mock()
+        mock_color.reset_mock()
+        mock_brightness.reset_mock()
+        mock_turn.reset_mock()
+        args_c = mock.Mock()
+        args_c.command = "needs-input"
+        args_c.config = str(self.config_path)
+        args_c.dry_run = False
+        args_c.force = False
+        fake_stdin_c = json.dumps({"session_id": "session-C"})
+        with mock.patch("sys.stdin", mock.Mock(isatty=lambda: False, read=lambda: fake_stdin_c)):
+            with mock.patch.dict(os.environ, {"CLAUDE_CODE_SESSION_ATTENDED": "1"}):
+                agent_signal.cmd_needs_input(args_c)
+
+        # Session C clears
+        mock_color.reset_mock()
+        mock_brightness.reset_mock()
+        mock_turn.reset_mock()
+        args_clear_c = mock.Mock()
+        args_clear_c.command = "clear"
+        args_clear_c.config = str(self.config_path)
+        args_clear_c.dry_run = False
+        args_clear_c.all = False
+        fake_stdin_clear_c = json.dumps({"session_id": "session-C"})
+        with mock.patch("sys.stdin", mock.Mock(isatty=lambda: False, read=lambda: fake_stdin_clear_c)):
+            agent_signal.cmd_clear(args_clear_c)
+
+        # Signal should be restored (not blocked by leftover markers from A/B)
+        self.assertEqual(mock_color.call_count, 1)
+        self.assertFalse(arbiter.signal_file().exists())
+
+    @mock.patch("agent_signal.govee.status")
+    @mock.patch("agent_signal.govee.turn")
+    @mock.patch("agent_signal.govee.brightness")
+    @mock.patch("agent_signal.govee.color")
+    def test_last_session_clear_deletes_all_markers(
+        self, mock_color, mock_brightness, mock_turn, mock_status, mock_sleep
+    ):
+        """When the last session clears, all session markers should be deleted."""
+        mock_status.return_value = {
+            "msg": {"data": {"on": True, "brightness": 50, "color": {"r": 255, "g": 255, "b": 255}}}
+        }
+
+        # Session A sets signal
+        args_a = mock.Mock()
+        args_a.command = "needs-input"
+        args_a.config = str(self.config_path)
+        args_a.dry_run = False
+        args_a.force = False
+        fake_stdin_a = json.dumps({"session_id": "session-A"})
+        with mock.patch("sys.stdin", mock.Mock(isatty=lambda: False, read=lambda: fake_stdin_a)):
+            with mock.patch.dict(os.environ, {"CLAUDE_CODE_SESSION_ATTENDED": "1"}):
+                agent_signal.cmd_needs_input(args_a)
+
+        # Session B sets signal
+        mock_status.reset_mock()
+        args_b = mock.Mock()
+        args_b.command = "needs-input"
+        args_b.config = str(self.config_path)
+        args_b.dry_run = False
+        args_b.force = False
+        fake_stdin_b = json.dumps({"session_id": "session-B"})
+        with mock.patch("sys.stdin", mock.Mock(isatty=lambda: False, read=lambda: fake_stdin_b)):
+            with mock.patch.dict(os.environ, {"CLAUDE_CODE_SESSION_ATTENDED": "1"}):
+                agent_signal.cmd_needs_input(args_b)
+
+        # Session A clears (not last)
+        mock_color.reset_mock()
+        mock_brightness.reset_mock()
+        mock_turn.reset_mock()
+        args_clear_a = mock.Mock()
+        args_clear_a.command = "clear"
+        args_clear_a.config = str(self.config_path)
+        args_clear_a.dry_run = False
+        args_clear_a.all = False
+        fake_stdin_clear_a = json.dumps({"session_id": "session-A"})
+        with mock.patch("sys.stdin", mock.Mock(isatty=lambda: False, read=lambda: fake_stdin_clear_a)):
+            agent_signal.cmd_clear(args_clear_a)
+
+        # Signal should NOT be restored yet
+        mock_color.assert_not_called()
+        # Session A's marker should be gone, B's should remain
+        sessions_dir = agent_signal.signal_sessions_dir()
+        self.assertFalse((sessions_dir / "session-A").exists())
+        self.assertTrue((sessions_dir / "session-B").exists())
+
+        # Session B clears (last one)
+        mock_color.reset_mock()
+        mock_brightness.reset_mock()
+        mock_turn.reset_mock()
+        args_clear_b = mock.Mock()
+        args_clear_b.command = "clear"
+        args_clear_b.config = str(self.config_path)
+        args_clear_b.dry_run = False
+        args_clear_b.all = False
+        fake_stdin_clear_b = json.dumps({"session_id": "session-B"})
+        with mock.patch("sys.stdin", mock.Mock(isatty=lambda: False, read=lambda: fake_stdin_clear_b)):
+            agent_signal.cmd_clear(args_clear_b)
+
+        # Signal should be restored
+        self.assertEqual(mock_color.call_count, 1)
+        # All markers should be gone
+        self.assertFalse((sessions_dir / "session-B").exists())
+
 
 if __name__ == "__main__":
     unittest.main()
