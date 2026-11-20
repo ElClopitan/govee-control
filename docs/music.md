@@ -101,22 +101,25 @@ On exit (Ctrl+C or error), music_sync restores each strip to the colour and
 brightness it had when it started. It queries `govee.status` for each device
 before making changes and saves the state for later restoration.
 
-## Priority
+## Mode-based control
 
-Music mode participates in the priority system:
-**agent signal > music sync > game sync > weather sync**.
+Music mode is one of the selectable modes. The owner picks ONE mode by hand;
+only that mode may drive the strips. The agent signal (orange) stays above
+everything.
 
-When music_sync is running, it writes a heartbeat file (`state/music_active.json`)
-at least every 5 seconds. Game sync and weather sync check this file and yield
-to music while it's active. If music_sync crashes or exits without clearing the
-file, it becomes stale after 15 seconds and game/weather sync resume.
+When music mode is selected (`python mode.py set music`), music_sync drives the
+strips. When another mode is selected, music_sync stops sending frames.
 
 When an agent signal becomes active (e.g., `needs-input`), music_sync pauses
 sending frames and lets the signal colour show. When the signal clears, music
 sync resumes on the next frame.
 
+Music sync writes a heartbeat file (`state/music_active.json`) at least every
+5 seconds. If music_sync crashes or exits without clearing the file, it becomes
+stale after 15 seconds.
+
 Music sync clears its heartbeat file on every exit path (Ctrl+C, error, or
-normal exit), so game/weather sync can take over immediately.
+normal exit).
 
 ## Log file
 

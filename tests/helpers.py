@@ -68,3 +68,8 @@ class StateDirMixin:
         )
         self._stdin_patch.start()
         self.addCleanup(self._stdin_patch.stop)
+
+    def set_mode(self, mode):
+        """Set the mode for tests that need it."""
+        import arbiter
+        arbiter.set_mode(mode)

@@ -111,7 +111,8 @@ def run(config, interval=5, once=False, dry_run=False):
 
     Every interval seconds, check for running games and update lights.
     Only sends commands when the chosen profile changes (no spamming).
-    Respects agent signal priority: if signal is active, do not send.
+    Respects the selected mode: only drives lights when mode is "game".
+    Agent signal always wins over every mode.
 
     Args:
         config: loaded config dict
@@ -129,8 +130,9 @@ def run(config, interval=5, once=False, dry_run=False):
 
     last_profile_name = None
     signal_was_active = False
-    music_was_active = False
+    blocked_was_active = False
     last_sweep_time = None  # for rate-limiting sweep_and_restore (monotonic)
+    last_off_sent = False  # track if we already sent "off" for no-game state
 
     try:
         while True:
@@ -158,10 +160,11 @@ def run(config, interval=5, once=False, dry_run=False):
                     logger.info("signal active; skipping game sync")
                     print("signal active; skipping game sync")
                 signal_was_active = True
-                music_was_active = False
+                blocked_was_active = False
                 # Reset last_profile_name so the first successful pass after
                 # the signal clears always sends, even if the profile hasn't changed.
                 last_profile_name = None
+                last_off_sent = False
                 # Sweep stale session markers at most once every 60s while blocked
                 now = time.monotonic()
                 if last_sweep_time is None or (now - last_sweep_time) >= 60:
@@ -170,17 +173,18 @@ def run(config, interval=5, once=False, dry_run=False):
                         agent_signal.sweep_and_restore()
                     except Exception as e:
                         logger.warning("sweep_and_restore failed: %s", e)
-            # Check music priority (second highest)
-            elif arbiter.music_active():
-                if not music_was_active:
-                    logger.info("music active; skipping game sync")
-                    print("music active; skipping game sync")
-                music_was_active = True
+            # Check if game mode is selected
+            elif arbiter.game_blocked():
+                if not blocked_was_active:
+                    logger.info("not in game mode; skipping game sync")
+                    print("not in game mode; skipping game sync")
+                blocked_was_active = True
                 signal_was_active = False
                 last_profile_name = None
+                last_off_sent = False
             else:
                 signal_was_active = False
-                music_was_active = False
+                blocked_was_active = False
                 if profile_name != last_profile_name:
                     # Re-check signal just before applying (race condition fix).
                     # A signal could have become active since we last checked.
@@ -188,16 +192,25 @@ def run(config, interval=5, once=False, dry_run=False):
                         logger.info("signal active; skipping game sync")
                         print("signal active; skipping game sync")
                         last_profile_name = None
-                    elif arbiter.music_active():
-                        logger.info("music active; skipping game sync")
-                        print("music active; skipping game sync")
+                        last_off_sent = False
+                    elif arbiter.game_blocked():
+                        logger.info("not in game mode; skipping game sync")
+                        print("not in game mode; skipping game sync")
                         last_profile_name = None
+                        last_off_sent = False
                     else:
-                        # If default is null (no game -> leave lights alone),
-                        # don't send anything; just mark as applied.
+                        # In game mode with no game running: turn off (black) once
                         if profile is None:
-                            logger.info("no game running; leaving lights to weather/manual")
-                            print("no game running; leaving lights to weather/manual")
+                            if not last_off_sent:
+                                logger.info("no game running; turning lights off")
+                                print("no game running; turning lights off")
+                                try:
+                                    apply_profile(config, {"color": "black", "brightness": 0}, dry_run=dry_run)
+                                except OSError as e:
+                                    logger.warning("failed to turn off: %s", e)
+                                    print(f"warning: failed to turn off: {e}", file=sys.stderr)
+                                else:
+                                    last_off_sent = True
                             last_profile_name = profile_name
                         else:
                             logger.info("Switching to: %s", profile_name)
@@ -209,6 +222,7 @@ def run(config, interval=5, once=False, dry_run=False):
                                 print(f"warning: failed to apply {profile_name}: {e}", file=sys.stderr)
                             else:
                                 last_profile_name = profile_name
+                                last_off_sent = False
 
             if once:
                 break

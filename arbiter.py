@@ -258,9 +258,18 @@ def set_mode(mode):
 
 
 def weather_blocked():
-    """Check if weather sync should be blocked by higher-priority sources.
+    """Check if weather sync should be blocked.
 
-    Returns True if an agent signal, music sync, or game sync is active.
-    This is the single place where weather sync checks for priority.
+    Returns True if an agent signal is active or the selected mode is not "weather".
+    This is the single place where weather sync checks for blocking.
     """
-    return signal_active() or music_active() or game_active()
+    return signal_active() or get_mode() != "weather"
+
+
+def game_blocked():
+    """Check if game sync should be blocked.
+
+    Returns True if an agent signal is active or the selected mode is not "game".
+    This is the single place where game sync checks for blocking.
+    """
+    return signal_active() or get_mode() != "game"

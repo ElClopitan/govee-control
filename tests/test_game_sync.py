@@ -134,6 +134,9 @@ class TestRunOnce(StateDirMixin, unittest.TestCase):
     @mock.patch("govee.brightness")
     def test_game_detected(self, mock_brightness, mock_color, mock_processes, mock_sweep):
         """When a game is running, its profile is applied."""
+        import arbiter
+        arbiter.set_mode("game")
+
         mock_processes.return_value = {"testgame.exe", "chrome.exe"}
         config = self._make_config()
 
@@ -152,6 +155,9 @@ class TestRunOnce(StateDirMixin, unittest.TestCase):
     @mock.patch("govee.brightness")
     def test_no_game_default(self, mock_brightness, mock_color, mock_processes, mock_sweep):
         """When no game is running, default profile is applied."""
+        import arbiter
+        arbiter.set_mode("game")
+
         mock_processes.return_value = {"chrome.exe"}
         config = self._make_config()
 
@@ -171,6 +177,9 @@ class TestRunOnce(StateDirMixin, unittest.TestCase):
     @mock.patch("time.sleep")
     def test_same_game_no_spam(self, mock_sleep, mock_brightness, mock_color, mock_processes, mock_sweep):
         """Two iterations with the same game send commands only once."""
+        import arbiter
+        arbiter.set_mode("game")
+
         mock_processes.return_value = {"testgame.exe"}
         config = self._make_config()
 
@@ -198,6 +207,9 @@ class TestRunOnce(StateDirMixin, unittest.TestCase):
     @mock.patch("time.sleep")
     def test_profile_change_resends(self, mock_sleep, mock_brightness, mock_color, mock_processes, mock_sweep):
         """When profile changes, commands are resent."""
+        import arbiter
+        arbiter.set_mode("game")
+
         # First iteration: game running
         # Second iteration: no game (default)
         mock_processes.side_effect = [
@@ -291,6 +303,9 @@ class TestNetworkErrorRecovery(StateDirMixin, unittest.TestCase):
     @mock.patch("time.sleep")
     def test_oserror_retried_next_iteration(self, mock_sleep, mock_brightness, mock_color, mock_processes, mock_sweep):
         """OSError in apply_profile is caught; next iteration retries."""
+        import arbiter
+        arbiter.set_mode("game")
+
         mock_processes.return_value = {"testgame.exe"}
         config = self._make_config()
 
@@ -373,16 +388,25 @@ class TestDefaultNull(StateDirMixin, unittest.TestCase):
     @mock.patch("game_sync.running_processes")
     @mock.patch("govee.color")
     @mock.patch("govee.brightness")
-    def test_default_null_no_game_sends_nothing(self, mock_brightness, mock_color, mock_processes, mock_sweep):
-        """With "default": null and no game running, apply_profile is not called."""
+    def test_default_null_no_game_turns_off(self, mock_brightness, mock_color, mock_processes, mock_sweep):
+        """With "default": null and no game running, lights are turned off (black)."""
+        import arbiter
+        arbiter.set_mode("game")
+
         mock_processes.return_value = {"chrome.exe"}
-        config = self._make_config(default=None)
+        config = {
+            "devices": [{"name": "left", "ip": "192.168.1.50"}],
+            "games": [
+                {"name": "Test Game", "exe": "testgame.exe", "color": "red", "brightness": 80},
+            ],
+            "default": None,
+        }
 
         game_sync.run(config, once=True)
 
-        # Should NOT have called govee functions
-        mock_color.assert_not_called()
-        mock_brightness.assert_not_called()
+        # Should have sent black (off)
+        self.assertEqual(mock_color.call_count, 1)
+        mock_color.assert_called_with("192.168.1.50", 0, 0, 0)
 
     @mock.patch("agent_signal.sweep_and_restore")
     @mock.patch("game_sync.running_processes")
@@ -390,6 +414,9 @@ class TestDefaultNull(StateDirMixin, unittest.TestCase):
     @mock.patch("govee.brightness")
     def test_default_missing_uses_builtin(self, mock_brightness, mock_color, mock_processes, mock_sweep):
         """With "default" key missing, built-in white/40 is used."""
+        import arbiter
+        arbiter.set_mode("game")
+
         mock_processes.return_value = {"chrome.exe"}
         config = {
             "devices": [{"name": "left", "ip": "192.168.1.50"}],
@@ -413,6 +440,9 @@ class TestDefaultNull(StateDirMixin, unittest.TestCase):
     @mock.patch("govee.brightness")
     def test_default_null_game_still_applies(self, mock_brightness, mock_color, mock_processes, mock_sweep):
         """With "default": null, a running game still applies its profile."""
+        import arbiter
+        arbiter.set_mode("game")
+
         mock_processes.return_value = {"testgame.exe"}
         config = self._make_config(default=None)
 
@@ -448,6 +478,8 @@ class TestSignalPriority(StateDirMixin, unittest.TestCase):
         import arbiter
         import agent_signal
         from datetime import datetime, timezone
+        arbiter.set_mode("game")
+
         # Create signal file and a session marker with a recent timestamp
         (arbiter.STATE_DIR / "saved_state.json").write_text("[]")
         sessions_dir = agent_signal.signal_sessions_dir()
@@ -476,6 +508,9 @@ class TestSignalPriority(StateDirMixin, unittest.TestCase):
         import arbiter
         import agent_signal
         from datetime import datetime, timezone
+
+        # Set mode to game
+        arbiter.set_mode("game")
 
         # Start with signal active and a session marker with a recent timestamp
         (arbiter.STATE_DIR / "saved_state.json").write_text("[]")
@@ -550,6 +585,8 @@ class TestGameActiveState(StateDirMixin, unittest.TestCase):
     def test_game_profile_writes_game_active(self, mock_brightness, mock_color, mock_processes, mock_sweep):
         """When a game profile is active in loop mode, game_active.json is written."""
         import arbiter
+        arbiter.set_mode("game")
+
         mock_processes.return_value = {"testgame.exe"}
         config = self._make_config()
 
@@ -578,6 +615,7 @@ class TestGameActiveState(StateDirMixin, unittest.TestCase):
     def test_loop_mode_clears_on_exit(self, mock_sleep, mock_brightness, mock_color, mock_processes, mock_sweep):
         """Loop mode clears game_active.json on exit (finally block)."""
         import arbiter
+        arbiter.set_mode("game")
 
         mock_processes.return_value = {"testgame.exe"}
         config = self._make_config()
@@ -604,6 +642,8 @@ class TestGameActiveState(StateDirMixin, unittest.TestCase):
     def test_once_mode_does_not_set_game_active(self, mock_brightness, mock_color, mock_processes, mock_sweep):
         """Once mode does not write game_active.json."""
         import arbiter
+        arbiter.set_mode("game")
+
         mock_processes.return_value = {"testgame.exe"}
         config = self._make_config()
 
@@ -620,6 +660,7 @@ class TestGameActiveState(StateDirMixin, unittest.TestCase):
     def test_default_clears_game_active(self, mock_sleep, mock_brightness, mock_color, mock_processes, mock_sweep):
         """When going back to default, game_active.json is removed."""
         import arbiter
+        arbiter.set_mode("game")
 
         # First iteration: game running
         # Second iteration: no game (default)
@@ -662,6 +703,8 @@ class TestGameActiveState(StateDirMixin, unittest.TestCase):
         import arbiter
         import agent_signal
         from datetime import datetime, timezone
+
+        arbiter.set_mode("game")
 
         mock_pid_alive.return_value = True
         mock_processes.return_value = {"testgame.exe"}
@@ -815,8 +858,8 @@ class TestLogFileArgument(unittest.TestCase):
             self.assertFalse(os.path.exists(log_path))
 
 
-class TestMusicPriority(StateDirMixin, unittest.TestCase):
-    """Test that game sync yields to music sync."""
+class TestModeControl(StateDirMixin, unittest.TestCase):
+    """Test that game sync obeys the selected mode."""
 
     def _make_config(self):
         return {
@@ -831,15 +874,113 @@ class TestMusicPriority(StateDirMixin, unittest.TestCase):
     @mock.patch("game_sync.running_processes")
     @mock.patch("govee.color")
     @mock.patch("govee.brightness")
-    @mock.patch("arbiter.music_active", return_value=True)
-    def test_music_active_skips_game(self, mock_music, mock_brightness, mock_color, mock_processes, mock_sweep):
-        """When music is active, game sync should not send."""
+    def test_mode_game_with_game_running(self, mock_brightness, mock_color, mock_processes, mock_sweep):
+        """Mode=game + game running -> profile applied."""
+        import arbiter
+        arbiter.set_mode("game")
         mock_processes.return_value = {"testgame.exe"}
         config = self._make_config()
 
         game_sync.run(config, once=True)
 
-        # Should NOT have sent any commands because music is active
+        # Should have sent the game profile
+        self.assertEqual(mock_color.call_count, 1)
+        self.assertEqual(mock_brightness.call_count, 1)
+        mock_color.assert_called_with("192.168.1.50", 255, 0, 0)
+
+    @mock.patch("agent_signal.sweep_and_restore")
+    @mock.patch("game_sync.running_processes")
+    @mock.patch("govee.color")
+    @mock.patch("govee.brightness")
+    @mock.patch("time.sleep")
+    def test_mode_game_no_game_turns_off_once(self, mock_sleep, mock_brightness, mock_color, mock_processes, mock_sweep):
+        """Mode=game + no game -> off sent exactly once over 3 loops."""
+        import arbiter
+        arbiter.set_mode("game")
+        mock_processes.return_value = {"chrome.exe"}
+        # Use default=None so no game = turn off (not apply default profile)
+        config = {
+            "devices": [{"name": "left", "ip": "192.168.1.50"}],
+            "games": [
+                {"name": "Test Game", "exe": "testgame.exe", "color": "red", "brightness": 80},
+            ],
+            "default": None,
+        }
+
+        call_count = [0]
+        def sleep_side_effect(seconds):
+            call_count[0] += 1
+            if call_count[0] >= 3:
+                raise KeyboardInterrupt()
+        mock_sleep.side_effect = sleep_side_effect
+
+        try:
+            game_sync.run(config, interval=1)
+        except KeyboardInterrupt:
+            pass
+
+        # Should have sent off (black) exactly once
+        self.assertEqual(mock_color.call_count, 1)
+        # Black = (0, 0, 0)
+        mock_color.assert_called_with("192.168.1.50", 0, 0, 0)
+
+    @mock.patch("agent_signal.sweep_and_restore")
+    @mock.patch("game_sync.running_processes")
+    @mock.patch("govee.color")
+    @mock.patch("govee.brightness")
+    @mock.patch("time.sleep")
+    def test_mode_game_game_appears_turns_on(self, mock_sleep, mock_brightness, mock_color, mock_processes, mock_sweep):
+        """Mode=game + game appears -> on + profile."""
+        import arbiter
+        arbiter.set_mode("game")
+        # First iteration: no game
+        # Second iteration: game appears
+        mock_processes.side_effect = [
+            {"chrome.exe"},
+            {"testgame.exe"},
+        ]
+        # Use default=None so no game = turn off (not apply default profile)
+        config = {
+            "devices": [{"name": "left", "ip": "192.168.1.50"}],
+            "games": [
+                {"name": "Test Game", "exe": "testgame.exe", "color": "red", "brightness": 80},
+            ],
+            "default": None,
+        }
+
+        call_count = [0]
+        def sleep_side_effect(seconds):
+            call_count[0] += 1
+            if call_count[0] >= 2:
+                raise KeyboardInterrupt()
+        mock_sleep.side_effect = sleep_side_effect
+
+        try:
+            game_sync.run(config, interval=1)
+        except KeyboardInterrupt:
+            pass
+
+        # Should have sent off first, then the game profile
+        self.assertEqual(mock_color.call_count, 2)
+        # First call: off (black)
+        self.assertEqual(mock_color.call_args_list[0][0][1:], (0, 0, 0))
+        # Second call: game profile (red)
+        self.assertEqual(mock_color.call_args_list[1][0][1:], (255, 0, 0))
+
+    @mock.patch("agent_signal.sweep_and_restore")
+    @mock.patch("game_sync.running_processes")
+    @mock.patch("govee.color")
+    @mock.patch("govee.brightness")
+    def test_mode_weather_with_game_running(self, mock_brightness, mock_color, mock_processes, mock_sweep):
+        """Mode=weather with a game running -> nothing sent."""
+        import arbiter
+        arbiter.set_mode("weather")
+        mock_processes.return_value = {"testgame.exe"}
+        config = self._make_config()
+
+        game_sync.run(config, once=True)
+
+        # Should NOT have sent any commands because mode is weather
         mock_color.assert_not_called()
         mock_brightness.assert_not_called()
 
@@ -847,26 +988,42 @@ class TestMusicPriority(StateDirMixin, unittest.TestCase):
     @mock.patch("game_sync.running_processes")
     @mock.patch("govee.color")
     @mock.patch("govee.brightness")
-    @mock.patch("arbiter.music_active", return_value=False)
-    def test_music_inactive_allows_game(self, mock_music, mock_brightness, mock_color, mock_processes, mock_sweep):
-        """When music is not active, game sync should send."""
+    @mock.patch("time.sleep")
+    def test_mode_switch_weather_to_game(self, mock_sleep, mock_brightness, mock_color, mock_processes, mock_sweep):
+        """Mode switches weather->game mid-run -> profile applied on the next loop."""
+        import arbiter
+        arbiter.set_mode("weather")
         mock_processes.return_value = {"testgame.exe"}
         config = self._make_config()
 
-        game_sync.run(config, once=True)
+        call_count = [0]
+        def sleep_side_effect(seconds):
+            call_count[0] += 1
+            if call_count[0] == 1:
+                # Switch to game mode between iterations
+                arbiter.set_mode("game")
+            if call_count[0] >= 2:
+                raise KeyboardInterrupt()
+        mock_sleep.side_effect = sleep_side_effect
 
-        # Should have sent commands because music is not active
+        try:
+            game_sync.run(config, interval=1)
+        except KeyboardInterrupt:
+            pass
+
+        # Should have sent the game profile on the second iteration
         self.assertEqual(mock_color.call_count, 1)
-        self.assertEqual(mock_brightness.call_count, 1)
+        mock_color.assert_called_with("192.168.1.50", 255, 0, 0)
 
     @mock.patch("agent_signal.sweep_and_restore")
     @mock.patch("game_sync.running_processes")
     @mock.patch("govee.color")
     @mock.patch("govee.brightness")
     @mock.patch("arbiter.signal_active", return_value=True)
-    @mock.patch("arbiter.music_active", return_value=True)
-    def test_signal_beats_music(self, mock_music, mock_signal, mock_brightness, mock_color, mock_processes, mock_sweep):
-        """Signal should beat music (both active, signal wins)."""
+    def test_signal_active_in_game_mode(self, mock_signal, mock_brightness, mock_color, mock_processes, mock_sweep):
+        """Signal active in game mode -> nothing sent."""
+        import arbiter
+        arbiter.set_mode("game")
         mock_processes.return_value = {"testgame.exe"}
         config = self._make_config()
 

@@ -293,25 +293,47 @@ Weather conditions are mapped to colours using WMO weather codes:
 | 95-99 | Thunderstorm | Purple `#7b1fa2` | Purple `#7b1fa2` |
 | Other | Unknown | White `#ffffff` | Dark grey `#37474f` |
 
-## Priority
+## Mode-based control
 
-When multiple light sources are active, they follow this priority order:
+The owner picks ONE mode by hand; only that mode may drive the strips. The agent
+signal (orange) stays above everything.
 
-1. **Agent signal** (highest) — `agent_signal.py needs-input` sets the lights to the signal colour. While active, music sync, game sync, and weather sync do not send any commands.
-2. **Music sync** — When music sync is running, `music_sync.py` sets the lights based on audio analysis. Game sync and weather sync do not send commands while music is active.
-3. **Game sync** — When a game is running, `game_sync.py` sets the lights to the game's colour. Weather sync does not send commands while a game is active.
-4. **Weather sync** (lowest) — `weather_sync.py` sets the lights based on current weather conditions.
+```bash
+# Get the current mode
+python mode.py get
 
-The priority system uses file-based state in the `state/` directory:
+# Set a mode
+python mode.py set weather
+python mode.py set game
+python mode.py set music
+python mode.py set off
+```
+
+Modes:
+- `off` — no mode drives the strips; turns lights off if no signal is active
+- `weather` — weather_sync.py may drive the strips
+- `game` — game_sync.py may drive the strips
+- `music` — music_sync.py may drive the strips
+
+If `state/mode.json` is missing, unreadable, or contains an unknown mode, the
+current mode is treated as `off`.
+
+### Game mode with no game running
+
+When game mode is set but no matching game is running, the lights are turned off
+(black) once. When a game starts again, the lights turn on with the game's profile.
+
+### State files
+
+The mode system uses file-based state in the `state/` directory:
 - `state/saved_state.json` — exists when an agent signal is active
 - `state/signal_sessions/` — per-session marker files; one file per Claude session that raised the signal
-- `state/music_active.json` — exists when music sync is active (contains pid and timestamp); music sync rewrites this file at least every 5 seconds as a heartbeat, and if it's older than 15 seconds it's considered stale so game/weather sync can resume
-- `state/game_active.json` — exists when game sync is active (contains the profile name); game sync rewrites this file every loop iteration as a heartbeat, and if it's older than 60 seconds it's considered stale so weather sync can resume
+- `state/music_active.json` — exists when music sync is active (contains pid and timestamp); music sync rewrites this file at least every 5 seconds as a heartbeat, and if it's older than 15 seconds it's considered stale
+- `state/game_active.json` — exists when game sync is active (contains the profile name); game sync rewrites this file every loop iteration as a heartbeat, and if it's older than 60 seconds it's considered stale
+- `state/mode.json` — contains the currently selected mode
 - `state/agent_signal.lock` — lock file used to serialise concurrent agent signal hooks
 
 Concurrent `needs-input` and `clear` hooks are serialised with `state/agent_signal.lock` to prevent race conditions where multiple Claude sessions run the hooks simultaneously.
-
-When a higher-priority source becomes inactive, the next source in the priority chain re-applies its colour on the next sync cycle.
 
 ## Modes
 

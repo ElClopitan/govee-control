@@ -162,6 +162,7 @@ class TestRunOnce(StateDirMixin, unittest.TestCase):
 
     def setUp(self):
         super().setUp()
+        self.set_mode("weather")
         p = mock.patch("agent_signal.sweep_and_restore")
         p.start()
         self.addCleanup(p.stop)
@@ -395,6 +396,7 @@ class TestNetworkError(StateDirMixin, unittest.TestCase):
 
     def setUp(self):
         super().setUp()
+        self.set_mode("weather")
         p = mock.patch("agent_signal.sweep_and_restore")
         p.start()
         self.addCleanup(p.stop)
@@ -403,7 +405,10 @@ class TestNetworkError(StateDirMixin, unittest.TestCase):
     @mock.patch("time.sleep")
     def test_network_error_once_mode(self, mock_sleep, mock_fetch):
         """Network error in --once mode exits non-zero."""
+        import arbiter
         import urllib.error
+        arbiter.set_mode("weather")
+
         mock_fetch.side_effect = urllib.error.URLError("connection failed")
         config = {
             "devices": [{"name": "left", "ip": "192.168.1.50"}],
@@ -419,7 +424,10 @@ class TestNetworkError(StateDirMixin, unittest.TestCase):
     @mock.patch("time.sleep")
     def test_network_error_loop_mode(self, mock_sleep, mock_fetch, mock_brightness, mock_color):
         """Network error in loop mode retries (doesn't crash)."""
+        import arbiter
         import urllib.error
+        arbiter.set_mode("weather")
+
         call_count = [0]
 
         def fail_then_succeed(*args, **kwargs):
@@ -460,6 +468,9 @@ class TestNetworkError(StateDirMixin, unittest.TestCase):
     @mock.patch("time.sleep")
     def test_connection_reset_once_mode(self, mock_sleep, mock_fetch):
         """ConnectionResetError in --once mode exits non-zero."""
+        import arbiter
+        arbiter.set_mode("weather")
+
         mock_fetch.side_effect = ConnectionResetError("connection reset")
         config = {
             "devices": [{"name": "left", "ip": "192.168.1.50"}],
@@ -609,10 +620,11 @@ class TestDryRun(unittest.TestCase):
 
 
 class TestPriority(StateDirMixin, unittest.TestCase):
-    """Test that weather sync respects signal/game priority."""
+    """Test that weather sync respects mode-based control."""
 
     def setUp(self):
         super().setUp()
+        self.set_mode("weather")
         p = mock.patch("agent_signal.sweep_and_restore")
         p.start()
         self.addCleanup(p.stop)
@@ -626,10 +638,10 @@ class TestPriority(StateDirMixin, unittest.TestCase):
     @mock.patch("weather_sync.fetch_weather")
     @mock.patch("govee.color")
     @mock.patch("govee.brightness")
-    def test_game_active_skips_send(self, mock_brightness, mock_color, mock_fetch):
-        """When game is active, weather sync does not send to lights."""
+    def test_mode_not_weather_skips_send(self, mock_brightness, mock_color, mock_fetch):
+        """When mode is not weather, weather sync does not send to lights."""
         import arbiter
-        arbiter.set_game_active("Test Game")
+        arbiter.set_mode("game")
 
         mock_fetch.return_value = {
             "temperature_2m": 20.0,
@@ -650,6 +662,7 @@ class TestPriority(StateDirMixin, unittest.TestCase):
     def test_signal_active_skips_send(self, mock_brightness, mock_color, mock_fetch):
         """When signal is active, weather sync does not send to lights."""
         import arbiter
+        arbiter.set_mode("weather")
         (arbiter.STATE_DIR / "saved_state.json").write_text("[]")
 
         mock_fetch.return_value = {
@@ -668,8 +681,11 @@ class TestPriority(StateDirMixin, unittest.TestCase):
     @mock.patch("weather_sync.fetch_weather")
     @mock.patch("govee.color")
     @mock.patch("govee.brightness")
-    def test_no_priority_sends_color(self, mock_brightness, mock_color, mock_fetch):
-        """When neither signal nor game is active, weather sync sends color."""
+    def test_mode_weather_sends_color(self, mock_brightness, mock_color, mock_fetch):
+        """When mode is weather and no signal, weather sync sends color."""
+        import arbiter
+        arbiter.set_mode("weather")
+
         mock_fetch.return_value = {
             "temperature_2m": 20.0,
             "weather_code": 0,
@@ -686,14 +702,10 @@ class TestPriority(StateDirMixin, unittest.TestCase):
     @mock.patch("weather_sync.fetch_weather")
     @mock.patch("govee.color")
     @mock.patch("govee.brightness")
-    def test_stale_game_active_allows_weather(self, mock_brightness, mock_color, mock_fetch):
-        """A stale game_active.json (mtime > 60s) does not block weather sync."""
+    def test_mode_weather_allows_weather(self, mock_brightness, mock_color, mock_fetch):
+        """When mode is weather, weather sync sends color."""
         import arbiter
-        # Create a game_active.json with mtime 120 seconds ago
-        arbiter.set_game_active("Test Game")
-        path = arbiter.STATE_DIR / "game_active.json"
-        old_time = time.time() - 120
-        os.utime(path, (old_time, old_time))
+        arbiter.set_mode("weather")
 
         mock_fetch.return_value = {
             "temperature_2m": 20.0,
@@ -770,6 +782,7 @@ class TestBlockedPollInterval(StateDirMixin, unittest.TestCase):
 
     def setUp(self):
         super().setUp()
+        self.set_mode("weather")
         p = mock.patch("agent_signal.sweep_and_restore")
         p.start()
         self.addCleanup(p.stop)
@@ -822,16 +835,16 @@ class TestBlockedPollInterval(StateDirMixin, unittest.TestCase):
         """When blocked during re-check before send, sleep uses min(interval, 10)."""
         import arbiter
 
-        def fetch_with_game(*args, **kwargs):
-            # Simulate game becoming active during the fetch
-            arbiter.set_game_active("Test Game")
+        def fetch_with_mode_change(*args, **kwargs):
+            # Simulate mode changing to game during the fetch
+            arbiter.set_mode("game")
             return {
                 "temperature_2m": 20.0,
                 "weather_code": 0,
                 "is_day": 1,
             }
 
-        mock_fetch.side_effect = fetch_with_game
+        mock_fetch.side_effect = fetch_with_mode_change
         config = self._make_config()
 
         def sleep_side_effect(seconds):
@@ -856,6 +869,7 @@ class TestPriorityRecheckBeforeSend(StateDirMixin, unittest.TestCase):
 
     def setUp(self):
         super().setUp()
+        self.set_mode("weather")
         p = mock.patch("agent_signal.sweep_and_restore")
         p.start()
         self.addCleanup(p.stop)
@@ -899,25 +913,25 @@ class TestPriorityRecheckBeforeSend(StateDirMixin, unittest.TestCase):
     @mock.patch("weather_sync.fetch_weather")
     @mock.patch("govee.color")
     @mock.patch("govee.brightness")
-    def test_game_during_fetch_skips_send(self, mock_brightness, mock_color, mock_fetch):
-        """If game becomes active during weather fetch, skip sending."""
+    def test_mode_change_during_fetch_skips_send(self, mock_brightness, mock_color, mock_fetch):
+        """If mode changes during weather fetch, skip sending."""
         import arbiter
 
-        def fetch_with_game(*args, **kwargs):
-            # Simulate game becoming active during the fetch
-            arbiter.set_game_active("Test Game")
+        def fetch_with_mode_change(*args, **kwargs):
+            # Simulate mode changing to game during the fetch
+            arbiter.set_mode("game")
             return {
                 "temperature_2m": 20.0,
                 "weather_code": 0,
                 "is_day": 1,
             }
 
-        mock_fetch.side_effect = fetch_with_game
+        mock_fetch.side_effect = fetch_with_mode_change
         config = self._make_config()
 
         weather_sync.run(config, once=True)
 
-        # Should NOT have called govee functions because game became active
+        # Should NOT have called govee functions because mode changed
         mock_color.assert_not_called()
         mock_brightness.assert_not_called()
 
@@ -973,11 +987,16 @@ class TestPriorityRecheckBeforeSend(StateDirMixin, unittest.TestCase):
 class TestBrightnessCap(StateDirMixin, unittest.TestCase):
     """Test that brightness is capped at max_brightness (default 80)."""
 
+    def setUp(self):
+        super().setUp()
+        self.set_mode("weather")
+
     @mock.patch("weather_sync.govee.color")
     @mock.patch("weather_sync.govee.brightness")
     @mock.patch("weather_sync.fetch_weather")
     def test_weather_brightness_capped_at_80(self, mock_fetch, mock_brightness, mock_color):
         """Weather brightness of 100 is capped to 80 (default max_brightness)."""
+
         mock_fetch.return_value = {
             "temperature_2m": 20.0,
             "weather_code": 0,
@@ -1202,6 +1221,7 @@ class TestPatternLoop(StateDirMixin, unittest.TestCase):
 
     def setUp(self):
         super().setUp()
+        self.set_mode("weather")
         p = mock.patch("agent_signal.sweep_and_restore")
         p.start()
         self.addCleanup(p.stop)
@@ -1381,6 +1401,7 @@ class TestPatternFetchInterval(StateDirMixin, unittest.TestCase):
 
     def setUp(self):
         super().setUp()
+        self.set_mode("weather")
         p = mock.patch("agent_signal.sweep_and_restore")
         p.start()
         self.addCleanup(p.stop)
@@ -1475,6 +1496,7 @@ class TestPerStripBrightness(StateDirMixin, unittest.TestCase):
 
     def setUp(self):
         super().setUp()
+        self.set_mode("weather")
         p = mock.patch("agent_signal.sweep_and_restore")
         p.start()
         self.addCleanup(p.stop)
@@ -1565,6 +1587,7 @@ class TestFrameErrorRateLimit(StateDirMixin, unittest.TestCase):
 
     def setUp(self):
         super().setUp()
+        self.set_mode("weather")
         p = mock.patch("agent_signal.sweep_and_restore")
         p.start()
         self.addCleanup(p.stop)
@@ -1591,6 +1614,9 @@ class TestFrameErrorRateLimit(StateDirMixin, unittest.TestCase):
     @mock.patch("time.time")
     def test_frame_errors_rate_limited(self, mock_time, mock_sleep, mock_brightness, mock_color, mock_fetch):
         """10 consecutive frame errors within 60s produce at most one error log."""
+        import arbiter
+        arbiter.set_mode("weather")
+
         mock_time.return_value = 1000.0
         mock_fetch.return_value = {
             "temperature_2m": 15.0,
@@ -1629,6 +1655,7 @@ class TestThunderstormPattern(StateDirMixin, unittest.TestCase):
 
     def setUp(self):
         super().setUp()
+        self.set_mode("weather")
         p = mock.patch("agent_signal.sweep_and_restore")
         p.start()
         self.addCleanup(p.stop)
@@ -1802,6 +1829,7 @@ class TestThunderstormDoubleFlash(StateDirMixin, unittest.TestCase):
 
     def setUp(self):
         super().setUp()
+        self.set_mode("weather")
         p = mock.patch("agent_signal.sweep_and_restore")
         p.start()
         self.addCleanup(p.stop)
@@ -2022,6 +2050,7 @@ class TestThunderstormSignalRace(StateDirMixin, unittest.TestCase):
 
     def setUp(self):
         super().setUp()
+        self.set_mode("weather")
         p = mock.patch("agent_signal.sweep_and_restore")
         p.start()
         self.addCleanup(p.stop)
@@ -2355,6 +2384,7 @@ class TestFetchOnTheHour(StateDirMixin, unittest.TestCase):
 
     def setUp(self):
         super().setUp()
+        self.set_mode("weather")
         p = mock.patch("agent_signal.sweep_and_restore")
         p.start()
         self.addCleanup(p.stop)
@@ -2378,7 +2408,10 @@ class TestFetchOnTheHour(StateDirMixin, unittest.TestCase):
     @mock.patch("time.time")
     def test_fetch_at_top_of_hour(self, mock_time, mock_sleep, mock_brightness, mock_color, mock_fetch):
         """With fetch_on_the_hour=true, fetches at top of the hour, not before."""
+        import arbiter
         import datetime
+        arbiter.set_mode("weather")
+
         # Start at 10:20:00
         start_dt = datetime.datetime(2026, 1, 15, 10, 20, 0, tzinfo=datetime.timezone.utc)
         mock_time.return_value = start_dt.timestamp()
@@ -2428,6 +2461,9 @@ class TestFetchOnTheHour(StateDirMixin, unittest.TestCase):
     @mock.patch("time.time")
     def test_interval_based_fetching(self, mock_time, mock_sleep, mock_brightness, mock_color, mock_fetch):
         """With fetch_on_the_hour=false, fetches every interval seconds."""
+        import arbiter
+        arbiter.set_mode("weather")
+
         mock_time.return_value = 1000.0
 
         mock_fetch.return_value = {
@@ -2463,7 +2499,10 @@ class TestFetchOnTheHour(StateDirMixin, unittest.TestCase):
     @mock.patch("time.time")
     def test_static_mode_sleep_until_next_hour(self, mock_time, mock_sleep, mock_brightness, mock_color, mock_fetch):
         """In static mode with fetch_on_the_hour, sleep until next hour boundary."""
+        import arbiter
         import datetime
+        arbiter.set_mode("weather")
+
         # Start at 10:50:00
         start_dt = datetime.datetime(2026, 1, 15, 10, 50, 0, tzinfo=datetime.timezone.utc)
         mock_time.return_value = start_dt.timestamp()
@@ -2496,11 +2535,12 @@ class TestFetchOnTheHour(StateDirMixin, unittest.TestCase):
         self.assertGreaterEqual(first_sleep[0], 1.0)
 
 
-class TestMusicPriority(StateDirMixin, unittest.TestCase):
-    """Test that weather sync yields to music sync."""
+class TestModeControl(StateDirMixin, unittest.TestCase):
+    """Test that weather sync obeys the selected mode."""
 
     def setUp(self):
         super().setUp()
+        self.set_mode("weather")
         p = mock.patch("agent_signal.sweep_and_restore")
         p.start()
         self.addCleanup(p.stop)
@@ -2518,9 +2558,11 @@ class TestMusicPriority(StateDirMixin, unittest.TestCase):
     @mock.patch("weather_sync.fetch_weather")
     @mock.patch("govee.color")
     @mock.patch("govee.brightness")
-    @mock.patch("arbiter.music_active", return_value=True)
-    def test_music_active_skips_weather(self, mock_music, mock_brightness, mock_color, mock_fetch):
-        """When music is active, weather sync should not send."""
+    def test_mode_music_skips_weather(self, mock_brightness, mock_color, mock_fetch):
+        """When mode is music, weather sync should not send."""
+        import arbiter
+        arbiter.set_mode("music")
+
         mock_fetch.return_value = {
             "temperature_2m": 20.0,
             "weather_code": 0,
@@ -2530,16 +2572,18 @@ class TestMusicPriority(StateDirMixin, unittest.TestCase):
 
         weather_sync.run(config, once=True)
 
-        # Should NOT have sent any commands because music is active
+        # Should NOT have sent any commands because mode is music
         mock_color.assert_not_called()
         mock_brightness.assert_not_called()
 
     @mock.patch("weather_sync.fetch_weather")
     @mock.patch("govee.color")
     @mock.patch("govee.brightness")
-    @mock.patch("arbiter.music_active", return_value=False)
-    def test_music_inactive_allows_weather(self, mock_music, mock_brightness, mock_color, mock_fetch):
-        """When music is not active, weather sync should send."""
+    def test_mode_weather_allows_weather(self, mock_brightness, mock_color, mock_fetch):
+        """When mode is weather, weather sync should send."""
+        import arbiter
+        arbiter.set_mode("weather")
+
         mock_fetch.return_value = {
             "temperature_2m": 20.0,
             "weather_code": 0,
@@ -2549,16 +2593,18 @@ class TestMusicPriority(StateDirMixin, unittest.TestCase):
 
         weather_sync.run(config, once=True)
 
-        # Should have sent commands because music is not active
+        # Should have sent commands because mode is weather
         self.assertGreater(mock_color.call_count, 0)
 
     @mock.patch("weather_sync.fetch_weather")
     @mock.patch("govee.color")
     @mock.patch("govee.brightness")
     @mock.patch("arbiter.signal_active", return_value=True)
-    @mock.patch("arbiter.music_active", return_value=True)
-    def test_signal_beats_music(self, mock_music, mock_signal, mock_brightness, mock_color, mock_fetch):
-        """Signal should beat music (both active, signal wins)."""
+    def test_signal_beats_mode(self, mock_signal, mock_brightness, mock_color, mock_fetch):
+        """Signal should beat mode (signal active, mode is weather)."""
+        import arbiter
+        arbiter.set_mode("weather")
+
         mock_fetch.return_value = {
             "temperature_2m": 20.0,
             "weather_code": 0,

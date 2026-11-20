@@ -188,26 +188,53 @@ class TestMusicActiveStaleness(StateDirMixin, unittest.TestCase):
 
 
 class TestWeatherBlocked(StateDirMixin, unittest.TestCase):
-    """Test weather_blocked() function with music priority."""
+    """Test weather_blocked() function with mode-based control."""
 
     def test_blocked_by_signal(self):
         """weather_blocked returns True when signal is active."""
         (arbiter.STATE_DIR / "saved_state.json").write_text("[]")
+        arbiter.set_mode("weather")
         self.assertTrue(arbiter.weather_blocked())
 
-    def test_blocked_by_music(self):
-        """weather_blocked returns True when music is active."""
-        arbiter.set_music_active()
+    def test_blocked_when_mode_not_weather(self):
+        """weather_blocked returns True when mode is not weather."""
+        arbiter.set_mode("game")
         self.assertTrue(arbiter.weather_blocked())
 
-    def test_blocked_by_game(self):
-        """weather_blocked returns True when game is active."""
-        arbiter.set_game_active("Test Game")
+    def test_blocked_when_mode_off(self):
+        """weather_blocked returns True when mode is off."""
+        arbiter.set_mode("off")
         self.assertTrue(arbiter.weather_blocked())
 
-    def test_not_blocked_when_none_active(self):
-        """weather_blocked returns False when no higher priority is active."""
+    def test_not_blocked_when_mode_weather(self):
+        """weather_blocked returns False when mode is weather and no signal."""
+        arbiter.set_mode("weather")
         self.assertFalse(arbiter.weather_blocked())
+
+
+class TestGameBlocked(StateDirMixin, unittest.TestCase):
+    """Test game_blocked() function with mode-based control."""
+
+    def test_blocked_by_signal(self):
+        """game_blocked returns True when signal is active."""
+        (arbiter.STATE_DIR / "saved_state.json").write_text("[]")
+        arbiter.set_mode("game")
+        self.assertTrue(arbiter.game_blocked())
+
+    def test_blocked_when_mode_not_game(self):
+        """game_blocked returns True when mode is not game."""
+        arbiter.set_mode("weather")
+        self.assertTrue(arbiter.game_blocked())
+
+    def test_blocked_when_mode_off(self):
+        """game_blocked returns True when mode is off."""
+        arbiter.set_mode("off")
+        self.assertTrue(arbiter.game_blocked())
+
+    def test_not_blocked_when_mode_game(self):
+        """game_blocked returns False when mode is game and no signal."""
+        arbiter.set_mode("game")
+        self.assertFalse(arbiter.game_blocked())
 
 
 class TestGetMode(StateDirMixin, unittest.TestCase):
