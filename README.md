@@ -263,13 +263,19 @@ Configuration options in the `weather` section:
 - `patterns_enabled`: enable/disable animated patterns (default: true)
 - `frame_interval`: seconds between animation frames (default: 1.0, min: 0.5)
 - `night_brightness`: brightness at night (default: 30)
+- `fetch_on_the_hour`: fetch weather at the top of every hour (default: true);
+  set to false for interval-based fetching
 - `patterns`: override default pattern definitions for cloudy/rain/thunderstorm
   (use `_night` suffix for night variants, e.g. `cloudy_night`)
 
-Weather is fetched every `interval` seconds (default 900), not every frame.
-Between fetches, the last known weather data is used for animation. When
-is_day changes (day to night or vice versa), the pattern and brightness
+Weather is fetched at the top of every hour by default (`fetch_on_the_hour: true`),
+not every frame. Between fetches, the last known weather data is used for animation.
+When is_day changes (day to night or vice versa), the pattern and brightness
 switch immediately at the next fetch.
+
+To use the old interval-based behaviour, set `fetch_on_the_hour: false` in the
+`weather` config section. Weather will then be fetched every `interval` seconds
+(default 900).
 
 ### Colour mapping
 

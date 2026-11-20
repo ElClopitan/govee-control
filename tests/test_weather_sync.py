@@ -314,6 +314,7 @@ class TestRunOnce(StateDirMixin, unittest.TestCase):
 
         config = self._make_config(brightness=50)
         config["weather"]["patterns_enabled"] = False
+        config["weather"]["fetch_on_the_hour"] = False  # Use interval-based mode
 
         # Advance time past interval on second sleep
         sleep_count = [0]
@@ -1398,7 +1399,7 @@ class TestPatternFetchInterval(StateDirMixin, unittest.TestCase):
     @mock.patch("time.sleep")
     @mock.patch("time.time")
     def test_pattern_mode_refetches_after_interval(self, mock_time, mock_sleep, mock_brightness, mock_color, mock_fetch):
-        """After interval elapses, weather is fetched again."""
+        """After interval elapses, weather is fetched again (interval-based mode)."""
         mock_time.return_value = 1000.0
         mock_fetch.return_value = {
             "temperature_2m": 15.0,
@@ -1406,6 +1407,7 @@ class TestPatternFetchInterval(StateDirMixin, unittest.TestCase):
             "is_day": 1,
         }
         config = self._make_config(frame_interval=1.0)
+        config["weather"]["fetch_on_the_hour"] = False  # Use interval-based mode
 
         # Simulate frames until interval (900s) elapses, then a few more
         sleep_count = [0]
@@ -2242,6 +2244,178 @@ class TestLogFileArgument(unittest.TestCase):
 
             # Log file should NOT exist
             self.assertFalse(os.path.exists(log_path))
+
+
+class TestNextHourBoundary(unittest.TestCase):
+    """Test the next_hour_boundary helper function."""
+
+    def test_exact_hour(self):
+        """At exactly HH:00:00, next boundary is HH+1:00:00."""
+        # Use a fixed timestamp: 2026-01-15 10:00:00 UTC
+        import datetime
+        dt = datetime.datetime(2026, 1, 15, 10, 0, 0, tzinfo=datetime.timezone.utc)
+        ts = dt.timestamp()
+        result = weather_sync.next_hour_boundary(ts)
+        expected_dt = datetime.datetime(2026, 1, 15, 11, 0, 0, tzinfo=datetime.timezone.utc)
+        self.assertEqual(result, expected_dt.timestamp())
+
+    def test_one_second_after_hour(self):
+        """At HH:00:01, next boundary is HH+1:00:00."""
+        import datetime
+        dt = datetime.datetime(2026, 1, 15, 10, 0, 1, tzinfo=datetime.timezone.utc)
+        ts = dt.timestamp()
+        result = weather_sync.next_hour_boundary(ts)
+        expected_dt = datetime.datetime(2026, 1, 15, 11, 0, 0, tzinfo=datetime.timezone.utc)
+        self.assertEqual(result, expected_dt.timestamp())
+
+    def test_one_second_before_hour(self):
+        """At HH:59:59, next boundary is HH+1:00:00."""
+        import datetime
+        dt = datetime.datetime(2026, 1, 15, 10, 59, 59, tzinfo=datetime.timezone.utc)
+        ts = dt.timestamp()
+        result = weather_sync.next_hour_boundary(ts)
+        expected_dt = datetime.datetime(2026, 1, 15, 11, 0, 0, tzinfo=datetime.timezone.utc)
+        self.assertEqual(result, expected_dt.timestamp())
+
+
+class TestFetchOnTheHour(StateDirMixin, unittest.TestCase):
+    """Test the fetch_on_the_hour feature."""
+
+    def _make_config(self, fetch_on_the_hour=True, interval=900, patterns_enabled=False):
+        return {
+            "devices": [{"name": "left", "ip": "192.168.1.50"}],
+            "weather": {
+                "latitude": 51.5,
+                "longitude": -0.1,
+                "brightness": 50,
+                "fetch_on_the_hour": fetch_on_the_hour,
+                "patterns_enabled": patterns_enabled,
+            },
+        }
+
+    @mock.patch("weather_sync.fetch_weather")
+    @mock.patch("govee.color")
+    @mock.patch("govee.brightness")
+    @mock.patch("time.sleep")
+    @mock.patch("time.time")
+    def test_fetch_at_top_of_hour(self, mock_time, mock_sleep, mock_brightness, mock_color, mock_fetch):
+        """With fetch_on_the_hour=true, fetches at top of the hour, not before."""
+        import datetime
+        # Start at 10:20:00
+        start_dt = datetime.datetime(2026, 1, 15, 10, 20, 0, tzinfo=datetime.timezone.utc)
+        mock_time.return_value = start_dt.timestamp()
+
+        # Record the time of each fetch
+        fetch_times = []
+        def fetch_side_effect(*args, **kwargs):
+            fetch_times.append(mock_time.return_value)
+            return {"temperature_2m": 20.0, "weather_code": 0, "is_day": 1}
+
+        mock_fetch.side_effect = fetch_side_effect
+        config = self._make_config(fetch_on_the_hour=True, interval=900)
+
+        # Advance time to 10:59:59 - should not fetch again
+        sleep_count = [0]
+        def sleep_side_effect(seconds):
+            sleep_count[0] += 1
+            if sleep_count[0] == 1:
+                # After first fetch, advance to 10:59:59
+                dt = datetime.datetime(2026, 1, 15, 10, 59, 59, tzinfo=datetime.timezone.utc)
+                mock_time.return_value = dt.timestamp()
+            elif sleep_count[0] == 2:
+                # Advance to 11:00:00 - should trigger second fetch
+                dt = datetime.datetime(2026, 1, 15, 11, 0, 0, tzinfo=datetime.timezone.utc)
+                mock_time.return_value = dt.timestamp()
+            elif sleep_count[0] >= 3:
+                raise KeyboardInterrupt()
+
+        mock_sleep.side_effect = sleep_side_effect
+
+        try:
+            weather_sync.run(config, once=False, interval=900)
+        except KeyboardInterrupt:
+            pass
+
+        # Should have fetched twice: once at start, once at 11:00:00
+        self.assertEqual(mock_fetch.call_count, 2)
+
+        # Second fetch should be at 11:00:00, not before
+        expected_second_fetch = datetime.datetime(2026, 1, 15, 11, 0, 0, tzinfo=datetime.timezone.utc).timestamp()
+        self.assertEqual(fetch_times[1], expected_second_fetch)
+
+    @mock.patch("weather_sync.fetch_weather")
+    @mock.patch("govee.color")
+    @mock.patch("govee.brightness")
+    @mock.patch("time.sleep")
+    @mock.patch("time.time")
+    def test_interval_based_fetching(self, mock_time, mock_sleep, mock_brightness, mock_color, mock_fetch):
+        """With fetch_on_the_hour=false, fetches every interval seconds."""
+        mock_time.return_value = 1000.0
+
+        mock_fetch.return_value = {
+            "temperature_2m": 20.0,
+            "weather_code": 0,
+            "is_day": 1,
+        }
+        config = self._make_config(fetch_on_the_hour=False, interval=900)
+
+        # Advance time by 900 seconds - should trigger second fetch
+        sleep_count = [0]
+        def sleep_side_effect(seconds):
+            sleep_count[0] += 1
+            if sleep_count[0] == 1:
+                mock_time.return_value = 1900.0  # 900 seconds later
+            elif sleep_count[0] >= 2:
+                raise KeyboardInterrupt()
+
+        mock_sleep.side_effect = sleep_side_effect
+
+        try:
+            weather_sync.run(config, once=False, interval=900)
+        except KeyboardInterrupt:
+            pass
+
+        # Should have fetched twice: once at start, once after 900 seconds
+        self.assertEqual(mock_fetch.call_count, 2)
+
+    @mock.patch("weather_sync.fetch_weather")
+    @mock.patch("govee.color")
+    @mock.patch("govee.brightness")
+    @mock.patch("time.sleep")
+    @mock.patch("time.time")
+    def test_static_mode_sleep_until_next_hour(self, mock_time, mock_sleep, mock_brightness, mock_color, mock_fetch):
+        """In static mode with fetch_on_the_hour, sleep until next hour boundary."""
+        import datetime
+        # Start at 10:50:00
+        start_dt = datetime.datetime(2026, 1, 15, 10, 50, 0, tzinfo=datetime.timezone.utc)
+        mock_time.return_value = start_dt.timestamp()
+
+        mock_fetch.return_value = {
+            "temperature_2m": 20.0,
+            "weather_code": 0,
+            "is_day": 1,
+        }
+        config = self._make_config(fetch_on_the_hour=True, interval=900, patterns_enabled=False)
+
+        # First sleep should be <= 600 seconds (10 minutes to next hour)
+        first_sleep = [None]
+        def sleep_side_effect(seconds):
+            if first_sleep[0] is None:
+                first_sleep[0] = seconds
+            raise KeyboardInterrupt()
+
+        mock_sleep.side_effect = sleep_side_effect
+
+        try:
+            weather_sync.run(config, once=False, interval=900)
+        except KeyboardInterrupt:
+            pass
+
+        # Sleep should be at most 600 seconds (10 minutes to 11:00:00)
+        self.assertIsNotNone(first_sleep[0])
+        self.assertLessEqual(first_sleep[0], 600.0)
+        # And at least 1 second
+        self.assertGreaterEqual(first_sleep[0], 1.0)
 
 
 if __name__ == "__main__":

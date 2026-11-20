@@ -167,6 +167,23 @@ def should_flash(now, next_flash_time):
     return next_flash_time is not None and now >= next_flash_time
 
 
+def next_hour_boundary(now):
+    """Return the epoch time of the next local wall-clock HH:00:00 strictly after `now`.
+
+    Args:
+        now: Current epoch time (float)
+
+    Returns:
+        Epoch time (float) of the next top-of-the-hour
+    """
+    # Use time.localtime to get local time components
+    local = time.localtime(now)
+    # Calculate seconds until next hour
+    seconds_into_hour = local.tm_min * 60 + local.tm_sec
+    seconds_until_next_hour = 3600 - seconds_into_hour
+    return now + seconds_until_next_hour
+
+
 
 
 def get_pattern_for_code(code, patterns_cfg, is_day=1):
@@ -370,6 +387,9 @@ def run(config, once=False, interval=900, dry_run=False, rng=None, time_fn=None)
     frame_interval = weather_cfg.get("frame_interval", DEFAULT_FRAME_INTERVAL)
     frame_interval = max(MIN_FRAME_INTERVAL, frame_interval)
 
+    # Fetch-on-the-hour configuration
+    fetch_on_the_hour = weather_cfg.get("fetch_on_the_hour", True)
+
     # Validate location
     if lat == 0.0 and lon == 0.0:
         logger.error("Weather location not configured (latitude and longitude are both 0.0). "
@@ -388,6 +408,7 @@ def run(config, once=False, interval=900, dry_run=False, rng=None, time_fn=None)
     pattern_start_time = None
     last_frame_time = {}  # ip -> last frame send time
     last_fetch = None  # time of last weather fetch
+    next_fetch_at = None  # next scheduled fetch time (when fetch_on_the_hour is true)
     last_frame_error_time = None  # for rate-limiting frame error logs
     current_is_day = None  # track day/night for pattern switching
 
@@ -417,7 +438,15 @@ def run(config, once=False, interval=900, dry_run=False, rng=None, time_fn=None)
         priority_was_active = False
 
         # Determine if we need to fetch weather
-        need_fetch = (last_fetch is None or (now - last_fetch) >= interval)
+        if fetch_on_the_hour:
+            # Fetch at top of the hour (or immediately if never fetched / after priority block)
+            if last_fetch is None or next_fetch_at is None:
+                need_fetch = True
+            else:
+                need_fetch = now >= next_fetch_at
+        else:
+            # Old behaviour: fetch every `interval` seconds
+            need_fetch = (last_fetch is None or (now - last_fetch) >= interval)
 
         if need_fetch:
             try:
@@ -473,6 +502,14 @@ def run(config, once=False, interval=900, dry_run=False, rng=None, time_fn=None)
                     next_flash_time = None
 
             last_fetch = now
+
+            # Schedule next fetch
+            if fetch_on_the_hour:
+                next_fetch_at = next_hour_boundary(now)
+                next_local = time.localtime(next_fetch_at)
+                logger.info("Next weather fetch at %02d:%02d", next_local.tm_hour, next_local.tm_min)
+            # When not fetch_on_the_hour, next fetch is determined by interval check
+
         else:
             # Reuse last weather data; color_hex is from previous fetch
             # (still valid for pattern animation)
@@ -710,7 +747,12 @@ def run(config, once=False, interval=900, dry_run=False, rng=None, time_fn=None)
             # In pattern mode, sleep for frame_interval
             time.sleep(frame_interval)
         else:
-            time.sleep(interval)
+            # In static mode, sleep until next fetch time (or interval, whichever is shorter)
+            if fetch_on_the_hour and next_fetch_at is not None:
+                sleep_time = max(1.0, min(next_fetch_at - now, interval))
+            else:
+                sleep_time = interval
+            time.sleep(sleep_time)
 
 
 def main():
