@@ -306,6 +306,29 @@ the last session's marker is removed.
 
 When `agent_signal.py clear` runs, it restores each strip that has saved state. For any configured strip that has no saved state — for example, a strip that did not answer `devStatus` when the signal was raised, or every strip when the saved-state marker is `[]` — it applies the config's `"default"` profile. If `"default"` is missing or `null`, it falls back to white at 40%. The lights never stay in the signal colour after `clear`. A strip whose saved colour equals the signal colour is treated as a stale reading and gets the default too, so a strip that really was set to the signal colour comes back as the default after clear.
 
+## Music mode (optional)
+
+Music mode makes the strips follow the music playing on this PC. It requires
+optional dependencies that are not installed by default:
+
+```bash
+python -m pip install --user soundcard numpy
+```
+
+Or install from the requirements file:
+
+```bash
+python -m pip install --user -r requirements-music.txt
+```
+
+To test that audio capture works:
+
+```bash
+python tools/audio_probe.py --selftest
+```
+
+This plays a test tone and verifies it's captured via WASAPI loopback.
+
 ## Autostart
 
 Run weather sync and game sync automatically at Windows logon (hidden, no console
