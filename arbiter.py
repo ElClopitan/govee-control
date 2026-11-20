@@ -151,10 +151,31 @@ def set_music_active():
     Creates state directory if needed and writes music_active.json with
     the current process ID and timestamp. The file's mtime serves as the
     heartbeat that music_active() checks.
+
+    Writes atomically via temp file + os.replace() so readers never see
+    a partially-written or empty file.
     """
     STATE_DIR.mkdir(parents=True, exist_ok=True)
-    with open(music_file(), "w") as f:
+    target = music_file()
+    tmp = target.with_name(f"music_active.json.tmp.{os.getpid()}")
+    with open(tmp, "w") as f:
         json.dump({"pid": os.getpid(), "since": time.time()}, f)
+        f.flush()
+        os.fsync(f.fileno())
+    # Atomic replace; retry on Windows PermissionError (reader has file open)
+    for attempt in range(3):
+        try:
+            os.replace(tmp, target)
+            return
+        except PermissionError:
+            if attempt < 2:
+                time.sleep(0.01)
+            else:
+                # Fall back: update mtime of existing file
+                if target.exists():
+                    os.utime(target, None)
+                else:
+                    raise
 
 
 def clear_music_active():
