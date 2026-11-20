@@ -39,6 +39,9 @@ import govee
 # Heartbeat interval: refresh music_active.json at least this often
 HEARTBEAT_INTERVAL = 5.0
 
+# Interval to check if the default speaker has changed (e.g., headphones plugged in)
+DEVICE_CHECK_INTERVAL = 5.0
+
 # Grace period after start: if the pid file is younger than this, treat the
 # process as running even if the heartbeat hasn't been written yet.
 START_GRACE_SECONDS = 20
@@ -685,6 +688,8 @@ def run(config, fps=None, verbose=False, log_file=None, time_fn=None):
 
         # Recorder is opened lazily; None means "not currently open"
         rec = None
+        rec_device_id = None
+        last_device_check = 0.0
 
         try:
             # Record initial state for restoration
@@ -742,6 +747,22 @@ def run(config, fps=None, verbose=False, log_file=None, time_fn=None):
 
                     signal_was_active = False
 
+                    # Check if the default speaker has changed (e.g., headphones plugged in)
+                    if rec is not None and frame_start - last_device_check >= DEVICE_CHECK_INTERVAL:
+                        last_device_check = frame_start
+                        try:
+                            current_id = sc.default_speaker().id
+                        except Exception:
+                            current_id = None
+                        if current_id is not None and current_id != rec_device_id:
+                            logger.info("default speaker changed; reopening recorder")
+                            try:
+                                rec.__exit__(None, None, None)
+                            except Exception:
+                                pass
+                            rec = None
+                            continue
+
                     # If no recorder is open, try to open one
                     if rec is None:
                         new_loopback = pick_loopback(sc)
@@ -751,6 +772,7 @@ def run(config, fps=None, verbose=False, log_file=None, time_fn=None):
                                 rec = new_loopback.recorder(
                                     samplerate=sample_rate, channels=1
                                 ).__enter__()
+                                rec_device_id = new_loopback.id
                             except Exception as enter_err:
                                 if last_error_time is None or (frame_start - last_error_time) >= ERROR_LOG_INTERVAL:
                                     logger.error("Failed to enter recorder: %s", enter_err)

@@ -2025,6 +2025,156 @@ class TestRecorderReopenWithStrictFake(StateDirMixin, unittest.TestCase):
         self.assertGreaterEqual(pick_call_count[0], 2,
                                "pick_loopback should have been called at least twice")
 
+    def test_default_speaker_change_reopens(self):
+        """When the default speaker changes, the recorder should be reopened."""
+        recorders_created = []
+        record_call_count = [0]
+        current_speaker_id = ["A"]
+
+        def record_side_effect():
+            record_call_count[0] += 1
+            # Stop after 3 record calls on the second recorder
+            if len(recorders_created) == 2 and record_call_count[0] >= 3:
+                raise KeyboardInterrupt()
+
+        def make_recorder(samplerate, channels):
+            rec = self._make_strict_recorder(record_side_effect)
+            recorders_created.append(rec)
+            return rec
+
+        # Speaker A
+        fake_speaker_a = mock.Mock()
+        fake_speaker_a.name = "Speakers A"
+        fake_speaker_a.id = "A"
+
+        fake_mic_a = mock.Mock()
+        fake_mic_a.name = "Speakers A"
+        fake_mic_a.id = "A"
+        fake_mic_a.isloopback = True
+        fake_mic_a.recorder = make_recorder
+
+        # Speaker B
+        fake_speaker_b = mock.Mock()
+        fake_speaker_b.name = "Speakers B"
+        fake_speaker_b.id = "B"
+
+        fake_mic_b = mock.Mock()
+        fake_mic_b.name = "Speakers B"
+        fake_mic_b.id = "B"
+        fake_mic_b.isloopback = True
+        fake_mic_b.recorder = make_recorder
+
+        def fake_default_speaker():
+            return fake_speaker_a if current_speaker_id[0] == "A" else fake_speaker_b
+
+        def fake_get_microphone(id, include_loopback=False):
+            if id == "A":
+                return fake_mic_a
+            else:
+                return fake_mic_b
+
+        fake_sc = mock.Mock()
+        fake_sc.default_speaker = mock.Mock(side_effect=fake_default_speaker)
+        fake_sc.get_microphone = mock.Mock(side_effect=fake_get_microphone)
+
+        # Change speaker after 4 seconds (before the first device check at 5s)
+        def fake_time_fn():
+            t = fake_time[0]
+            fake_time[0] = t + 0.1
+            if t >= 4.0:
+                current_speaker_id[0] = "B"
+            return t
+
+        fake_time = [0.0]
+
+        with mock.patch.dict(sys.modules, {"soundcard": fake_sc, "numpy": mock.Mock()}):
+            with mock.patch.object(music_sync, "govee") as mock_govee:
+                mock_govee.status = mock.Mock(return_value={"msg": {"data": {"brightness": 50}}})
+                mock_govee.brightness = mock.Mock()
+                with mock.patch("time.sleep"):
+                    with mock.patch.object(music_sync, "STOP_FLAG_FILE", self.state_dir / "music_stop"):
+                        with mock.patch.object(music_sync, "PID_FILE", self.state_dir / "music_sync.pid"):
+                            with mock.patch.object(music_sync, "analyze", return_value={"level": 0.5, "bass": 0.5, "mid": 0.5, "treble": 0.5}):
+                                try:
+                                    music_sync.run(
+                                        {"devices": [{"ip": "1.2.3.4"}]},
+                                        fps=10,
+                                        time_fn=fake_time_fn,
+                                    )
+                                except KeyboardInterrupt:
+                                    pass
+
+        # Two recorders should have been created (one for each speaker)
+        self.assertEqual(len(recorders_created), 2,
+                        f"Expected 2 recorders, got {len(recorders_created)}")
+        # First recorder (speaker A) should have been exited
+        self.assertEqual(recorders_created[0].exit_count, 1,
+                        "First recorder should have been exited exactly once")
+        # Second recorder (speaker B) should have been entered and exited
+        self.assertTrue(recorders_created[1].entered,
+                       "Second recorder should have been entered")
+        self.assertEqual(recorders_created[1].exit_count, 1,
+                        "Second recorder should have been exited exactly once")
+        # Every recorder exit_count <= 1
+        for i, rec in enumerate(recorders_created):
+            self.assertLessEqual(rec.exit_count, 1,
+                               f"Recorder {i} exit_count should be <= 1")
+
+    def test_same_speaker_no_reopen(self):
+        """When the default speaker doesn't change, the recorder should not be reopened."""
+        recorders_created = []
+        record_call_count = [0]
+
+        def record_side_effect():
+            record_call_count[0] += 1
+            if record_call_count[0] >= 100:
+                raise KeyboardInterrupt()
+
+        def make_recorder(samplerate, channels):
+            rec = self._make_strict_recorder(record_side_effect)
+            recorders_created.append(rec)
+            return rec
+
+        fake_speaker = mock.Mock()
+        fake_speaker.name = "Speakers A"
+        fake_speaker.id = "A"
+
+        fake_mic = mock.Mock()
+        fake_mic.name = "Speakers A"
+        fake_mic.id = "A"
+        fake_mic.isloopback = True
+        fake_mic.recorder = make_recorder
+
+        fake_sc = mock.Mock()
+        fake_sc.default_speaker = mock.Mock(return_value=fake_speaker)
+        fake_sc.get_microphone = mock.Mock(return_value=fake_mic)
+
+        fake_time_fn = bounded_clock()
+
+        with mock.patch.dict(sys.modules, {"soundcard": fake_sc, "numpy": mock.Mock()}):
+            with mock.patch.object(music_sync, "govee") as mock_govee:
+                mock_govee.status = mock.Mock(return_value={"msg": {"data": {"brightness": 50}}})
+                mock_govee.brightness = mock.Mock()
+                with mock.patch("time.sleep"):
+                    with mock.patch.object(music_sync, "STOP_FLAG_FILE", self.state_dir / "music_stop"):
+                        with mock.patch.object(music_sync, "PID_FILE", self.state_dir / "music_sync.pid"):
+                            with mock.patch.object(music_sync, "analyze", return_value={"level": 0.5, "bass": 0.5, "mid": 0.5, "treble": 0.5}):
+                                try:
+                                    music_sync.run(
+                                        {"devices": [{"ip": "1.2.3.4"}]},
+                                        fps=10,
+                                        time_fn=fake_time_fn,
+                                    )
+                                except KeyboardInterrupt:
+                                    pass
+
+        # Only one recorder should have been created
+        self.assertEqual(len(recorders_created), 1,
+                        f"Expected 1 recorder, got {len(recorders_created)}")
+        # It should have been exited exactly once (by finally)
+        self.assertEqual(recorders_created[0].exit_count, 1,
+                        "Recorder should have been exited exactly once")
+
 
 if __name__ == "__main__":
     unittest.main()
