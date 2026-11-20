@@ -436,7 +436,8 @@ def cmd_stop():
     _raise_stop_flag()
 
     # Wait up to 5 seconds for it to exit
-    for _ in range(50):
+    deadline = time.monotonic() + 5
+    while time.monotonic() < deadline:
         if not _is_process_alive(pid):
             break
         time.sleep(0.1)
