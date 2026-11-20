@@ -2442,5 +2442,220 @@ class TestPerSessionMarkers(StateDirMixin, unittest.TestCase):
         self.assertFalse((sessions_dir / "session-B").exists())
 
 
+@mock.patch("agent_signal.time.sleep")
+class TestIgnoreMessagePatterns(StateDirMixin, unittest.TestCase):
+    """Test that background-job 'finished' notifications are ignored."""
+
+    def setUp(self):
+        super().setUp()
+        self.config_path = self.state_dir / "config.json"
+        self.config = {
+            "devices": [
+                {"name": "left", "ip": "192.168.1.50"},
+            ],
+            "signal": {
+                "color": "#ff6a00",
+                "brightness": 100,
+                "blink": False,
+            },
+        }
+        self.config_path.write_text(json.dumps(self.config))
+
+    @mock.patch("agent_signal.govee.status")
+    @mock.patch("agent_signal.govee.turn")
+    @mock.patch("agent_signal.govee.brightness")
+    @mock.patch("agent_signal.govee.color")
+    def test_finished_message_ignored(
+        self, mock_color, mock_brightness, mock_turn, mock_status, mock_sleep
+    ):
+        """Message ending in ' finished' is ignored (no signal)."""
+        args = mock.Mock()
+        args.command = "needs-input"
+        args.config = str(self.config_path)
+        args.dry_run = False
+        args.force = False
+
+        fake_stdin = json.dumps({
+            "session_id": "test-session",
+            "message": "X12 Some ticket finished"
+        })
+        with mock.patch("sys.stdin", mock.Mock(isatty=lambda: False, read=lambda: fake_stdin)):
+            with mock.patch.dict(os.environ, {"CLAUDE_CODE_SESSION_ATTENDED": "1"}):
+                agent_signal.cmd_needs_input(args)
+
+        # No govee calls
+        mock_status.assert_not_called()
+        mock_turn.assert_not_called()
+        mock_brightness.assert_not_called()
+        mock_color.assert_not_called()
+
+        # No saved state
+        self.assertFalse(arbiter.signal_file().exists())
+
+        # Log should contain skipped-ignored
+        log_path = agent_signal.signal_log_path()
+        self.assertTrue(log_path.exists())
+        log_content = log_path.read_text()
+        self.assertIn("needs-input skipped-ignored", log_content)
+
+    @mock.patch("agent_signal.govee.status")
+    @mock.patch("agent_signal.govee.turn")
+    @mock.patch("agent_signal.govee.brightness")
+    @mock.patch("agent_signal.govee.color")
+    def test_needs_input_message_applied(
+        self, mock_color, mock_brightness, mock_turn, mock_status, mock_sleep
+    ):
+        """Message with 'needs your input' is NOT ignored (signal applied)."""
+        mock_status.return_value = {
+            "msg": {"data": {"on": True, "brightness": 50, "color": {"r": 255, "g": 255, "b": 255}}}
+        }
+
+        args = mock.Mock()
+        args.command = "needs-input"
+        args.config = str(self.config_path)
+        args.dry_run = False
+        args.force = False
+
+        fake_stdin = json.dumps({
+            "session_id": "test-session",
+            "message": "X12 Some ticket needs your input: which?"
+        })
+        with mock.patch("sys.stdin", mock.Mock(isatty=lambda: False, read=lambda: fake_stdin)):
+            with mock.patch.dict(os.environ, {"CLAUDE_CODE_SESSION_ATTENDED": "1"}):
+                agent_signal.cmd_needs_input(args)
+
+        # Signal applied
+        self.assertTrue(arbiter.signal_file().exists())
+        self.assertEqual(mock_color.call_count, 1)
+
+    @mock.patch("agent_signal.govee.status")
+    @mock.patch("agent_signal.govee.turn")
+    @mock.patch("agent_signal.govee.brightness")
+    @mock.patch("agent_signal.govee.color")
+    def test_permission_message_applied(
+        self, mock_color, mock_brightness, mock_turn, mock_status, mock_sleep
+    ):
+        """'Claude needs your permission' is NOT ignored (signal applied)."""
+        mock_status.return_value = {
+            "msg": {"data": {"on": True, "brightness": 50, "color": {"r": 255, "g": 255, "b": 255}}}
+        }
+
+        args = mock.Mock()
+        args.command = "needs-input"
+        args.config = str(self.config_path)
+        args.dry_run = False
+        args.force = False
+
+        fake_stdin = json.dumps({
+            "session_id": "test-session",
+            "message": "Claude needs your permission"
+        })
+        with mock.patch("sys.stdin", mock.Mock(isatty=lambda: False, read=lambda: fake_stdin)):
+            with mock.patch.dict(os.environ, {"CLAUDE_CODE_SESSION_ATTENDED": "1"}):
+                agent_signal.cmd_needs_input(args)
+
+        # Signal applied
+        self.assertTrue(arbiter.signal_file().exists())
+        self.assertEqual(mock_color.call_count, 1)
+
+    @mock.patch("agent_signal.govee.status")
+    @mock.patch("agent_signal.govee.turn")
+    @mock.patch("agent_signal.govee.brightness")
+    @mock.patch("agent_signal.govee.color")
+    def test_invalid_regex_pattern_no_crash(
+        self, mock_color, mock_brightness, mock_turn, mock_status, mock_sleep
+    ):
+        """Invalid regex in ignore_message_patterns is skipped with warning, no crash."""
+        mock_status.return_value = {
+            "msg": {"data": {"on": True, "brightness": 50, "color": {"r": 255, "g": 255, "b": 255}}}
+        }
+
+        # Add invalid regex pattern
+        self.config["signal"]["ignore_message_patterns"] = ["([", " finished$"]
+        self.config_path.write_text(json.dumps(self.config))
+
+        args = mock.Mock()
+        args.command = "needs-input"
+        args.config = str(self.config_path)
+        args.dry_run = False
+        args.force = False
+
+        fake_stdin = json.dumps({
+            "session_id": "test-session",
+            "message": "Claude needs your permission"
+        })
+        with mock.patch("sys.stdin", mock.Mock(isatty=lambda: False, read=lambda: fake_stdin)):
+            with mock.patch.dict(os.environ, {"CLAUDE_CODE_SESSION_ATTENDED": "1"}):
+                agent_signal.cmd_needs_input(args)
+
+        # Signal applied (invalid pattern skipped, valid pattern didn't match)
+        self.assertTrue(arbiter.signal_file().exists())
+        self.assertEqual(mock_color.call_count, 1)
+
+    @mock.patch("agent_signal.govee.status")
+    @mock.patch("agent_signal.govee.turn")
+    @mock.patch("agent_signal.govee.brightness")
+    @mock.patch("agent_signal.govee.color")
+    def test_notification_type_in_log(
+        self, mock_color, mock_brightness, mock_turn, mock_status, mock_sleep
+    ):
+        """notification_type appears in the log line when present."""
+        mock_status.return_value = {
+            "msg": {"data": {"on": True, "brightness": 50, "color": {"r": 255, "g": 255, "b": 255}}}
+        }
+
+        args = mock.Mock()
+        args.command = "needs-input"
+        args.config = str(self.config_path)
+        args.dry_run = False
+        args.force = False
+
+        fake_stdin = json.dumps({
+            "session_id": "test-session",
+            "message": "Claude needs your permission",
+            "notification_type": "idle_prompt"
+        })
+        with mock.patch("sys.stdin", mock.Mock(isatty=lambda: False, read=lambda: fake_stdin)):
+            with mock.patch.dict(os.environ, {"CLAUDE_CODE_SESSION_ATTENDED": "1"}):
+                agent_signal.cmd_needs_input(args)
+
+        # Log should contain notification_type
+        log_path = agent_signal.signal_log_path()
+        self.assertTrue(log_path.exists())
+        log_content = log_path.read_text()
+        self.assertIn("type=idle_prompt", log_content)
+
+    @mock.patch("agent_signal.govee.status")
+    @mock.patch("agent_signal.govee.turn")
+    @mock.patch("agent_signal.govee.brightness")
+    @mock.patch("agent_signal.govee.color")
+    def test_completed_message_ignored(
+        self, mock_color, mock_brightness, mock_turn, mock_status, mock_sleep
+    ):
+        """Message ending in ' completed' is ignored (no signal)."""
+        args = mock.Mock()
+        args.command = "needs-input"
+        args.config = str(self.config_path)
+        args.dry_run = False
+        args.force = False
+
+        fake_stdin = json.dumps({
+            "session_id": "test-session",
+            "message": "Task ABC completed"
+        })
+        with mock.patch("sys.stdin", mock.Mock(isatty=lambda: False, read=lambda: fake_stdin)):
+            with mock.patch.dict(os.environ, {"CLAUDE_CODE_SESSION_ATTENDED": "1"}):
+                agent_signal.cmd_needs_input(args)
+
+        # No govee calls
+        mock_color.assert_not_called()
+
+        # Log should contain skipped-ignored
+        log_path = agent_signal.signal_log_path()
+        self.assertTrue(log_path.exists())
+        log_content = log_path.read_text()
+        self.assertIn("needs-input skipped-ignored", log_content)
+
+
 if __name__ == "__main__":
     unittest.main()

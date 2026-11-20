@@ -12,6 +12,7 @@ Usage:
 import argparse
 import json
 import os
+import re
 import sys
 import time
 from datetime import datetime, timezone
@@ -170,6 +171,7 @@ DEFAULT_SIGNAL = {
     "color": "#ff6a00",
     "brightness": 80,
     "blink": False,
+    "ignore_message_patterns": [r" finished$", r"\bcompleted$"],
 }
 
 
@@ -186,8 +188,8 @@ def is_unattended(env=None):
 def read_hook_input():
     """Read hook input JSON from stdin if available.
 
-    Returns a dict with session_id and message if present, or an empty dict.
-    Never fails if stdin is empty or not JSON.
+    Returns a dict with session_id, message, and notification_type if present,
+    or an empty dict. Never fails if stdin is empty or not JSON.
     """
     if sys.stdin.isatty():
         return {}
@@ -199,6 +201,7 @@ def read_hook_input():
         return {
             "session_id": data.get("session_id", ""),
             "message": data.get("message", ""),
+            "notification_type": data.get("notification_type", ""),
         }
     except (json.JSONDecodeError, OSError):
         return {}
@@ -207,7 +210,7 @@ def read_hook_input():
 def log_signal_event(command, action, hook_input=None):
     """Append a log line to state/signal.log.
 
-    Format: ISO timestamp, command, action, session_id, message.
+    Format: ISO timestamp, command, action, session_id, message, notification_type.
     Truncates the log if it exceeds LOG_MAX_BYTES.
     """
     try:
@@ -231,15 +234,19 @@ def log_signal_event(command, action, hook_input=None):
         now = datetime.now(timezone.utc).isoformat()
         session_id = ""
         message = ""
+        notification_type = ""
         if hook_input:
             session_id = hook_input.get("session_id", "")
             message = hook_input.get("message", "")
+            notification_type = hook_input.get("notification_type", "")
 
         line = f"{now} {command} {action}"
         if session_id:
             line += f" session={session_id}"
         if message:
             line += f" msg={message}"
+        if notification_type:
+            line += f" type={notification_type}"
         line += "\n"
 
         with open(log_path, "a") as f:
@@ -302,6 +309,22 @@ def load_config(path):
 def get_signal_config(cfg):
     """Get signal config, falling back to defaults."""
     return cfg.get("signal", DEFAULT_SIGNAL)
+
+
+def should_ignore_message(message, signal_cfg):
+    """Check if a message matches any ignore pattern.
+
+    Returns True if the message should be ignored (no signal).
+    Invalid regex patterns are skipped with a warning to stderr.
+    """
+    patterns = signal_cfg.get("ignore_message_patterns", DEFAULT_SIGNAL["ignore_message_patterns"])
+    for pattern in patterns:
+        try:
+            if re.search(pattern, message):
+                return True
+        except re.error as e:
+            print(f"warning: invalid ignore pattern {pattern!r}: {e}", file=sys.stderr)
+    return False
 
 
 def is_signal_state(entry, signal_cfg):
@@ -565,23 +588,29 @@ def cmd_needs_input(args):
     """Handle the needs-input command."""
     hook_input = read_hook_input()
     session_id = hook_input.get("session_id", "")
+    message = hook_input.get("message", "")
+
+    cfg = load_config(args.config)
+    signal_cfg = get_signal_config(cfg)
+
+    # Check if message matches any ignore pattern (before unattended check)
+    # --force does NOT bypass this
+    if message and should_ignore_message(message, signal_cfg):
+        log_signal_event("needs-input", "skipped-ignored", hook_input)
+        return
 
     # Check if unattended and not forced
     if not args.force and is_unattended():
-        cfg = load_config(args.config)
-        signal_cfg = get_signal_config(cfg)
         include_unattended = signal_cfg.get("include_unattended", False)
         if not include_unattended:
             log_signal_event("needs-input", "skipped-unattended", hook_input)
             return
 
-    cfg = load_config(args.config)
     devices = cfg.get("devices", [])
     if not devices:
         print("no devices in config", file=sys.stderr)
         sys.exit(1)
 
-    signal_cfg = get_signal_config(cfg)
     signal_path = arbiter.signal_file()
 
     # Always acquire lock before saving state (race condition fix)

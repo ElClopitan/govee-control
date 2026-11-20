@@ -13,7 +13,8 @@
     "color": "#ff6a00",
     "brightness": 80,
     "blink": false,
-    "include_unattended": false
+    "include_unattended": false,
+    "ignore_message_patterns": [" finished$", "\\bcompleted$"]
   },
   "weather": {
     "latitude": 0.0,
