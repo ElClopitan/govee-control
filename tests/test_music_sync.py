@@ -189,8 +189,8 @@ class TestMusicSignalPriority(StateDirMixin, unittest.TestCase):
     def test_music_skips_frames_when_signal_active(self):
         """music_sync.run() should not send frames when signal is active,
         but should send after signal clears."""
-        # Track signal state: active for first 3 frames, then cleared
-        signal_state = [True, True, True, False, False]
+        # Track signal state: active for first 3 loop iterations, then cleared
+        signal_state = [True, True, True, False, False, False, False, False]
         signal_idx = [0]
 
         def fake_signal_active():
@@ -216,9 +216,19 @@ class TestMusicSignalPriority(StateDirMixin, unittest.TestCase):
 
         # Mock soundcard and numpy
         fake_rec = mock.Mock()
-        fake_rec.record.return_value = mock.Mock(ndim=1, shape=(1024,), dtype="float64")
         fake_rec.__enter__ = mock.Mock(return_value=fake_rec)
         fake_rec.__exit__ = mock.Mock(return_value=False)
+
+        frame_count = [0]
+
+        def fake_record(numframes):
+            frame_count[0] += 1
+            # Hard stop after 8 frames, independent of signal state
+            if frame_count[0] >= 8:
+                raise KeyboardInterrupt()
+            return mock.Mock(ndim=1, shape=(1024,), dtype="float64")
+
+        fake_rec.record = mock.Mock(side_effect=fake_record)
 
         fake_mic = mock.Mock()
         fake_mic.name = "Stereo Mix (loopback)"
@@ -237,26 +247,23 @@ class TestMusicSignalPriority(StateDirMixin, unittest.TestCase):
                         with mock.patch.object(music_sync, "STOP_FLAG_FILE", self.state_dir / "music_stop"):
                             # Mock analyze to return consistent features
                             with mock.patch.object(music_sync, "analyze", return_value={"level": 0.5, "bass": 0.5, "mid": 0.5, "treble": 0.5}):
-                                # Run for 5 frames then KeyboardInterrupt
-                                def raise_ki_after_5(*args, **kwargs):
-                                    if signal_idx[0] >= 5:
-                                        raise KeyboardInterrupt()
-                                    return fake_rec
+                                try:
+                                    music_sync.run(
+                                        {"devices": [{"ip": "1.2.3.4"}]},
+                                        fps=10,
+                                        time_fn=fake_time_fn,
+                                    )
+                                except KeyboardInterrupt:
+                                    pass
 
-                                with mock.patch.object(fake_mic, "recorder", side_effect=raise_ki_after_5):
-                                    try:
-                                        music_sync.run(
-                                            {"devices": [{"ip": "1.2.3.4"}]},
-                                            fps=10,
-                                            time_fn=fake_time_fn,
-                                        )
-                                    except KeyboardInterrupt:
-                                        pass
-
-        # No colours should have been sent while signal was active (first 3 frames)
-        # Colours should have been sent after signal cleared (frames 4-5)
-        # Due to color_distance threshold, at most 1 colour is sent
-        self.assertGreaterEqual(len(colors_sent), 1, "Expected at least one colour after signal cleared")
+        # signal_active() should have been called at least 3 times before any color was sent
+        # (once per loop iteration where signal was active)
+        self.assertGreaterEqual(signal_idx[0], 4,
+                                "signal_active() should have been called at least 4 times "
+                                "(3 while active + 1 when cleared)")
+        # At least one colour should have been sent after signal cleared
+        self.assertGreaterEqual(len(colors_sent), 1,
+                                "Expected at least one colour after signal cleared")
 
 
 class TestMusicHeartbeatClearOnException(StateDirMixin, unittest.TestCase):
@@ -327,21 +334,22 @@ class TestMusicHeartbeatRefresh(StateDirMixin, unittest.TestCase):
 
         # Create a fake recorder
         fake_rec = mock.Mock()
-        fake_rec.record.return_value = mock.Mock(ndim=1, shape=(1024,), dtype="float64")
         fake_rec.__enter__ = mock.Mock(return_value=fake_rec)
         fake_rec.__exit__ = mock.Mock(return_value=False)
+
+        frame_count = [0]
+
+        def fake_record(numframes):
+            frame_count[0] += 1
+            if frame_count[0] >= 10:
+                raise KeyboardInterrupt()
+            return mock.Mock(ndim=1, shape=(1024,), dtype="float64")
+
+        fake_rec.record = mock.Mock(side_effect=fake_record)
 
         fake_mic = mock.Mock()
         fake_mic.name = "Stereo Mix (loopback)"
         fake_mic.recorder = mock.Mock(return_value=fake_rec)
-
-        frame_count = [0]
-
-        def raise_ki_after_10(*args, **kwargs):
-            frame_count[0] += 1
-            if frame_count[0] >= 10:
-                raise KeyboardInterrupt()
-            return fake_rec
 
         with mock.patch.dict(sys.modules, {
             "soundcard": mock.Mock(all_microphones=mock.Mock(return_value=[fake_mic])),
@@ -354,15 +362,14 @@ class TestMusicHeartbeatRefresh(StateDirMixin, unittest.TestCase):
                     with mock.patch("time.sleep"):
                         with mock.patch.object(music_sync, "STOP_FLAG_FILE", self.state_dir / "music_stop"):
                             with mock.patch.object(music_sync, "analyze", return_value={"level": 0.5, "bass": 0.5, "mid": 0.5, "treble": 0.5}):
-                                with mock.patch.object(fake_mic, "recorder", side_effect=raise_ki_after_10):
-                                    try:
-                                        music_sync.run(
-                                            {"devices": [{"ip": "1.2.3.4"}]},
-                                            fps=10,
-                                            time_fn=fake_time_fn,
-                                        )
-                                    except KeyboardInterrupt:
-                                        pass
+                                try:
+                                    music_sync.run(
+                                        {"devices": [{"ip": "1.2.3.4"}]},
+                                        fps=10,
+                                        time_fn=fake_time_fn,
+                                    )
+                                except KeyboardInterrupt:
+                                    pass
 
         # With 10 frames at 0.6s each = 6s total, heartbeat should be written at least twice
         # (once at start, once after 5s)
@@ -426,21 +433,22 @@ class TestLeftoverStopFlag(StateDirMixin, unittest.TestCase):
 
         # Create a fake recorder
         fake_rec = mock.Mock()
-        fake_rec.record.return_value = mock.Mock(ndim=1, shape=(1024,), dtype="float64")
         fake_rec.__enter__ = mock.Mock(return_value=fake_rec)
         fake_rec.__exit__ = mock.Mock(return_value=False)
+
+        frame_count = [0]
+
+        def fake_record(numframes):
+            frame_count[0] += 1
+            if frame_count[0] >= 2:
+                raise KeyboardInterrupt()
+            return mock.Mock(ndim=1, shape=(1024,), dtype="float64")
+
+        fake_rec.record = mock.Mock(side_effect=fake_record)
 
         fake_mic = mock.Mock()
         fake_mic.name = "Stereo Mix (loopback)"
         fake_mic.recorder = mock.Mock(return_value=fake_rec)
-
-        frame_count = [0]
-
-        def raise_ki_after_2(*args, **kwargs):
-            frame_count[0] += 1
-            if frame_count[0] >= 2:
-                raise KeyboardInterrupt()
-            return fake_rec
 
         with mock.patch.dict(sys.modules, {
             "soundcard": mock.Mock(all_microphones=mock.Mock(return_value=[fake_mic])),
@@ -453,15 +461,14 @@ class TestLeftoverStopFlag(StateDirMixin, unittest.TestCase):
                 with mock.patch("time.sleep"):
                     with mock.patch.object(music_sync, "STOP_FLAG_FILE", stop_flag):
                         with mock.patch.object(music_sync, "analyze", return_value={"level": 0.5, "bass": 0.5, "mid": 0.5, "treble": 0.5}):
-                            with mock.patch.object(fake_mic, "recorder", side_effect=raise_ki_after_2):
-                                try:
-                                    music_sync.run(
-                                        {"devices": [{"ip": "1.2.3.4"}]},
-                                        fps=10,
-                                        time_fn=fake_time_fn,
-                                    )
-                                except KeyboardInterrupt:
-                                    pass
+                            try:
+                                music_sync.run(
+                                    {"devices": [{"ip": "1.2.3.4"}]},
+                                    fps=10,
+                                    time_fn=fake_time_fn,
+                                )
+                            except KeyboardInterrupt:
+                                pass
 
         # At least one colour should have been sent (proves run continued past leftover flag)
         self.assertGreaterEqual(len(colors_sent), 1,
@@ -662,6 +669,44 @@ class TestMusicActiveCorruptFile(StateDirMixin, unittest.TestCase):
         path = arbiter.music_file()
         path.write_text("")
         self.assertFalse(arbiter.music_active())
+
+
+class TestMusicActiveAtomicWrite(StateDirMixin, unittest.TestCase):
+    """Test that set_music_active writes atomically."""
+
+    def test_no_tmp_file_left_after_write(self):
+        """set_music_active should not leave a .tmp file behind."""
+        arbiter.set_music_active()
+        # Check no tmp files remain
+        tmp_files = list(self.state_dir.glob("music_active.json.tmp.*"))
+        self.assertEqual(len(tmp_files), 0,
+                        f"Expected no tmp files, found: {tmp_files}")
+        # File should be valid JSON
+        self.assertTrue(arbiter.music_active())
+
+    def test_permission_error_retry(self):
+        """set_music_active should retry on PermissionError and not raise."""
+        # Create a valid existing file first
+        arbiter.set_music_active()
+
+        replace_calls = [0]
+
+        def fake_replace(src, dst):
+            replace_calls[0] += 1
+            if replace_calls[0] <= 3:
+                raise PermissionError("file in use")
+            # On 4th call, succeed (but we only retry 3 times, so this tests fallback)
+            import shutil
+            shutil.move(src, dst)
+
+        with mock.patch("os.replace", side_effect=fake_replace):
+            with mock.patch("time.sleep"):
+                arbiter.set_music_active()
+
+        # Should have retried 3 times
+        self.assertEqual(replace_calls[0], 3)
+        # File should still be valid (fallback to utime)
+        self.assertTrue(arbiter.music_active())
 
 
 if __name__ == "__main__":
