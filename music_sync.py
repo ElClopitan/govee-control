@@ -292,7 +292,7 @@ def _kill_process(pid):
         pass
 
 
-def _get_running_pid():
+def _get_running_pid(kill_hung=True):
     """Get the PID of the running music_sync process, or None.
 
     Checks: pid file exists, process is alive, and arbiter.music_active() is true.
@@ -301,6 +301,11 @@ def _get_running_pid():
     Grace period: if the process is alive but the heartbeat is missing/stale,
     and the pid file is younger than START_GRACE_SECONDS, treat it as running
     (the background process may not have written its first heartbeat yet).
+
+    Args:
+        kill_hung: If True (default), kill a hung process (alive but no heartbeat
+            outside grace period). If False, just report it as running (used by
+            cmd_status so status doesn't have side effects).
     """
     if not PID_FILE.exists():
         return None
@@ -329,11 +334,15 @@ def _get_running_pid():
             # Within grace period: process just started, heartbeat not written yet
             return pid
 
-        # Outside grace period: process is hung, kill it
-        _kill_process(pid)
-        PID_FILE.unlink(missing_ok=True)
-        arbiter.clear_music_active()
-        return None
+        if kill_hung:
+            # Outside grace period: process is hung, kill it
+            _kill_process(pid)
+            PID_FILE.unlink(missing_ok=True)
+            arbiter.clear_music_active()
+            return None
+        else:
+            # Don't kill; report as running (hung)
+            return pid
 
     return pid
 
@@ -455,7 +464,7 @@ def cmd_toggle():
 
 def cmd_status():
     """Show music sync status."""
-    pid = _get_running_pid()
+    pid = _get_running_pid(kill_hung=False)
     if pid is not None:
         print(f"music mode ON (pid {pid})")
     else:
