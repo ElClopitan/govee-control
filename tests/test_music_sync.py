@@ -240,10 +240,19 @@ class TestMusicSignalPriority(StateDirMixin, unittest.TestCase):
 
         fake_mic = mock.Mock()
         fake_mic.name = "Stereo Mix (loopback)"
+        fake_mic.isloopback = True
         fake_mic.recorder = mock.Mock(return_value=fake_rec)
 
+        fake_speaker = mock.Mock()
+        fake_speaker.name = "Stereo Mix (loopback)"
+
+        fake_sc = mock.Mock()
+        fake_sc.default_speaker = mock.Mock(return_value=fake_speaker)
+        fake_sc.get_microphone = mock.Mock(return_value=fake_mic)
+        fake_sc.all_microphones = mock.Mock(return_value=[fake_mic])
+
         with mock.patch.dict(sys.modules, {
-            "soundcard": mock.Mock(all_microphones=mock.Mock(return_value=[fake_mic])),
+            "soundcard": fake_sc,
             "numpy": mock.Mock(),
         }):
             with mock.patch.object(arbiter, "signal_active", side_effect=fake_signal_active):
@@ -305,10 +314,26 @@ class TestMusicRestoreSkippedDuringSignal(StateDirMixin, unittest.TestCase):
             # Return True on the first loop iteration (after initial setup)
             return stop_flag_calls[0] > 1
 
+        fake_rec = mock.Mock()
+        fake_rec.__enter__ = mock.Mock(return_value=fake_rec)
+        fake_rec.__exit__ = mock.Mock(return_value=False)
+        fake_rec.record.side_effect = KeyboardInterrupt()
+
         fake_mic = mock.Mock()
         fake_mic.name = "Stereo Mix (loopback)"
+        fake_mic.isloopback = True
+        fake_mic.recorder = mock.Mock(return_value=fake_rec)
+
+        fake_speaker = mock.Mock()
+        fake_speaker.name = "Stereo Mix (loopback)"
+
+        fake_sc = mock.Mock()
+        fake_sc.default_speaker = mock.Mock(return_value=fake_speaker)
+        fake_sc.get_microphone = mock.Mock(return_value=fake_mic)
+        fake_sc.all_microphones = mock.Mock(return_value=[fake_mic])
+
         with mock.patch.dict(sys.modules, {
-            "soundcard": mock.Mock(all_microphones=mock.Mock(return_value=[fake_mic])),
+            "soundcard": fake_sc,
             "numpy": mock.Mock(),
         }):
             with mock.patch.object(arbiter, "signal_active", side_effect=fake_signal_active):
@@ -345,15 +370,26 @@ class TestMusicHeartbeatClearOnException(StateDirMixin, unittest.TestCase):
 
     def test_heartbeat_cleared_on_exception(self):
         """When run() exits via exception, music_active.json should be removed."""
-        # Create a fake recorder that raises an exception on first frame
+        # Create a fake recorder that raises KeyboardInterrupt on first frame
+        # (RuntimeError is now caught and recovered from, so use KeyboardInterrupt
+        # to force exit)
         fake_rec = mock.Mock()
-        fake_rec.record.side_effect = RuntimeError("audio capture failed")
+        fake_rec.record.side_effect = KeyboardInterrupt()
         fake_rec.__enter__ = mock.Mock(return_value=fake_rec)
         fake_rec.__exit__ = mock.Mock(return_value=False)
 
         fake_mic = mock.Mock()
         fake_mic.name = "Stereo Mix (loopback)"
+        fake_mic.isloopback = True
         fake_mic.recorder = mock.Mock(return_value=fake_rec)
+
+        fake_speaker = mock.Mock()
+        fake_speaker.name = "Stereo Mix (loopback)"
+
+        fake_sc = mock.Mock()
+        fake_sc.default_speaker = mock.Mock(return_value=fake_speaker)
+        fake_sc.get_microphone = mock.Mock(return_value=fake_mic)
+        fake_sc.all_microphones = mock.Mock(return_value=[fake_mic])
 
         fake_time = [0.0]
 
@@ -363,7 +399,7 @@ class TestMusicHeartbeatClearOnException(StateDirMixin, unittest.TestCase):
             return t
 
         with mock.patch.dict(sys.modules, {
-            "soundcard": mock.Mock(all_microphones=mock.Mock(return_value=[fake_mic])),
+            "soundcard": fake_sc,
             "numpy": mock.Mock(),
         }):
             with mock.patch.object(music_sync, "govee") as mock_govee:
@@ -377,7 +413,7 @@ class TestMusicHeartbeatClearOnException(StateDirMixin, unittest.TestCase):
                                 fps=10,
                                 time_fn=fake_time_fn,
                             )
-                        except RuntimeError:
+                        except KeyboardInterrupt:
                             pass
 
         # Heartbeat file should be removed
@@ -417,10 +453,19 @@ class TestMusicActiveBeforeInitialState(StateDirMixin, unittest.TestCase):
 
         fake_mic = mock.Mock()
         fake_mic.name = "Stereo Mix (loopback)"
+        fake_mic.isloopback = True
         fake_mic.recorder = mock.Mock(return_value=fake_rec)
 
+        fake_speaker = mock.Mock()
+        fake_speaker.name = "Stereo Mix (loopback)"
+
+        fake_sc = mock.Mock()
+        fake_sc.default_speaker = mock.Mock(return_value=fake_speaker)
+        fake_sc.get_microphone = mock.Mock(return_value=fake_mic)
+        fake_sc.all_microphones = mock.Mock(return_value=[fake_mic])
+
         with mock.patch.dict(sys.modules, {
-            "soundcard": mock.Mock(all_microphones=mock.Mock(return_value=[fake_mic])),
+            "soundcard": fake_sc,
             "numpy": mock.Mock(),
         }):
             with mock.patch.object(arbiter, "set_music_active", side_effect=fake_set_music_active):
@@ -486,10 +531,19 @@ class TestMusicHeartbeatRefresh(StateDirMixin, unittest.TestCase):
 
         fake_mic = mock.Mock()
         fake_mic.name = "Stereo Mix (loopback)"
+        fake_mic.isloopback = True
         fake_mic.recorder = mock.Mock(return_value=fake_rec)
 
+        fake_speaker = mock.Mock()
+        fake_speaker.name = "Stereo Mix (loopback)"
+
+        fake_sc = mock.Mock()
+        fake_sc.default_speaker = mock.Mock(return_value=fake_speaker)
+        fake_sc.get_microphone = mock.Mock(return_value=fake_mic)
+        fake_sc.all_microphones = mock.Mock(return_value=[fake_mic])
+
         with mock.patch.dict(sys.modules, {
-            "soundcard": mock.Mock(all_microphones=mock.Mock(return_value=[fake_mic])),
+            "soundcard": fake_sc,
             "numpy": mock.Mock(),
         }):
             with mock.patch.object(arbiter, "set_music_active", side_effect=fake_set_music_active):
@@ -585,10 +639,19 @@ class TestLeftoverStopFlag(StateDirMixin, unittest.TestCase):
 
         fake_mic = mock.Mock()
         fake_mic.name = "Stereo Mix (loopback)"
+        fake_mic.isloopback = True
         fake_mic.recorder = mock.Mock(return_value=fake_rec)
 
+        fake_speaker = mock.Mock()
+        fake_speaker.name = "Stereo Mix (loopback)"
+
+        fake_sc = mock.Mock()
+        fake_sc.default_speaker = mock.Mock(return_value=fake_speaker)
+        fake_sc.get_microphone = mock.Mock(return_value=fake_mic)
+        fake_sc.all_microphones = mock.Mock(return_value=[fake_mic])
+
         with mock.patch.dict(sys.modules, {
-            "soundcard": mock.Mock(all_microphones=mock.Mock(return_value=[fake_mic])),
+            "soundcard": fake_sc,
             "numpy": mock.Mock(),
         }):
             with mock.patch.object(music_sync, "govee") as mock_govee:
@@ -826,13 +889,22 @@ class TestToggleCommands(StateDirMixin, unittest.TestCase):
         music_sync.PID_FILE.write_text(str(my_pid))
 
         fake_rec = mock.Mock()
-        fake_rec.record.side_effect = RuntimeError("audio capture failed")
+        fake_rec.record.side_effect = KeyboardInterrupt()
         fake_rec.__enter__ = mock.Mock(return_value=fake_rec)
         fake_rec.__exit__ = mock.Mock(return_value=False)
 
         fake_mic = mock.Mock()
         fake_mic.name = "Stereo Mix (loopback)"
+        fake_mic.isloopback = True
         fake_mic.recorder = mock.Mock(return_value=fake_rec)
+
+        fake_speaker = mock.Mock()
+        fake_speaker.name = "Stereo Mix (loopback)"
+
+        fake_sc = mock.Mock()
+        fake_sc.default_speaker = mock.Mock(return_value=fake_speaker)
+        fake_sc.get_microphone = mock.Mock(return_value=fake_mic)
+        fake_sc.all_microphones = mock.Mock(return_value=[fake_mic])
 
         fake_time = [0.0]
 
@@ -842,7 +914,7 @@ class TestToggleCommands(StateDirMixin, unittest.TestCase):
             return t
 
         with mock.patch.dict(sys.modules, {
-            "soundcard": mock.Mock(all_microphones=mock.Mock(return_value=[fake_mic])),
+            "soundcard": fake_sc,
             "numpy": mock.Mock(),
         }):
             with mock.patch.object(music_sync, "govee") as mock_govee:
@@ -856,7 +928,7 @@ class TestToggleCommands(StateDirMixin, unittest.TestCase):
                                 fps=10,
                                 time_fn=fake_time_fn,
                             )
-                        except RuntimeError:
+                        except KeyboardInterrupt:
                             pass
 
         self.assertFalse(music_sync.PID_FILE.exists(),
@@ -867,13 +939,22 @@ class TestToggleCommands(StateDirMixin, unittest.TestCase):
         music_sync.PID_FILE.write_text("99999")
 
         fake_rec = mock.Mock()
-        fake_rec.record.side_effect = RuntimeError("audio capture failed")
+        fake_rec.record.side_effect = KeyboardInterrupt()
         fake_rec.__enter__ = mock.Mock(return_value=fake_rec)
         fake_rec.__exit__ = mock.Mock(return_value=False)
 
         fake_mic = mock.Mock()
         fake_mic.name = "Stereo Mix (loopback)"
+        fake_mic.isloopback = True
         fake_mic.recorder = mock.Mock(return_value=fake_rec)
+
+        fake_speaker = mock.Mock()
+        fake_speaker.name = "Stereo Mix (loopback)"
+
+        fake_sc = mock.Mock()
+        fake_sc.default_speaker = mock.Mock(return_value=fake_speaker)
+        fake_sc.get_microphone = mock.Mock(return_value=fake_mic)
+        fake_sc.all_microphones = mock.Mock(return_value=[fake_mic])
 
         fake_time = [0.0]
 
@@ -883,7 +964,7 @@ class TestToggleCommands(StateDirMixin, unittest.TestCase):
             return t
 
         with mock.patch.dict(sys.modules, {
-            "soundcard": mock.Mock(all_microphones=mock.Mock(return_value=[fake_mic])),
+            "soundcard": fake_sc,
             "numpy": mock.Mock(),
         }):
             with mock.patch.object(music_sync, "govee") as mock_govee:
@@ -897,7 +978,7 @@ class TestToggleCommands(StateDirMixin, unittest.TestCase):
                                 fps=10,
                                 time_fn=fake_time_fn,
                             )
-                        except RuntimeError:
+                        except KeyboardInterrupt:
                             pass
 
         self.assertTrue(music_sync.PID_FILE.exists(),
@@ -1005,6 +1086,204 @@ class TestMusicActiveAtomicWrite(StateDirMixin, unittest.TestCase):
         self.assertEqual(replace_calls[0], 3)
         # File should still be valid (fallback to utime)
         self.assertTrue(arbiter.music_active())
+
+
+class TestPickLoopback(unittest.TestCase):
+    """Test pick_loopback device selection."""
+
+    def test_uses_default_speaker_loopback(self):
+        """pick_loopback should use the default speaker's loopback by name."""
+        fake_speaker = mock.Mock()
+        fake_speaker.name = "Speakers X"
+
+        fake_mic = mock.Mock()
+        fake_mic.name = "Speakers X"
+        fake_mic.isloopback = True
+
+        fake_sc = mock.Mock()
+        fake_sc.default_speaker = mock.Mock(return_value=fake_speaker)
+        fake_sc.get_microphone = mock.Mock(return_value=fake_mic)
+
+        result = music_sync.pick_loopback(fake_sc)
+        self.assertIs(result, fake_mic)
+        fake_sc.get_microphone.assert_called_once_with("Speakers X", include_loopback=True)
+
+    def test_falls_back_to_first_loopback_mic(self):
+        """If get_microphone raises, fall back to first isloopback mic."""
+        fake_speaker = mock.Mock()
+        fake_speaker.name = "Speakers X"
+
+        fake_mic1 = mock.Mock()
+        fake_mic1.name = "Real Mic"
+        fake_mic1.isloopback = False
+
+        fake_mic2 = mock.Mock()
+        fake_mic2.name = "Speakers Y"
+        fake_mic2.isloopback = True
+
+        fake_sc = mock.Mock()
+        fake_sc.default_speaker = mock.Mock(return_value=fake_speaker)
+        fake_sc.get_microphone = mock.Mock(side_effect=Exception("not found"))
+        fake_sc.all_microphones = mock.Mock(return_value=[fake_mic1, fake_mic2])
+
+        result = music_sync.pick_loopback(fake_sc)
+        self.assertIs(result, fake_mic2)
+
+    def test_returns_none_when_no_loopback(self):
+        """If no loopback mics found, return None."""
+        fake_speaker = mock.Mock()
+        fake_speaker.name = "Speakers X"
+
+        fake_mic = mock.Mock()
+        fake_mic.name = "Real Mic"
+        fake_mic.isloopback = False
+
+        fake_sc = mock.Mock()
+        fake_sc.default_speaker = mock.Mock(return_value=fake_speaker)
+        fake_sc.get_microphone = mock.Mock(side_effect=Exception("not found"))
+        fake_sc.all_microphones = mock.Mock(return_value=[fake_mic])
+
+        result = music_sync.pick_loopback(fake_sc)
+        self.assertIsNone(result)
+
+
+class TestRecorderOpenedOnce(StateDirMixin, unittest.TestCase):
+    """Test that the recorder is opened once, not per frame."""
+
+    def test_recorder_opened_once_for_multiple_frames(self):
+        """mic.recorder should be called exactly once for 5 frames."""
+        recorder_call_count = [0]
+
+        def fake_recorder(samplerate, channels):
+            recorder_call_count[0] += 1
+            fake_rec = mock.Mock()
+            fake_rec.__enter__ = mock.Mock(return_value=fake_rec)
+            fake_rec.__exit__ = mock.Mock(return_value=False)
+            fake_rec.close = mock.Mock()
+
+            frame_count = [0]
+
+            def fake_record(numframes):
+                frame_count[0] += 1
+                if frame_count[0] >= 5:
+                    raise KeyboardInterrupt()
+                return mock.Mock(ndim=1, shape=(1024,), dtype="float64")
+
+            fake_rec.record = mock.Mock(side_effect=fake_record)
+            return fake_rec
+
+        fake_speaker = mock.Mock()
+        fake_speaker.name = "Speakers X"
+
+        fake_mic = mock.Mock()
+        fake_mic.name = "Speakers X"
+        fake_mic.isloopback = True
+        fake_mic.recorder = fake_recorder
+
+        fake_sc = mock.Mock()
+        fake_sc.default_speaker = mock.Mock(return_value=fake_speaker)
+        fake_sc.get_microphone = mock.Mock(return_value=fake_mic)
+
+        fake_time = [0.0]
+
+        def fake_time_fn():
+            t = fake_time[0]
+            fake_time[0] = t + 0.1
+            return t
+
+        with mock.patch.dict(sys.modules, {"soundcard": fake_sc, "numpy": mock.Mock()}):
+            with mock.patch.object(music_sync, "govee") as mock_govee:
+                mock_govee.status = mock.Mock(return_value={"msg": {"data": {"brightness": 50}}})
+                mock_govee.brightness = mock.Mock()
+                with mock.patch("time.sleep"):
+                    with mock.patch.object(music_sync, "STOP_FLAG_FILE", self.state_dir / "music_stop"):
+                        with mock.patch.object(music_sync, "analyze", return_value={"level": 0.5, "bass": 0.5, "mid": 0.5, "treble": 0.5}):
+                            try:
+                                music_sync.run(
+                                    {"devices": [{"ip": "1.2.3.4"}]},
+                                    fps=10,
+                                    time_fn=fake_time_fn,
+                                )
+                            except KeyboardInterrupt:
+                                pass
+
+        self.assertEqual(recorder_call_count[0], 1,
+                        f"Expected recorder opened once, got {recorder_call_count[0]}")
+
+
+class TestRuntimeErrorRecovery(StateDirMixin, unittest.TestCase):
+    """Test recovery from RuntimeError during audio capture."""
+
+    def test_runtime_error_reopens_recorder(self):
+        """RuntimeError on frame 2 should not exit; recorder reopened; colours sent after."""
+        recorder_call_count = [0]
+        colors_sent = []
+        total_record_calls = [0]
+
+        def fake_color(ip, r, g, b):
+            colors_sent.append((ip, r, g, b))
+
+        def fake_recorder(samplerate, channels):
+            recorder_call_count[0] += 1
+            fake_rec = mock.Mock()
+            fake_rec.__enter__ = mock.Mock(return_value=fake_rec)
+            fake_rec.__exit__ = mock.Mock(return_value=False)
+            fake_rec.close = mock.Mock()
+
+            def fake_record(numframes):
+                total_record_calls[0] += 1
+                if total_record_calls[0] == 1:
+                    # First record call: RuntimeError
+                    raise RuntimeError("WASAPI error")
+                if total_record_calls[0] >= 4:
+                    raise KeyboardInterrupt()
+                return mock.Mock(ndim=1, shape=(1024,), dtype="float64")
+
+            fake_rec.record = mock.Mock(side_effect=fake_record)
+            return fake_rec
+
+        fake_speaker = mock.Mock()
+        fake_speaker.name = "Speakers X"
+
+        fake_mic = mock.Mock()
+        fake_mic.name = "Speakers X"
+        fake_mic.isloopback = True
+        fake_mic.recorder = fake_recorder
+
+        fake_sc = mock.Mock()
+        fake_sc.default_speaker = mock.Mock(return_value=fake_speaker)
+        fake_sc.get_microphone = mock.Mock(return_value=fake_mic)
+
+        fake_time = [0.0]
+
+        def fake_time_fn():
+            t = fake_time[0]
+            fake_time[0] = t + 0.1
+            return t
+
+        with mock.patch.dict(sys.modules, {"soundcard": fake_sc, "numpy": mock.Mock()}):
+            with mock.patch.object(music_sync, "govee") as mock_govee:
+                mock_govee.color = fake_color
+                mock_govee.status = mock.Mock(return_value={"msg": {"data": {"brightness": 50}}})
+                mock_govee.brightness = mock.Mock()
+                with mock.patch("time.sleep"):
+                    with mock.patch.object(music_sync, "STOP_FLAG_FILE", self.state_dir / "music_stop"):
+                        with mock.patch.object(music_sync, "analyze", return_value={"level": 0.5, "bass": 0.5, "mid": 0.5, "treble": 0.5}):
+                            try:
+                                music_sync.run(
+                                    {"devices": [{"ip": "1.2.3.4"}]},
+                                    fps=10,
+                                    time_fn=fake_time_fn,
+                                )
+                            except KeyboardInterrupt:
+                                pass
+
+        # Recorder should have been opened twice (once initially, once after error)
+        self.assertEqual(recorder_call_count[0], 2,
+                        f"Expected recorder opened twice, got {recorder_call_count[0]}")
+        # Colours should have been sent after the error
+        self.assertGreater(len(colors_sent), 0,
+                          "Expected colours sent after RuntimeError recovery")
 
 
 if __name__ == "__main__":
