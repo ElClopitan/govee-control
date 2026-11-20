@@ -478,6 +478,20 @@ class TestSignalClear(StateDirMixin, unittest.TestCase):
         # stderr should contain the parse warning
         self.assertIn("failed to parse saved state", stderr)
 
+    @mock.patch("agent_signal.sweep_and_restore")
+    def test_clear_stale_calls_sweep_and_restore(self, mock_sweep, mock_sleep):
+        """clear --stale calls sweep_and_restore."""
+        args = mock.Mock()
+        args.command = "clear"
+        args.config = str(self.config_path)
+        args.dry_run = False
+        args.stale = True
+
+        agent_signal.cmd_clear(args)
+
+        # sweep_and_restore should have been called once
+        mock_sweep.assert_called_once()
+
 
 @mock.patch("agent_signal.time.sleep")
 class TestOSErrorHandling(StateDirMixin, unittest.TestCase):
@@ -3320,6 +3334,60 @@ class TestSweepThrottle(unittest.TestCase):
 
             try:
                 game_sync.run(config, interval=1)
+            except KeyboardInterrupt:
+                pass
+
+            # sweep_and_restore should be called twice: at t=0 and t=60
+            self.assertEqual(mock_sweep.call_count, 2)
+
+    @mock.patch("agent_signal.sweep_and_restore")
+    @mock.patch("arbiter.weather_blocked")
+    @mock.patch("time.sleep")
+    def test_weather_sync_sweep_throttle(
+        self, mock_sleep, mock_weather_blocked, mock_sweep
+    ):
+        """weather_sync loop calls sweep_and_restore once while blocked < 60s, again after 60s."""
+        import arbiter
+
+        # Create a temp state dir
+        import tempfile
+        from pathlib import Path
+        tmpdir = tempfile.TemporaryDirectory()
+        self.addCleanup(tmpdir.cleanup)
+        state_dir = Path(tmpdir.name)
+
+        with mock.patch.object(arbiter, "STATE_DIR", state_dir):
+            # Create signal file
+            signal_path = arbiter.signal_file()
+            signal_path.parent.mkdir(parents=True, exist_ok=True)
+            signal_path.write_text("[]")
+
+            # Make weather_blocked return True so the loop takes the blocked branch
+            mock_weather_blocked.return_value = True
+
+            config = {
+                "devices": [{"name": "left", "ip": "192.168.1.50"}],
+                "default": {"color": "white", "brightness": 40},
+                "weather": {"latitude": 40.0, "longitude": -74.0},
+            }
+
+            # Fake clock: 0, 10, 20, 30, 40, 50, 60, 70
+            clock_values = [0, 10, 20, 30, 40, 50, 60, 70]
+            clock_idx = [0]
+            def fake_clock():
+                val = clock_values[clock_idx[0]]
+                clock_idx[0] += 1
+                return val
+
+            call_count = [0]
+            def sleep_side_effect(seconds):
+                call_count[0] += 1
+                if call_count[0] >= 7:
+                    raise KeyboardInterrupt()
+            mock_sleep.side_effect = sleep_side_effect
+
+            try:
+                weather_sync.run(config, once=False, interval=1, time_fn=fake_clock)
             except KeyboardInterrupt:
                 pass
 

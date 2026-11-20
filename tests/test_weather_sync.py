@@ -160,6 +160,12 @@ class TestFetchWeather(unittest.TestCase):
 class TestRunOnce(StateDirMixin, unittest.TestCase):
     """Test run() with once=True and mocked dependencies."""
 
+    def setUp(self):
+        super().setUp()
+        p = mock.patch("agent_signal.sweep_and_restore")
+        p.start()
+        self.addCleanup(p.stop)
+
     def _make_config(self, lat=51.5, lon=-0.1, brightness=50):
         return {
             "devices": [{"name": "left", "ip": "192.168.1.50"}],
@@ -387,6 +393,12 @@ class TestZeroLocation(unittest.TestCase):
 class TestNetworkError(StateDirMixin, unittest.TestCase):
     """Test network error handling."""
 
+    def setUp(self):
+        super().setUp()
+        p = mock.patch("agent_signal.sweep_and_restore")
+        p.start()
+        self.addCleanup(p.stop)
+
     @mock.patch("weather_sync.fetch_weather")
     @mock.patch("time.sleep")
     def test_network_error_once_mode(self, mock_sleep, mock_fetch):
@@ -599,6 +611,12 @@ class TestDryRun(unittest.TestCase):
 class TestPriority(StateDirMixin, unittest.TestCase):
     """Test that weather sync respects signal/game priority."""
 
+    def setUp(self):
+        super().setUp()
+        p = mock.patch("agent_signal.sweep_and_restore")
+        p.start()
+        self.addCleanup(p.stop)
+
     def _make_config(self):
         return {
             "devices": [{"name": "left", "ip": "192.168.1.50"}],
@@ -750,6 +768,12 @@ class TestPriority(StateDirMixin, unittest.TestCase):
 class TestBlockedPollInterval(StateDirMixin, unittest.TestCase):
     """Test that weather sync polls every 10s while blocked."""
 
+    def setUp(self):
+        super().setUp()
+        p = mock.patch("agent_signal.sweep_and_restore")
+        p.start()
+        self.addCleanup(p.stop)
+
     def _make_config(self):
         return {
             "devices": [{"name": "left", "ip": "192.168.1.50"}],
@@ -829,6 +853,12 @@ class TestBlockedPollInterval(StateDirMixin, unittest.TestCase):
 
 class TestPriorityRecheckBeforeSend(StateDirMixin, unittest.TestCase):
     """Test that weather sync re-checks priority just before sending."""
+
+    def setUp(self):
+        super().setUp()
+        p = mock.patch("agent_signal.sweep_and_restore")
+        p.start()
+        self.addCleanup(p.stop)
 
     def _make_config(self):
         return {
@@ -1170,6 +1200,12 @@ class TestGetPatternForCode(unittest.TestCase):
 class TestPatternLoop(StateDirMixin, unittest.TestCase):
     """Test the pattern animation loop."""
 
+    def setUp(self):
+        super().setUp()
+        p = mock.patch("agent_signal.sweep_and_restore")
+        p.start()
+        self.addCleanup(p.stop)
+
     def _make_config(self, patterns_enabled=True, frame_interval=1.0):
         return {
             "devices": [
@@ -1343,6 +1379,12 @@ class TestPatternLoop(StateDirMixin, unittest.TestCase):
 class TestPatternFetchInterval(StateDirMixin, unittest.TestCase):
     """Test that weather is fetched every `interval` seconds, not every frame."""
 
+    def setUp(self):
+        super().setUp()
+        p = mock.patch("agent_signal.sweep_and_restore")
+        p.start()
+        self.addCleanup(p.stop)
+
     def _make_config(self, patterns_enabled=True, frame_interval=1.0):
         return {
             "devices": [
@@ -1431,6 +1473,12 @@ class TestPatternFetchInterval(StateDirMixin, unittest.TestCase):
 class TestPerStripBrightness(StateDirMixin, unittest.TestCase):
     """Test that brightness is tracked per strip, not shared."""
 
+    def setUp(self):
+        super().setUp()
+        p = mock.patch("agent_signal.sweep_and_restore")
+        p.start()
+        self.addCleanup(p.stop)
+
     def _make_config(self, patterns_enabled=True, frame_interval=1.0):
         return {
             "devices": [
@@ -1515,6 +1563,12 @@ class TestPerStripBrightness(StateDirMixin, unittest.TestCase):
 class TestFrameErrorRateLimit(StateDirMixin, unittest.TestCase):
     """Test that frame send errors are rate-limited to one per 60 seconds."""
 
+    def setUp(self):
+        super().setUp()
+        p = mock.patch("agent_signal.sweep_and_restore")
+        p.start()
+        self.addCleanup(p.stop)
+
     def _make_config(self, patterns_enabled=True, frame_interval=1.0):
         return {
             "devices": [
@@ -1572,6 +1626,12 @@ class TestFrameErrorRateLimit(StateDirMixin, unittest.TestCase):
 
 class TestThunderstormPattern(StateDirMixin, unittest.TestCase):
     """Test the thunderstorm pattern with lightning flashes."""
+
+    def setUp(self):
+        super().setUp()
+        p = mock.patch("agent_signal.sweep_and_restore")
+        p.start()
+        self.addCleanup(p.stop)
 
     def _make_config(self, patterns_enabled=True, frame_interval=1.0):
         return {
@@ -1739,6 +1799,12 @@ class TestThunderstormPattern(StateDirMixin, unittest.TestCase):
 
 class TestThunderstormDoubleFlash(StateDirMixin, unittest.TestCase):
     """Test thunderstorm double-flash sequence and arbiter interaction."""
+
+    def setUp(self):
+        super().setUp()
+        p = mock.patch("agent_signal.sweep_and_restore")
+        p.start()
+        self.addCleanup(p.stop)
 
     def _make_config(self):
         return {
@@ -1953,6 +2019,12 @@ class TestThunderstormDoubleFlash(StateDirMixin, unittest.TestCase):
 
 class TestThunderstormSignalRace(StateDirMixin, unittest.TestCase):
     """Test that signal/game raised during thunderstorm flash stops all further writes."""
+
+    def setUp(self):
+        super().setUp()
+        p = mock.patch("agent_signal.sweep_and_restore")
+        p.start()
+        self.addCleanup(p.stop)
 
     def _make_config(self):
         return {
@@ -2281,6 +2353,12 @@ class TestNextHourBoundary(unittest.TestCase):
 class TestFetchOnTheHour(StateDirMixin, unittest.TestCase):
     """Test the fetch_on_the_hour feature."""
 
+    def setUp(self):
+        super().setUp()
+        p = mock.patch("agent_signal.sweep_and_restore")
+        p.start()
+        self.addCleanup(p.stop)
+
     def _make_config(self, fetch_on_the_hour=True, interval=900, patterns_enabled=False):
         return {
             "devices": [{"name": "left", "ip": "192.168.1.50"}],
@@ -2420,6 +2498,12 @@ class TestFetchOnTheHour(StateDirMixin, unittest.TestCase):
 
 class TestMusicPriority(StateDirMixin, unittest.TestCase):
     """Test that weather sync yields to music sync."""
+
+    def setUp(self):
+        super().setUp()
+        p = mock.patch("agent_signal.sweep_and_restore")
+        p.start()
+        self.addCleanup(p.stop)
 
     def _make_config(self):
         return {
