@@ -18,7 +18,27 @@
   "weather": {
     "latitude": 0.0,
     "longitude": 0.0,
-    "brightness": 80
+    "brightness": 80,
+    "patterns_enabled": true,
+    "frame_interval": 1.0,
+    "patterns": {
+      "cloudy": {
+        "type": "drift",
+        "color1": "#b0bec5",
+        "color2": "#eceff1",
+        "period": 40.0,
+        "brightness": 75,
+        "phase_offset": 0.0
+      },
+      "rain": {
+        "type": "wave",
+        "color1": "#1e88e5",
+        "color2": "#0d47a1",
+        "period": 8.0,
+        "brightness": 80,
+        "phase_offset": 4.0
+      }
+    }
   },
   "games": [
     {

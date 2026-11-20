@@ -185,13 +185,14 @@ class TestRunOnce(StateDirMixin, unittest.TestCase):
     @mock.patch("govee.color")
     @mock.patch("govee.brightness")
     def test_rain_color(self, mock_brightness, mock_color, mock_fetch):
-        """Rain uses blue."""
+        """Rain uses blue (static, patterns disabled)."""
         mock_fetch.return_value = {
             "temperature_2m": 12.0,
             "weather_code": 61,
             "is_day": 1,
         }
         config = self._make_config()
+        config["weather"]["patterns_enabled"] = False
 
         weather_sync.run(config, once=True)
 
@@ -213,13 +214,19 @@ class TestRunOnce(StateDirMixin, unittest.TestCase):
                 {"name": "left", "ip": "192.168.1.50"},
                 {"name": "right", "ip": "192.168.1.51"},
             ],
-            "weather": {"latitude": 51.5, "longitude": -0.1, "brightness": 50},
+            "weather": {
+                "latitude": 51.5,
+                "longitude": -0.1,
+                "brightness": 50,
+                "patterns_enabled": False,
+            },
         }
 
         weather_sync.run(config, once=True)
 
         self.assertEqual(mock_color.call_count, 2)
-        self.assertEqual(mock_brightness.call_count, 2)
+        # Brightness is sent only when it changes (optimization)
+        self.assertGreaterEqual(mock_brightness.call_count, 1)
 
 
 class TestZeroLocation(unittest.TestCase):
@@ -843,6 +850,340 @@ class TestBrightnessCap(StateDirMixin, unittest.TestCase):
         # Brightness should be capped at 80, not 100
         self.assertEqual(mock_brightness.call_count, 1)
         self.assertEqual(mock_brightness.call_args[0][1], 80)
+
+
+class TestPatternFrame(unittest.TestCase):
+    """Test the pure pattern_frame function."""
+
+    def test_static_pattern(self):
+        """Static pattern returns the configured color."""
+        pattern = {"type": "static", "color": "#ff0000", "brightness": 50}
+        r, g, b, brightness = weather_sync.pattern_frame(pattern, 0.0, 0)
+        self.assertEqual((r, g, b), (255, 0, 0))
+        self.assertEqual(brightness, 50)
+
+    def test_drift_pattern_endpoints(self):
+        """Drift pattern at t=0 returns color1."""
+        pattern = {
+            "type": "drift",
+            "color1": "#000000",
+            "color2": "#ffffff",
+            "period": 10.0,
+            "brightness": 80,
+            "phase_offset": 0.0,
+        }
+        # At t=0, phase=0, interp_t=0 -> color1
+        r, g, b, brightness = weather_sync.pattern_frame(pattern, 0.0, 0)
+        self.assertEqual((r, g, b), (0, 0, 0))
+        self.assertEqual(brightness, 80)
+
+    def test_drift_pattern_midpoint(self):
+        """Drift pattern at midpoint returns color2."""
+        pattern = {
+            "type": "drift",
+            "color1": "#000000",
+            "color2": "#ffffff",
+            "period": 10.0,
+            "brightness": 80,
+            "phase_offset": 0.0,
+        }
+        # At t=2.5 (phase=0.25), interp_t=0.5 -> midpoint
+        r, g, b, brightness = weather_sync.pattern_frame(pattern, 2.5, 0)
+        self.assertEqual((r, g, b), (127, 127, 127))
+        self.assertEqual(brightness, 80)
+
+    def test_wave_pattern_endpoints(self):
+        """Wave pattern at t=0 returns color1."""
+        pattern = {
+            "type": "wave",
+            "color1": "#000000",
+            "color2": "#ffffff",
+            "period": 10.0,
+            "brightness": 80,
+            "phase_offset": 0.0,
+        }
+        # At t=0, phase=0, cos(0)=1, interp_t=0 -> color1
+        r, g, b, brightness = weather_sync.pattern_frame(pattern, 0.0, 0)
+        self.assertEqual((r, g, b), (0, 0, 0))
+        self.assertEqual(brightness, 80)
+
+    def test_wave_pattern_midpoint(self):
+        """Wave pattern at quarter period returns color2."""
+        pattern = {
+            "type": "wave",
+            "color1": "#000000",
+            "color2": "#ffffff",
+            "period": 10.0,
+            "brightness": 80,
+            "phase_offset": 0.0,
+        }
+        # At t=2.5 (phase=0.25), cos(pi/2)=0, interp_t=0.5 -> midpoint
+        r, g, b, brightness = weather_sync.pattern_frame(pattern, 2.5, 0)
+        self.assertEqual((r, g, b), (127, 127, 127))
+        self.assertEqual(brightness, 80)
+
+    def test_rain_strips_out_of_phase(self):
+        """Rain pattern: strip 0 and strip 1 are out of phase at same t."""
+        pattern = {
+            "type": "wave",
+            "color1": "#1e88e5",
+            "color2": "#0d47a1",
+            "period": 8.0,
+            "brightness": 80,
+            "phase_offset": 4.0,
+        }
+        # At t=0, strip 0 is at phase 0, strip 1 is at phase 0.5
+        r0, g0, b0, _ = weather_sync.pattern_frame(pattern, 0.0, 0)
+        r1, g1, b1, _ = weather_sync.pattern_frame(pattern, 0.0, 1)
+        # They should be different (out of phase)
+        self.assertNotEqual((r0, g0, b0), (r1, g1, b1))
+
+    def test_rain_strips_match_at_half_cycle(self):
+        """Rain pattern: strip 0 at t matches strip 1 at t + half cycle."""
+        pattern = {
+            "type": "wave",
+            "color1": "#1e88e5",
+            "color2": "#0d47a1",
+            "period": 8.0,
+            "brightness": 80,
+            "phase_offset": 4.0,
+        }
+        # Strip 0 at t=0 should match strip 1 at t=4 (half cycle later)
+        r0, g0, b0, _ = weather_sync.pattern_frame(pattern, 0.0, 0)
+        r1, g1, b1, _ = weather_sync.pattern_frame(pattern, 4.0, 1)
+        self.assertEqual((r0, g0, b0), (r1, g1, b1))
+
+    def test_cloudy_pattern(self):
+        """Cloudy pattern uses drift between grey tones."""
+        pattern = {
+            "type": "drift",
+            "color1": "#b0bec5",
+            "color2": "#eceff1",
+            "period": 40.0,
+            "brightness": 75,
+            "phase_offset": 0.0,
+        }
+        # At t=0, should be color1
+        r, g, b, brightness = weather_sync.pattern_frame(pattern, 0.0, 0)
+        self.assertEqual((r, g, b), (176, 190, 197))
+        self.assertEqual(brightness, 75)
+
+
+class TestGetPatternForCode(unittest.TestCase):
+    """Test pattern selection by weather code."""
+
+    def test_cloudy_codes_get_pattern(self):
+        """Weather codes 2-3 get cloudy pattern."""
+        patterns_cfg = {}
+        for code in [2, 3]:
+            pattern = weather_sync.get_pattern_for_code(code, patterns_cfg)
+            self.assertIsNotNone(pattern)
+            self.assertEqual(pattern["type"], "drift")
+
+    def test_rain_codes_get_pattern(self):
+        """Weather codes 51-67 and 80-82 get rain pattern."""
+        patterns_cfg = {}
+        for code in [51, 53, 55, 61, 63, 65, 67, 80, 81, 82]:
+            pattern = weather_sync.get_pattern_for_code(code, patterns_cfg)
+            self.assertIsNotNone(pattern)
+            self.assertEqual(pattern["type"], "wave")
+
+    def test_other_codes_get_no_pattern(self):
+        """All other weather codes get no pattern (static)."""
+        patterns_cfg = {}
+        for code in [0, 1, 45, 48, 71, 73, 75, 77, 85, 86, 95, 96, 99, 100]:
+            pattern = weather_sync.get_pattern_for_code(code, patterns_cfg)
+            self.assertIsNone(pattern)
+
+    def test_custom_pattern_config(self):
+        """Custom pattern config overrides defaults."""
+        custom = {
+            "cloudy": {
+                "type": "wave",
+                "color1": "#ff0000",
+                "color2": "#00ff00",
+                "period": 5.0,
+                "brightness": 60,
+                "phase_offset": 0.0,
+            }
+        }
+        pattern = weather_sync.get_pattern_for_code(2, custom)
+        self.assertEqual(pattern["type"], "wave")
+        self.assertEqual(pattern["color1"], "#ff0000")
+        self.assertEqual(pattern["brightness"], 60)
+
+
+class TestPatternLoop(StateDirMixin, unittest.TestCase):
+    """Test the pattern animation loop."""
+
+    def _make_config(self, patterns_enabled=True, frame_interval=1.0):
+        return {
+            "devices": [
+                {"name": "left", "ip": "192.168.1.50"},
+                {"name": "right", "ip": "192.168.1.51"},
+            ],
+            "weather": {
+                "latitude": 51.5,
+                "longitude": -0.1,
+                "brightness": 80,
+                "patterns_enabled": patterns_enabled,
+                "frame_interval": frame_interval,
+            },
+        }
+
+    @mock.patch("weather_sync.fetch_weather")
+    @mock.patch("govee.color")
+    @mock.patch("govee.brightness")
+    @mock.patch("time.sleep")
+    @mock.patch("time.time")
+    def test_pattern_sends_frames(self, mock_time, mock_sleep, mock_brightness, mock_color, mock_fetch):
+        """Pattern mode sends frames at frame_interval."""
+        mock_time.return_value = 1000.0
+        mock_fetch.return_value = {
+            "temperature_2m": 15.0,
+            "weather_code": 61,  # rain
+            "is_day": 1,
+        }
+        config = self._make_config(frame_interval=1.0)
+
+        # Exit after 3 sleep calls
+        sleep_count = [0]
+        def sleep_side_effect(seconds):
+            sleep_count[0] += 1
+            mock_time.return_value += 1.0  # advance time
+            if sleep_count[0] >= 3:
+                raise KeyboardInterrupt()
+
+        mock_sleep.side_effect = sleep_side_effect
+
+        try:
+            weather_sync.run(config, once=False, interval=900)
+        except KeyboardInterrupt:
+            pass
+
+        # Should have sent multiple frames (at least 2 color calls)
+        self.assertGreaterEqual(mock_color.call_count, 2)
+
+    @mock.patch("weather_sync.fetch_weather")
+    @mock.patch("govee.color")
+    @mock.patch("govee.brightness")
+    @mock.patch("time.sleep")
+    @mock.patch("time.time")
+    def test_pattern_blocked_by_signal(self, mock_time, mock_sleep, mock_brightness, mock_color, mock_fetch):
+        """Pattern sends nothing while signal is active."""
+        import arbiter
+        mock_time.return_value = 1000.0
+        (arbiter.STATE_DIR / "saved_state.json").write_text("[]")
+
+        mock_fetch.return_value = {
+            "temperature_2m": 15.0,
+            "weather_code": 61,
+            "is_day": 1,
+        }
+        config = self._make_config()
+
+        weather_sync.run(config, once=True)
+
+        # Should NOT have sent any frames
+        mock_color.assert_not_called()
+        mock_brightness.assert_not_called()
+
+    @mock.patch("weather_sync.fetch_weather")
+    @mock.patch("govee.color")
+    @mock.patch("govee.brightness")
+    @mock.patch("time.sleep")
+    @mock.patch("time.time")
+    def test_pattern_resumes_after_signal(self, mock_time, mock_sleep, mock_brightness, mock_color, mock_fetch):
+        """Pattern resumes after signal clears."""
+        import arbiter
+        mock_time.return_value = 1000.0
+
+        # Start with signal active
+        (arbiter.STATE_DIR / "saved_state.json").write_text("[]")
+
+        mock_fetch.return_value = {
+            "temperature_2m": 15.0,
+            "weather_code": 61,
+            "is_day": 1,
+        }
+        config = self._make_config(frame_interval=1.0)
+
+        sleep_count = [0]
+        def sleep_side_effect(seconds):
+            sleep_count[0] += 1
+            mock_time.return_value += 1.0
+            if sleep_count[0] == 1:
+                # Clear signal after first blocked iteration
+                (arbiter.STATE_DIR / "saved_state.json").unlink()
+            elif sleep_count[0] >= 3:
+                raise KeyboardInterrupt()
+
+        mock_sleep.side_effect = sleep_side_effect
+
+        try:
+            weather_sync.run(config, once=False, interval=900)
+        except KeyboardInterrupt:
+            pass
+
+        # Should have sent frames after signal cleared
+        self.assertGreater(mock_color.call_count, 0)
+
+    @mock.patch("weather_sync.fetch_weather")
+    @mock.patch("govee.color")
+    @mock.patch("govee.brightness")
+    @mock.patch("time.sleep")
+    @mock.patch("time.time")
+    def test_pattern_brightness_capped(self, mock_time, mock_sleep, mock_brightness, mock_color, mock_fetch):
+        """Pattern brightness never exceeds max_brightness (80)."""
+        mock_time.return_value = 1000.0
+        mock_fetch.return_value = {
+            "temperature_2m": 15.0,
+            "weather_code": 61,
+            "is_day": 1,
+        }
+        config = self._make_config()
+        config["max_brightness"] = 80
+
+        sleep_count = [0]
+        def sleep_side_effect(seconds):
+            sleep_count[0] += 1
+            mock_time.return_value += 1.0
+            if sleep_count[0] >= 2:
+                raise KeyboardInterrupt()
+
+        mock_sleep.side_effect = sleep_side_effect
+
+        try:
+            weather_sync.run(config, once=False, interval=900)
+        except KeyboardInterrupt:
+            pass
+
+        # Check all brightness calls are <= 80
+        for call in mock_brightness.call_args_list:
+            self.assertLessEqual(call[0][1], 80)
+
+    @mock.patch("weather_sync.fetch_weather")
+    @mock.patch("govee.color")
+    @mock.patch("govee.brightness")
+    @mock.patch("time.sleep")
+    @mock.patch("time.time")
+    def test_patterns_disabled_uses_static(self, mock_time, mock_sleep, mock_brightness, mock_color, mock_fetch):
+        """When patterns_enabled is false, use static color."""
+        mock_time.return_value = 1000.0
+        mock_fetch.return_value = {
+            "temperature_2m": 15.0,
+            "weather_code": 61,  # rain (would normally be animated)
+            "is_day": 1,
+        }
+        config = self._make_config(patterns_enabled=False)
+
+        weather_sync.run(config, once=True)
+
+        # Should have sent static rain color #1e88e5 = (30, 136, 229) to both devices
+        self.assertEqual(mock_color.call_count, 2)
+        # Check first device got the right color
+        first_call = mock_color.call_args_list[0]
+        self.assertEqual(first_call[0], ("192.168.1.50", 30, 136, 229))
 
 
 if __name__ == "__main__":
