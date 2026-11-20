@@ -188,17 +188,25 @@ class TestMusicSignalPriority(StateDirMixin, unittest.TestCase):
 
     def test_music_skips_frames_when_signal_active(self):
         """music_sync.run() should not send frames when signal is active,
-        but should send after signal clears."""
-        # Track signal state: active for first 3 loop iterations, then cleared
-        signal_state = [True, True, True, False, False, False, False, False]
-        signal_idx = [0]
+        but should send after signal clears. Tests the re-check before sending."""
+        # Signal becomes active on the second call (the re-check before sending)
+        signal_active_count = [0]
 
         def fake_signal_active():
-            idx = signal_idx[0]
-            signal_idx[0] = idx + 1
-            if idx < len(signal_state):
-                return signal_state[idx]
-            return False
+            signal_active_count[0] += 1
+            # First call (top of loop) -> False
+            # Second call (re-check before send) -> True
+            # Third call (top of loop, next iteration) -> True
+            # Fourth call (top of loop, next iteration) -> False
+            # Fifth call (re-check before send) -> False
+            if signal_active_count[0] == 1:
+                return False
+            elif signal_active_count[0] == 2:
+                return True
+            elif signal_active_count[0] == 3:
+                return True
+            else:
+                return False
 
         # Track colours sent
         colors_sent = []
@@ -223,8 +231,8 @@ class TestMusicSignalPriority(StateDirMixin, unittest.TestCase):
 
         def fake_record(numframes):
             frame_count[0] += 1
-            # Hard stop after 8 frames, independent of signal state
-            if frame_count[0] >= 8:
+            # Hard stop after 2 frames
+            if frame_count[0] >= 2:
                 raise KeyboardInterrupt()
             return mock.Mock(ndim=1, shape=(1024,), dtype="float64")
 
@@ -256,14 +264,80 @@ class TestMusicSignalPriority(StateDirMixin, unittest.TestCase):
                                 except KeyboardInterrupt:
                                     pass
 
-        # signal_active() should have been called at least 3 times before any color was sent
-        # (once per loop iteration where signal was active)
-        self.assertGreaterEqual(signal_idx[0], 4,
-                                "signal_active() should have been called at least 4 times "
-                                "(3 while active + 1 when cleared)")
-        # At least one colour should have been sent after signal cleared
-        self.assertGreaterEqual(len(colors_sent), 1,
-                                "Expected at least one colour after signal cleared")
+        # Iteration 1: signal_active() -> False (top) -> record (frame 1) -> signal_active() -> True (re-check) -> no colour sent
+        # Iteration 2: signal_active() -> True (top) -> no record
+        # Iteration 3: signal_active() -> False (top) -> record (frame 2) -> KeyboardInterrupt
+        # So we expect 0 colours sent
+        self.assertEqual(len(colors_sent), 0,
+                        f"Expected 0 colours sent, got {len(colors_sent)}")
+
+
+class TestMusicRestoreSkippedDuringSignal(StateDirMixin, unittest.TestCase):
+    """Test that music sync doesn't restore over an active signal."""
+
+    def test_no_restore_when_signal_active(self):
+        """When run() exits while signal is active, don't restore initial state."""
+        # Signal is active throughout
+        def fake_signal_active():
+            return True
+
+        # Track govee calls
+        govee_calls = []
+
+        def fake_color(ip, r, g, b):
+            govee_calls.append(("color", ip, r, g, b))
+
+        def fake_brightness(ip, b):
+            govee_calls.append(("brightness", ip, b))
+
+        fake_time = [0.0]
+
+        def fake_time_fn():
+            t = fake_time[0]
+            fake_time[0] = t + 0.1
+            return t
+
+        # Mock stop flag to trigger exit after initial setup
+        stop_flag_calls = [0]
+
+        def fake_stop_flag_exists():
+            stop_flag_calls[0] += 1
+            # Return True on the first loop iteration (after initial setup)
+            return stop_flag_calls[0] > 1
+
+        fake_mic = mock.Mock()
+        fake_mic.name = "Stereo Mix (loopback)"
+        with mock.patch.dict(sys.modules, {
+            "soundcard": mock.Mock(all_microphones=mock.Mock(return_value=[fake_mic])),
+            "numpy": mock.Mock(),
+        }):
+            with mock.patch.object(arbiter, "signal_active", side_effect=fake_signal_active):
+                with mock.patch.object(music_sync, "govee") as mock_govee:
+                    mock_govee.color = fake_color
+                    mock_govee.brightness = fake_brightness
+                    mock_govee.status = mock.Mock(return_value={"msg": {"data": {"brightness": 50}}})
+                    with mock.patch("time.sleep"):
+                        with mock.patch.object(music_sync, "STOP_FLAG_FILE") as mock_stop_flag:
+                            mock_stop_flag.exists = fake_stop_flag_exists
+                            music_sync.run(
+                                {"devices": [{"ip": "1.2.3.4"}]},
+                                fps=10,
+                                time_fn=fake_time_fn,
+                            )
+
+        # Heartbeat file should be removed
+        self.assertFalse(arbiter.music_file().exists(),
+                         "music_active.json should be removed after exception")
+        # No restore calls should have been made (signal was active)
+        # Only the initial brightness set should have happened
+        brightness_calls = [c for c in govee_calls if c[0] == "brightness"]
+        # One brightness call at start (setting to 80), none in finally
+        self.assertEqual(len(brightness_calls), 1,
+                        f"Expected 1 brightness call (initial only), got {len(brightness_calls)}")
+        # No color calls in finally (restore would send color)
+        color_calls = [c for c in govee_calls if c[0] == "color"]
+        self.assertEqual(len(color_calls), 0,
+                        f"Expected no color calls (no restore), got {len(color_calls)}")
 
 
 class TestMusicHeartbeatClearOnException(StateDirMixin, unittest.TestCase):
@@ -309,6 +383,69 @@ class TestMusicHeartbeatClearOnException(StateDirMixin, unittest.TestCase):
         # Heartbeat file should be removed
         self.assertFalse(arbiter.music_file().exists(),
                          "music_active.json should be removed after exception")
+
+
+class TestMusicActiveBeforeInitialState(StateDirMixin, unittest.TestCase):
+    """Test that music sync marks itself active before reading initial state."""
+
+    def test_set_music_active_before_status(self):
+        """set_music_active should be called before the first govee.status call."""
+        call_order = []
+
+        def fake_set_music_active():
+            call_order.append("set_music_active")
+
+        def fake_status(ip, timeout=2):
+            call_order.append(f"status_{ip}")
+            return {"msg": {"data": {"brightness": 50}}}
+
+        def fake_brightness(ip, b):
+            call_order.append(f"brightness_{ip}")
+
+        fake_time = [0.0]
+
+        def fake_time_fn():
+            t = fake_time[0]
+            fake_time[0] = t + 0.1
+            return t
+
+        # Create a fake recorder that raises KeyboardInterrupt on first frame
+        fake_rec = mock.Mock()
+        fake_rec.__enter__ = mock.Mock(return_value=fake_rec)
+        fake_rec.__exit__ = mock.Mock(return_value=False)
+        fake_rec.record.side_effect = KeyboardInterrupt()
+
+        fake_mic = mock.Mock()
+        fake_mic.name = "Stereo Mix (loopback)"
+        fake_mic.recorder = mock.Mock(return_value=fake_rec)
+
+        with mock.patch.dict(sys.modules, {
+            "soundcard": mock.Mock(all_microphones=mock.Mock(return_value=[fake_mic])),
+            "numpy": mock.Mock(),
+        }):
+            with mock.patch.object(arbiter, "set_music_active", side_effect=fake_set_music_active):
+                with mock.patch.object(music_sync, "govee") as mock_govee:
+                    mock_govee.status = fake_status
+                    mock_govee.brightness = fake_brightness
+                    with mock.patch("time.sleep"):
+                        with mock.patch.object(music_sync, "STOP_FLAG_FILE", self.state_dir / "music_stop"):
+                            try:
+                                music_sync.run(
+                                    {"devices": [{"ip": "1.2.3.4"}]},
+                                    fps=10,
+                                    time_fn=fake_time_fn,
+                                )
+                            except KeyboardInterrupt:
+                                pass
+
+        # set_music_active should come before status and brightness
+        set_idx = call_order.index("set_music_active")
+        status_idx = call_order.index("status_1.2.3.4")
+        brightness_idx = call_order.index("brightness_1.2.3.4")
+        self.assertLess(set_idx, status_idx,
+                       "set_music_active should be called before govee.status")
+        self.assertLess(set_idx, brightness_idx,
+                       "set_music_active should be called before govee.brightness")
 
 
 class TestMusicHeartbeatRefresh(StateDirMixin, unittest.TestCase):

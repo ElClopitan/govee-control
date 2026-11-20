@@ -519,32 +519,6 @@ def run(config, fps=None, verbose=False, log_file=None, time_fn=None):
 
     logger.info("Using audio device: %s", loopback.name)
 
-    # Record initial state for restoration
-    initial_states = []
-    for dev in devices:
-        ip = dev["ip"]
-        try:
-            resp = govee.status(ip, timeout=2)
-            if resp:
-                initial_states.append({"ip": ip, "state": resp})
-                logger.info("Recorded initial state for %s", ip)
-            else:
-                logger.warning("No response from %s, will not restore", ip)
-                initial_states.append({"ip": ip, "state": None})
-        except OSError as e:
-            logger.warning("Failed to get status from %s: %s", ip, e)
-            initial_states.append({"ip": ip, "state": None})
-
-    # Set brightness once at start
-    brightness = arbiter.cap_brightness(80, config)
-    for dev in devices:
-        ip = dev["ip"]
-        try:
-            govee.brightness(ip, brightness)
-            logger.info("Set brightness %d on %s", brightness, ip)
-        except OSError as e:
-            logger.error("Failed to set brightness on %s: %s", ip, e)
-
     # Analysis parameters
     sample_rate = 44100
     frame_duration = 1.0 / fps
@@ -561,13 +535,40 @@ def run(config, fps=None, verbose=False, log_file=None, time_fn=None):
     logger.info("Music sync started (fps=%d, smoothing=%.2f)", fps, smoothing)
     logger.info("Press Ctrl+C to stop")
 
-    # Mark music sync as active
-    arbiter.set_music_active()
-
     # Clear any leftover stop flag from a previous run
     _remove_stop_flag()
 
+    # Mark music sync as active BEFORE reading initial state, so weather/game
+    # don't send during the status/brightness queries
+    arbiter.set_music_active()
+
     try:
+        # Record initial state for restoration
+        initial_states = []
+        for dev in devices:
+            ip = dev["ip"]
+            try:
+                resp = govee.status(ip, timeout=2)
+                if resp:
+                    initial_states.append({"ip": ip, "state": resp})
+                    logger.info("Recorded initial state for %s", ip)
+                else:
+                    logger.warning("No response from %s, will not restore", ip)
+                    initial_states.append({"ip": ip, "state": None})
+            except OSError as e:
+                logger.warning("Failed to get status from %s: %s", ip, e)
+                initial_states.append({"ip": ip, "state": None})
+
+        # Set brightness once at start
+        brightness = arbiter.cap_brightness(80, config)
+        for dev in devices:
+            ip = dev["ip"]
+            try:
+                govee.brightness(ip, brightness)
+                logger.info("Set brightness %d on %s", brightness, ip)
+            except OSError as e:
+                logger.error("Failed to set brightness on %s: %s", ip, e)
+
         while True:
             frame_start = time_fn()
 
@@ -630,6 +631,19 @@ def run(config, fps=None, verbose=False, log_file=None, time_fn=None):
             # Map to colour
             rgb = features_to_rgb(features, config)
 
+            # Re-check signal before sending (signal may have become active
+            # during audio capture/analysis)
+            if arbiter.signal_active():
+                if not signal_was_active:
+                    logger.info("signal active; pausing music sync")
+                signal_was_active = True
+                # Don't send this frame; sleep to maintain frame rate
+                elapsed = time_fn() - frame_start
+                sleep_time = frame_duration - elapsed
+                if sleep_time > 0:
+                    time.sleep(sleep_time)
+                continue
+
             # Check if colour changed enough
             if last_color is not None and color_distance(rgb, last_color) < COLOR_CHANGE_THRESHOLD:
                 # Not enough change, skip send
@@ -668,23 +682,27 @@ def run(config, fps=None, verbose=False, log_file=None, time_fn=None):
         # Clear music active state
         arbiter.clear_music_active()
 
-        # Restore initial state
-        for state in initial_states:
-            ip = state["ip"]
-            if state["state"] is None:
-                continue
-            try:
-                data = state["state"].get("msg", {}).get("data", {})
-                # Restore brightness
-                if "brightness" in data:
-                    govee.brightness(ip, data["brightness"])
-                # Restore colour
-                if "color" in data:
-                    c = data["color"]
-                    govee.color(ip, c.get("r", 255), c.get("g", 255), c.get("b", 255))
-                logger.info("Restored state for %s", ip)
-            except OSError as e:
-                logger.error("Failed to restore %s: %s", ip, e)
+        # Don't restore over an active signal (agent_signal clear will handle it)
+        if arbiter.signal_active():
+            logger.info("signal active; not restoring (agent_signal clear will)")
+        else:
+            # Restore initial state
+            for state in initial_states:
+                ip = state["ip"]
+                if state["state"] is None:
+                    continue
+                try:
+                    data = state["state"].get("msg", {}).get("data", {})
+                    # Restore brightness
+                    if "brightness" in data:
+                        govee.brightness(ip, data["brightness"])
+                    # Restore colour
+                    if "color" in data:
+                        c = data["color"]
+                        govee.color(ip, c.get("r", 255), c.get("g", 255), c.get("b", 255))
+                    logger.info("Restored state for %s", ip)
+                except OSError as e:
+                    logger.error("Failed to restore %s: %s", ip, e)
 
         logger.info("Music sync stopped")
 

@@ -176,6 +176,8 @@ def set_music_active():
                     os.utime(target, None)
                 else:
                     raise
+                # Clean up the temp file that couldn't be replaced
+                tmp.unlink(missing_ok=True)
 
 
 def clear_music_active():
