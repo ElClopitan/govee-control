@@ -20,6 +20,7 @@ Usage:
 
 import argparse
 import contextlib
+import importlib.util
 import json
 import logging
 import logging.handlers
@@ -409,6 +410,17 @@ def cmd_start():
         print(f"music mode already ON (pid {pid})")
         return 0
 
+    # Check for required dependencies before spawning
+    missing = []
+    if importlib.util.find_spec("soundcard") is None:
+        missing.append("soundcard")
+    if importlib.util.find_spec("numpy") is None:
+        missing.append("numpy")
+    if missing:
+        print("music mode needs: python -m pip install --user -r requirements-music.txt",
+              file=sys.stderr)
+        return 2
+
     _ensure_state_dir()
     _remove_stop_flag()
 
@@ -500,7 +512,11 @@ def cmd_status():
     """Show music sync status."""
     pid = _get_running_pid(kill_hung=False)
     if pid is not None:
-        print(f"music mode ON (pid {pid})")
+        # Check if the process is hung (alive but no heartbeat)
+        if not arbiter.music_active():
+            print(f"music mode ON (pid {pid}, no heartbeat)")
+        else:
+            print(f"music mode ON (pid {pid})")
     else:
         print("music mode OFF")
     return 0
@@ -551,7 +567,9 @@ def run(config, fps=None, verbose=False, log_file=None, time_fn=None):
         import soundcard as sc
         import numpy as np
     except ImportError:
-        print("music mode needs: python -m pip install --user -r requirements-music.txt")
+        msg = "music mode needs: python -m pip install --user -r requirements-music.txt"
+        print(msg)
+        logger.error(msg)
         sys.exit(2)
 
     # Find loopback microphone for the default speaker

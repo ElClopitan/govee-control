@@ -1028,6 +1028,116 @@ class TestToggleCommands(StateDirMixin, unittest.TestCase):
         # Should have checked ~5-6 times (5 second deadline, 1s per call)
         self.assertLessEqual(len(monotonic_calls), 8)
 
+    def test_start_missing_soundcard(self):
+        """cmd_start should return 2 if soundcard is not installed."""
+        def fake_find_spec(name):
+            if name == "soundcard":
+                return None
+            return mock.Mock()
+
+        with mock.patch("importlib.util.find_spec", side_effect=fake_find_spec):
+            with mock.patch("subprocess.Popen") as mock_popen:
+                with mock.patch("builtins.print") as mock_print:
+                    result = music_sync.cmd_start()
+        self.assertEqual(result, 2)
+        mock_popen.assert_not_called()
+        self.assertFalse(music_sync.PID_FILE.exists())
+        # Check stderr output
+        self.assertTrue(any(
+            "requirements-music.txt" in str(call) for call in mock_print.call_args_list
+        ))
+
+    def test_start_missing_numpy(self):
+        """cmd_start should return 2 if numpy is not installed."""
+        def fake_find_spec(name):
+            if name == "numpy":
+                return None
+            return mock.Mock()
+
+        with mock.patch("importlib.util.find_spec", side_effect=fake_find_spec):
+            with mock.patch("subprocess.Popen") as mock_popen:
+                with mock.patch("builtins.print") as mock_print:
+                    result = music_sync.cmd_start()
+        self.assertEqual(result, 2)
+        mock_popen.assert_not_called()
+        self.assertFalse(music_sync.PID_FILE.exists())
+        self.assertTrue(any(
+            "requirements-music.txt" in str(call) for call in mock_print.call_args_list
+        ))
+
+    def test_start_both_deps_found(self):
+        """cmd_start should spawn process if both deps are found."""
+        def fake_find_spec(name):
+            return mock.Mock()
+
+        with mock.patch("importlib.util.find_spec", side_effect=fake_find_spec):
+            with mock.patch("subprocess.Popen") as mock_popen:
+                mock_proc = mock.Mock()
+                mock_proc.pid = 12345
+                mock_popen.return_value = mock_proc
+                with mock.patch("builtins.print"):
+                    result = music_sync.cmd_start()
+        self.assertEqual(result, 0)
+        mock_popen.assert_called_once()
+        self.assertTrue(music_sync.PID_FILE.exists())
+
+    def test_run_logs_missing_deps(self):
+        """run() should log an ERROR when soundcard/numpy are missing."""
+        fake_rec = mock.Mock()
+        fake_rec.__enter__ = mock.Mock(return_value=fake_rec)
+        fake_rec.__exit__ = mock.Mock(return_value=False)
+
+        fake_mic = mock.Mock()
+        fake_mic.name = "Stereo Mix (loopback)"
+        fake_mic.isloopback = True
+        fake_mic.recorder = mock.Mock(return_value=fake_rec)
+
+        fake_speaker = mock.Mock()
+        fake_speaker.name = "Stereo Mix (loopback)"
+
+        fake_sc = mock.Mock()
+        fake_sc.default_speaker = mock.Mock(return_value=fake_speaker)
+        fake_sc.get_microphone = mock.Mock(return_value=fake_mic)
+
+        # Patch sys.modules to make import fail
+        with mock.patch.dict(sys.modules, {"soundcard": None, "numpy": None}):
+            with mock.patch.object(music_sync, "govee") as mock_govee:
+                mock_govee.status = mock.Mock(return_value={"msg": {"data": {"brightness": 50}}})
+                mock_govee.brightness = mock.Mock()
+                with self.assertLogs(music_sync.logger, level="ERROR") as cm:
+                    with self.assertRaises(SystemExit) as ctx:
+                        music_sync.run(
+                            {"devices": [{"ip": "1.2.3.4"}]},
+                            fps=10,
+                        )
+        self.assertEqual(ctx.exception.code, 2)
+        self.assertTrue(any(
+            "requirements-music.txt" in log for log in cm.output
+        ))
+
+    def test_cmd_status_hung_process_shows_no_heartbeat(self):
+        """cmd_status should show 'no heartbeat' for a hung process."""
+        music_sync.PID_FILE.write_text("33333")
+        old_time = time.time() - 100
+        os.utime(music_sync.PID_FILE, (old_time, old_time))
+        with mock.patch.object(music_sync, "_is_process_alive", return_value=True):
+            with mock.patch.object(arbiter, "music_active", return_value=False):
+                with mock.patch("builtins.print") as mock_print:
+                    result = music_sync.cmd_status()
+        self.assertEqual(result, 0)
+        self.assertIn("no heartbeat", mock_print.call_args[0][0])
+
+    def test_cmd_status_healthy_process(self):
+        """cmd_status should not show 'no heartbeat' for a healthy process."""
+        music_sync.PID_FILE.write_text("44444")
+        with mock.patch.object(music_sync, "_is_process_alive", return_value=True):
+            with mock.patch.object(arbiter, "music_active", return_value=True):
+                with mock.patch("builtins.print") as mock_print:
+                    result = music_sync.cmd_status()
+        self.assertEqual(result, 0)
+        self.assertNotIn("no heartbeat", mock_print.call_args[0][0])
+        self.assertIn("ON", mock_print.call_args[0][0])
+
 
 class TestMusicActiveCorruptFile(StateDirMixin, unittest.TestCase):
     """Test that corrupt music_active.json is treated as inactive."""
