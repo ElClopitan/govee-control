@@ -256,8 +256,10 @@ def _marker_is_stale(marker_path, now, max_age_hours):
         if age_hours > max_age_hours:
             return True
         return False
-    except (ValueError, OSError):
-        # Corrupt marker, treat as stale
+    except (ValueError, TypeError, AttributeError, OSError):
+        # Corrupt marker, treat as stale. TypeError for naive vs aware
+        # datetime subtraction; AttributeError for JSON that is null or
+        # a number (no .get method).
         return True
 
 
