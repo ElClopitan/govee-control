@@ -439,8 +439,8 @@ def run(config, once=False, interval=900, dry_run=False, rng=None, time_fn=None)
                 last_sweep_time = now
                 try:
                     agent_signal.sweep_and_restore()
-                except Exception:
-                    pass
+                except Exception as e:
+                    logger.warning("sweep_and_restore failed: %s", e)
             time.sleep(min(interval, BLOCKED_POLL_SECONDS))
             continue
 

@@ -168,8 +168,8 @@ def run(config, interval=5, once=False, dry_run=False):
                     last_sweep_time = now
                     try:
                         agent_signal.sweep_and_restore()
-                    except Exception:
-                        pass
+                    except Exception as e:
+                        logger.warning("sweep_and_restore failed: %s", e)
             # Check music priority (second highest)
             elif arbiter.music_active():
                 if not music_was_active:
