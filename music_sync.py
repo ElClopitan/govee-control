@@ -24,7 +24,6 @@ import logging
 import logging.handlers
 import math
 import os
-import signal
 import subprocess
 import sys
 import time
@@ -35,6 +34,10 @@ import govee
 
 # Heartbeat interval: refresh music_active.json at least this often
 HEARTBEAT_INTERVAL = 5.0
+
+# Grace period after start: if the pid file is younger than this, treat the
+# process as running even if the heartbeat hasn't been written yet.
+START_GRACE_SECONDS = 20
 
 logger = logging.getLogger(__name__)
 
@@ -240,15 +243,44 @@ def _ensure_state_dir():
 def _is_process_alive(pid):
     """Check if a process with the given PID is alive (Windows)."""
     try:
+        CREATE_NO_WINDOW = 0x08000000
         result = subprocess.run(
             ["tasklist", "/FI", f"PID eq {pid}", "/FO", "CSV", "/NH"],
             capture_output=True,
             text=True,
             timeout=5,
+            creationflags=CREATE_NO_WINDOW,
         )
-        return result.returncode == 0 and str(pid) in result.stdout
+        if result.returncode != 0:
+            return False
+        # Parse CSV output: each line is "image","pid","session","mem"
+        # Compare the PID column exactly to avoid matching 123 inside 1234
+        for line in result.stdout.strip().splitlines():
+            parts = line.split(",")
+            if len(parts) >= 2:
+                try:
+                    pid_col = int(parts[1].strip().strip('"'))
+                    if pid_col == pid:
+                        return True
+                except ValueError:
+                    continue
+        return False
     except (subprocess.TimeoutExpired, OSError):
         return False
+
+
+def _kill_process(pid):
+    """Kill a process by PID (Windows)."""
+    try:
+        CREATE_NO_WINDOW = 0x08000000
+        subprocess.run(
+            ["taskkill", "/F", "/PID", str(pid)],
+            capture_output=True,
+            timeout=5,
+            creationflags=CREATE_NO_WINDOW,
+        )
+    except (subprocess.TimeoutExpired, OSError):
+        pass
 
 
 def _get_running_pid():
@@ -256,6 +288,10 @@ def _get_running_pid():
 
     Checks: pid file exists, process is alive, and arbiter.music_active() is true.
     Cleans up stale pid files.
+
+    Grace period: if the process is alive but the heartbeat is missing/stale,
+    and the pid file is younger than START_GRACE_SECONDS, treat it as running
+    (the background process may not have written its first heartbeat yet).
     """
     if not PID_FILE.exists():
         return None
@@ -274,7 +310,18 @@ def _get_running_pid():
         return None
 
     if not arbiter.music_active():
-        # Process alive but heartbeat stale
+        # Process alive but heartbeat stale. Check if we're in the grace period.
+        try:
+            pid_age = time.time() - PID_FILE.stat().st_mtime
+        except OSError:
+            pid_age = float("inf")
+
+        if pid_age < START_GRACE_SECONDS:
+            # Within grace period: process just started, heartbeat not written yet
+            return pid
+
+        # Outside grace period: process is hung, kill it
+        _kill_process(pid)
         PID_FILE.unlink(missing_ok=True)
         arbiter.clear_music_active()
         return None
@@ -378,14 +425,7 @@ def cmd_stop():
 
     # If still alive, force kill
     if _is_process_alive(pid):
-        try:
-            subprocess.run(
-                ["taskkill", "/PID", str(pid)],
-                capture_output=True,
-                timeout=5,
-            )
-        except (subprocess.TimeoutExpired, OSError):
-            pass
+        _kill_process(pid)
 
     # Clean up
     _remove_pid()
@@ -523,6 +563,9 @@ def run(config, fps=None, verbose=False, log_file=None, time_fn=None):
 
     # Mark music sync as active
     arbiter.set_music_active()
+
+    # Clear any leftover stop flag from a previous run
+    _remove_stop_flag()
 
     try:
         while True:

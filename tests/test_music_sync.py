@@ -4,7 +4,9 @@ All tests run without soundcard/numpy and without the network.
 """
 
 import math
+import os
 import sys
+import time
 import unittest
 from pathlib import Path
 from unittest import mock
@@ -343,6 +345,82 @@ class TestToggleCommands(unittest.TestCase):
             pid = music_sync._get_running_pid()
         self.assertIsNone(pid)
         self.assertFalse(music_sync.PID_FILE.exists())
+
+    def test_fresh_pid_file_grace_period(self):
+        """Alive pid + no heartbeat + fresh pid file -> status says ON."""
+        music_sync.PID_FILE.write_text("44444")
+        # Make the pid file appear fresh (just written)
+        with mock.patch.object(music_sync, "_is_process_alive", return_value=True):
+            with mock.patch.object(arbiter, "music_active", return_value=False):
+                pid = music_sync._get_running_pid()
+        # Within grace period (pid file just written), should return the pid
+        self.assertEqual(pid, 44444)
+        self.assertTrue(music_sync.PID_FILE.exists())
+
+    def test_old_pid_file_no_heartbeat_killed(self):
+        """Alive pid + no heartbeat + old pid file -> killed and cleaned up."""
+        music_sync.PID_FILE.write_text("33333")
+        # Make the pid file appear old (older than START_GRACE_SECONDS)
+        old_time = time.time() - 100
+        os.utime(music_sync.PID_FILE, (old_time, old_time))
+        with mock.patch.object(music_sync, "_is_process_alive", return_value=True):
+            with mock.patch.object(arbiter, "music_active", return_value=False):
+                with mock.patch.object(music_sync, "_kill_process") as mock_kill:
+                    pid = music_sync._get_running_pid()
+        self.assertIsNone(pid)
+        self.assertFalse(music_sync.PID_FILE.exists())
+        mock_kill.assert_called_once_with(33333)
+
+    def test_stop_fallback_uses_force_kill(self):
+        """stop fallback should use taskkill /F."""
+        music_sync.PID_FILE.write_text("22222")
+        with mock.patch.object(music_sync, "_is_process_alive", return_value=True):
+            with mock.patch.object(arbiter, "music_active", return_value=True):
+                with mock.patch.object(music_sync, "_kill_process") as mock_kill:
+                    with mock.patch("time.sleep"):
+                        with mock.patch("builtins.print"):
+                            music_sync.cmd_stop()
+        mock_kill.assert_called_once_with(22222)
+
+    def test_is_process_alive_exact_pid_match(self):
+        """_is_process_alive(123) should be False when tasklist lists only 1234."""
+        fake_result = mock.Mock()
+        fake_result.returncode = 0
+        fake_result.stdout = '"pythonw.exe","1234","Console","123456 K"\n'
+        with mock.patch("subprocess.run", return_value=fake_result):
+            alive = music_sync._is_process_alive(123)
+        self.assertFalse(alive)
+
+    def test_is_process_alive_matches_correct_pid(self):
+        """_is_process_alive(1234) should be True when tasklist lists 1234."""
+        fake_result = mock.Mock()
+        fake_result.returncode = 0
+        fake_result.stdout = '"pythonw.exe","1234","Console","123456 K"\n'
+        with mock.patch("subprocess.run", return_value=fake_result):
+            alive = music_sync._is_process_alive(1234)
+        self.assertTrue(alive)
+
+    def test_run_clears_leftover_stop_flag(self):
+        """run() should remove a leftover stop flag and not exit on it."""
+        # Create a leftover stop flag
+        music_sync.STOP_FLAG_FILE.write_text("leftover")
+        self.assertTrue(music_sync.STOP_FLAG_FILE.exists())
+
+        # Mock dependencies so run() doesn't actually start the loop
+        with mock.patch.object(arbiter, "set_music_active"):
+            with mock.patch.object(arbiter, "clear_music_active"):
+                with mock.patch.object(music_sync, "_remove_stop_flag") as mock_remove:
+                    # Call run() with a fake config and time_fn
+                    # It should call _remove_stop_flag before the loop
+                    try:
+                        music_sync.run(
+                            {"devices": [{"ip": "1.2.3.4"}]},
+                            fps=10,
+                            time_fn=lambda: 0.0,
+                        )
+                    except SystemExit:
+                        pass  # Expected if soundcard not available
+        mock_remove.assert_called()
 
     def test_stop_flag_checked_before_signal(self):
         """The stop flag should be checked before the signal check in the loop."""
