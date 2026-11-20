@@ -386,10 +386,11 @@ class TestDefaultNull(StateDirMixin, unittest.TestCase):
 
     @mock.patch("agent_signal.sweep_and_restore")
     @mock.patch("game_sync.running_processes")
+    @mock.patch("govee.turn")
     @mock.patch("govee.color")
     @mock.patch("govee.brightness")
-    def test_default_null_no_game_turns_off(self, mock_brightness, mock_color, mock_processes, mock_sweep):
-        """With "default": null and no game running, lights are turned off (black)."""
+    def test_default_null_no_game_turns_off(self, mock_brightness, mock_color, mock_turn, mock_processes, mock_sweep):
+        """With "default": null and no game running, lights are turned off."""
         import arbiter
         arbiter.set_mode("game")
 
@@ -404,9 +405,12 @@ class TestDefaultNull(StateDirMixin, unittest.TestCase):
 
         game_sync.run(config, once=True)
 
-        # Should have sent black (off)
-        self.assertEqual(mock_color.call_count, 1)
-        mock_color.assert_called_with("192.168.1.50", 0, 0, 0)
+        # Should have sent off
+        self.assertEqual(mock_turn.call_count, 1)
+        mock_turn.assert_called_with("192.168.1.50", False)
+        # Should NOT have sent any color/brightness
+        mock_color.assert_not_called()
+        mock_brightness.assert_not_called()
 
     @mock.patch("agent_signal.sweep_and_restore")
     @mock.patch("game_sync.running_processes")
@@ -890,10 +894,11 @@ class TestModeControl(StateDirMixin, unittest.TestCase):
 
     @mock.patch("agent_signal.sweep_and_restore")
     @mock.patch("game_sync.running_processes")
+    @mock.patch("govee.turn")
     @mock.patch("govee.color")
     @mock.patch("govee.brightness")
     @mock.patch("time.sleep")
-    def test_mode_game_no_game_turns_off_once(self, mock_sleep, mock_brightness, mock_color, mock_processes, mock_sweep):
+    def test_mode_game_no_game_turns_off_once(self, mock_sleep, mock_brightness, mock_color, mock_turn, mock_processes, mock_sweep):
         """Mode=game + no game -> off sent exactly once over 3 loops."""
         import arbiter
         arbiter.set_mode("game")
@@ -919,17 +924,20 @@ class TestModeControl(StateDirMixin, unittest.TestCase):
         except KeyboardInterrupt:
             pass
 
-        # Should have sent off (black) exactly once
-        self.assertEqual(mock_color.call_count, 1)
-        # Black = (0, 0, 0)
-        mock_color.assert_called_with("192.168.1.50", 0, 0, 0)
+        # Should have sent off exactly once
+        self.assertEqual(mock_turn.call_count, 1)
+        mock_turn.assert_called_with("192.168.1.50", False)
+        # Should NOT have sent any color/brightness
+        mock_color.assert_not_called()
+        mock_brightness.assert_not_called()
 
     @mock.patch("agent_signal.sweep_and_restore")
     @mock.patch("game_sync.running_processes")
+    @mock.patch("govee.turn")
     @mock.patch("govee.color")
     @mock.patch("govee.brightness")
     @mock.patch("time.sleep")
-    def test_mode_game_game_appears_turns_on(self, mock_sleep, mock_brightness, mock_color, mock_processes, mock_sweep):
+    def test_mode_game_game_appears_turns_on(self, mock_sleep, mock_brightness, mock_color, mock_turn, mock_processes, mock_sweep):
         """Mode=game + game appears -> on + profile."""
         import arbiter
         arbiter.set_mode("game")
@@ -960,12 +968,15 @@ class TestModeControl(StateDirMixin, unittest.TestCase):
         except KeyboardInterrupt:
             pass
 
-        # Should have sent off first, then the game profile
-        self.assertEqual(mock_color.call_count, 2)
-        # First call: off (black)
-        self.assertEqual(mock_color.call_args_list[0][0][1:], (0, 0, 0))
-        # Second call: game profile (red)
-        self.assertEqual(mock_color.call_args_list[1][0][1:], (255, 0, 0))
+        # Should have sent off first, then on, then the game profile
+        self.assertEqual(mock_turn.call_count, 2)
+        # First call: off
+        self.assertEqual(mock_turn.call_args_list[0][0], ("192.168.1.50", False))
+        # Second call: on
+        self.assertEqual(mock_turn.call_args_list[1][0], ("192.168.1.50", True))
+        # Then the game profile (red)
+        self.assertEqual(mock_color.call_count, 1)
+        mock_color.assert_called_with("192.168.1.50", 255, 0, 0)
 
     @mock.patch("agent_signal.sweep_and_restore")
     @mock.patch("game_sync.running_processes")
@@ -1032,6 +1043,155 @@ class TestModeControl(StateDirMixin, unittest.TestCase):
         # Should NOT have sent any commands because signal is active
         mock_color.assert_not_called()
         mock_brightness.assert_not_called()
+
+    @mock.patch("agent_signal.sweep_and_restore")
+    @mock.patch("game_sync.running_processes")
+    @mock.patch("govee.turn")
+    @mock.patch("govee.color")
+    @mock.patch("govee.brightness")
+    @mock.patch("time.sleep")
+    def test_mode_game_no_game_with_default_profile(self, mock_sleep, mock_brightness, mock_color, mock_turn, mock_processes, mock_sweep):
+        """Mode=game + no game + config has default profile -> off sent, default ignored."""
+        import arbiter
+        arbiter.set_mode("game")
+        mock_processes.return_value = {"chrome.exe"}
+        # Config has a default profile, but in game mode with no game it should be ignored
+        config = {
+            "devices": [{"name": "left", "ip": "192.168.1.50"}],
+            "games": [
+                {"name": "Test Game", "exe": "testgame.exe", "color": "red", "brightness": 80},
+            ],
+            "default": {"color": "white", "brightness": 40},
+        }
+
+        call_count = [0]
+        def sleep_side_effect(seconds):
+            call_count[0] += 1
+            if call_count[0] >= 3:
+                raise KeyboardInterrupt()
+        mock_sleep.side_effect = sleep_side_effect
+
+        try:
+            game_sync.run(config, interval=1)
+        except KeyboardInterrupt:
+            pass
+
+        # Should have sent off exactly once
+        self.assertEqual(mock_turn.call_count, 1)
+        mock_turn.assert_called_with("192.168.1.50", False)
+        # Should NOT have sent any color/brightness (default profile ignored)
+        mock_color.assert_not_called()
+        mock_brightness.assert_not_called()
+
+    @mock.patch("agent_signal.sweep_and_restore")
+    @mock.patch("game_sync.running_processes")
+    @mock.patch("govee.turn")
+    @mock.patch("govee.color")
+    @mock.patch("govee.brightness")
+    @mock.patch("time.sleep")
+    def test_off_send_fails_then_succeeds(self, mock_sleep, mock_brightness, mock_color, mock_turn, mock_processes, mock_sweep):
+        """Off send raises OSError on loop 1, works on loop 2 -> turn called twice."""
+        import arbiter
+        arbiter.set_mode("game")
+        mock_processes.return_value = {"chrome.exe"}
+        config = {
+            "devices": [{"name": "left", "ip": "192.168.1.50"}],
+            "games": [
+                {"name": "Test Game", "exe": "testgame.exe", "color": "red", "brightness": 80},
+            ],
+            "default": None,
+        }
+
+        # First call to govee.turn raises OSError, second succeeds
+        mock_turn.side_effect = [OSError("network unreachable"), None]
+
+        call_count = [0]
+        def sleep_side_effect(seconds):
+            call_count[0] += 1
+            if call_count[0] >= 2:
+                raise KeyboardInterrupt()
+        mock_sleep.side_effect = sleep_side_effect
+
+        try:
+            game_sync.run(config, interval=1)
+        except KeyboardInterrupt:
+            pass
+
+        # govee.turn should have been called twice: failed first, then retried
+        self.assertEqual(mock_turn.call_count, 2)
+        # Both calls should be turn off
+        self.assertEqual(mock_turn.call_args_list[0][0], ("192.168.1.50", False))
+        self.assertEqual(mock_turn.call_args_list[1][0], ("192.168.1.50", False))
+
+    @mock.patch("agent_signal.sweep_and_restore")
+    @mock.patch("game_sync.running_processes")
+    @mock.patch("govee.turn")
+    @mock.patch("govee.color")
+    @mock.patch("govee.brightness")
+    @mock.patch("time.sleep")
+    def test_mode_switch_forgets_off_sent(self, mock_sleep, mock_brightness, mock_color, mock_turn, mock_processes, mock_sweep):
+        """Mode=game no game (off sent) -> mode=weather -> mode=game, still no game: off sent again."""
+        import arbiter
+        arbiter.set_mode("game")
+        mock_processes.return_value = {"chrome.exe"}
+        config = {
+            "devices": [{"name": "left", "ip": "192.168.1.50"}],
+            "games": [
+                {"name": "Test Game", "exe": "testgame.exe", "color": "red", "brightness": 80},
+            ],
+            "default": None,
+        }
+
+        call_count = [0]
+        def sleep_side_effect(seconds):
+            call_count[0] += 1
+            if call_count[0] == 1:
+                # Switch to weather mode between iterations
+                arbiter.set_mode("weather")
+            elif call_count[0] == 2:
+                # Switch back to game mode
+                arbiter.set_mode("game")
+            if call_count[0] >= 3:
+                raise KeyboardInterrupt()
+        mock_sleep.side_effect = sleep_side_effect
+
+        try:
+            game_sync.run(config, interval=1)
+        except KeyboardInterrupt:
+            pass
+
+        # Should have sent off twice: once before mode switch, once after switching back
+        self.assertEqual(mock_turn.call_count, 2)
+        self.assertEqual(mock_turn.call_args_list[0][0], ("192.168.1.50", False))
+        self.assertEqual(mock_turn.call_args_list[1][0], ("192.168.1.50", False))
+
+    @mock.patch("agent_signal.sweep_and_restore")
+    @mock.patch("game_sync.running_processes")
+    @mock.patch("govee.turn")
+    @mock.patch("govee.color")
+    @mock.patch("govee.brightness")
+    @mock.patch("time.sleep")
+    def test_mode_weather_game_running_clears_game_active(self, mock_sleep, mock_brightness, mock_color, mock_turn, mock_processes, mock_sweep):
+        """Mode=weather with a game running -> game_active is False after the loop."""
+        import arbiter
+        arbiter.set_mode("weather")
+        mock_processes.return_value = {"testgame.exe"}
+        config = self._make_config()
+
+        call_count = [0]
+        def sleep_side_effect(seconds):
+            call_count[0] += 1
+            if call_count[0] >= 2:
+                raise KeyboardInterrupt()
+        mock_sleep.side_effect = sleep_side_effect
+
+        try:
+            game_sync.run(config, interval=1)
+        except KeyboardInterrupt:
+            pass
+
+        # game_active should be False because mode is weather
+        self.assertFalse(arbiter.game_active())
 
 
 if __name__ == "__main__":

@@ -182,9 +182,9 @@ Add a `weather` section to your `config.json`:
 
 The script refuses to run (exit code 2) if both latitude and longitude are 0.0.
 
-While a signal or game is active, weather_sync re-checks every 10 seconds
-(`weather_sync.BLOCKED_POLL_SECONDS`) and resumes as soon as the higher-priority
-source clears.
+While an agent signal is active or another mode is selected, weather_sync
+re-checks every 10 seconds (`weather_sync.BLOCKED_POLL_SECONDS`) and resumes
+as soon as the signal clears and the mode is "weather" again.
 
 ### Brightness cap
 

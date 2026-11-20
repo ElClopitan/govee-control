@@ -72,6 +72,28 @@ def pick_profile(processes, games):
     return None
 
 
+def turn_all(config, on, dry_run=False):
+    """Turn all configured devices on or off.
+
+    Args:
+        config: loaded config dict
+        on: True to turn on, False to turn off
+        dry_run: if True, print what would be sent instead of sending
+    """
+    devices = config.get("devices", [])
+    for dev in devices:
+        ip = dev.get("ip")
+        if not ip:
+            continue
+        if dry_run:
+            logger.info("[dry-run] %s -> %s", "on" if on else "off", ip)
+            print(f"[dry-run] {'on' if on else 'off'} -> {ip}")
+        else:
+            govee.turn(ip, on)
+            logger.info("%s -> %s", "on" if on else "off", ip)
+            print(f"{'on' if on else 'off'} -> {ip}")
+
+
 def apply_profile(config, profile, dry_run=False):
     """Apply a colour/brightness profile to all configured devices.
 
@@ -114,6 +136,10 @@ def run(config, interval=5, once=False, dry_run=False):
     Respects the selected mode: only drives lights when mode is "game".
     Agent signal always wins over every mode.
 
+    In game mode with no game running, the lights are turned off (not set to
+    a default profile). When a game starts, the lights are turned on and the
+    game profile is applied.
+
     Args:
         config: loaded config dict
         interval: seconds between checks
@@ -123,6 +149,7 @@ def run(config, interval=5, once=False, dry_run=False):
     games = config.get("games", [])
     # If "default" key is missing, use the built-in default.
     # If "default" is explicitly null, use None (no default profile).
+    # The default profile is only used in --once mode or when not in game mode.
     if "default" in config:
         default = config["default"]
     else:
@@ -140,7 +167,6 @@ def run(config, interval=5, once=False, dry_run=False):
             profile = pick_profile(processes, games)
 
             if profile is None:
-                profile = default
                 profile_name = "default"
             else:
                 profile_name = profile.get("name", profile.get("exe", "unknown"))
@@ -148,8 +174,9 @@ def run(config, interval=5, once=False, dry_run=False):
             # Manage game_active state (skip in dry-run and once mode).
             # In loop mode, rewriting the file every iteration is the heartbeat
             # that keeps game_active() returning True (see arbiter.GAME_STALE_SECONDS).
+            # Only set game_active when mode is "game" and a game matches.
             if not dry_run and not once:
-                if profile_name != "default":
+                if arbiter.get_mode() == "game" and profile_name != "default":
                     arbiter.set_game_active(profile_name)
                 elif arbiter.game_active():
                     arbiter.clear_game_active()
@@ -199,20 +226,41 @@ def run(config, interval=5, once=False, dry_run=False):
                         last_profile_name = None
                         last_off_sent = False
                     else:
-                        # In game mode with no game running: turn off (black) once
-                        if profile is None:
+                        # In game mode with no game running: turn off once
+                        # (except in --once mode, where we apply the default profile)
+                        if profile is None and not once:
                             if not last_off_sent:
                                 logger.info("no game running; turning lights off")
                                 print("no game running; turning lights off")
                                 try:
-                                    apply_profile(config, {"color": "black", "brightness": 0}, dry_run=dry_run)
+                                    turn_all(config, False, dry_run=dry_run)
                                 except OSError as e:
                                     logger.warning("failed to turn off: %s", e)
                                     print(f"warning: failed to turn off: {e}", file=sys.stderr)
                                 else:
                                     last_off_sent = True
                             last_profile_name = profile_name
+                        elif profile is None and once:
+                            # --once mode: apply default profile (existing behavior)
+                            logger.info("no game running; applying default profile")
+                            print("no game running; applying default profile")
+                            try:
+                                apply_profile(config, default, dry_run=dry_run)
+                            except OSError as e:
+                                logger.warning("failed to apply default: %s", e)
+                                print(f"warning: failed to apply default: {e}", file=sys.stderr)
+                            else:
+                                last_profile_name = profile_name
                         else:
+                            # Game started: turn on first, then apply profile
+                            if last_off_sent:
+                                logger.info("game started; turning lights on")
+                                print("game started; turning lights on")
+                                try:
+                                    turn_all(config, True, dry_run=dry_run)
+                                except OSError as e:
+                                    logger.warning("failed to turn on: %s", e)
+                                    print(f"warning: failed to turn on: {e}", file=sys.stderr)
                             logger.info("Switching to: %s", profile_name)
                             print(f"Switching to: {profile_name}")
                             try:
