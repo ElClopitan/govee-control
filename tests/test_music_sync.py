@@ -2028,18 +2028,20 @@ class TestRecorderReopenWithStrictFake(StateDirMixin, unittest.TestCase):
     def test_default_speaker_change_reopens(self):
         """When the default speaker changes, the recorder should be reopened."""
         recorders_created = []
-        record_call_count = [0]
+        calls_per_recorder = []
         current_speaker_id = ["A"]
 
         def record_side_effect():
-            record_call_count[0] += 1
+            # Increment the counter for the current recorder
+            calls_per_recorder[-1] += 1
             # Stop after 3 record calls on the second recorder
-            if len(recorders_created) == 2 and record_call_count[0] >= 3:
+            if len(recorders_created) == 2 and calls_per_recorder[-1] >= 3:
                 raise KeyboardInterrupt()
 
         def make_recorder(samplerate, channels):
             rec = self._make_strict_recorder(record_side_effect)
             recorders_created.append(rec)
+            calls_per_recorder.append(0)
             return rec
 
         # Speaker A
@@ -2078,9 +2080,12 @@ class TestRecorderReopenWithStrictFake(StateDirMixin, unittest.TestCase):
         fake_sc.get_microphone = mock.Mock(side_effect=fake_get_microphone)
 
         # Change speaker after 4 seconds (before the first device check at 5s)
+        # Bound the clock to prevent infinite loops if run() doesn't reopen
         def fake_time_fn():
             t = fake_time[0]
             fake_time[0] = t + 0.1
+            if t > 1000:
+                raise AssertionError("run() did not terminate")
             if t >= 4.0:
                 current_speaker_id[0] = "B"
             return t
@@ -2119,6 +2124,20 @@ class TestRecorderReopenWithStrictFake(StateDirMixin, unittest.TestCase):
         for i, rec in enumerate(recorders_created):
             self.assertLessEqual(rec.exit_count, 1,
                                f"Recorder {i} exit_count should be <= 1")
+        # First recorder should have recorded at least one frame
+        self.assertGreaterEqual(calls_per_recorder[0], 1,
+                               "First recorder should have recorded at least one frame")
+        # Second recorder should have recorded exactly 3 frames
+        self.assertEqual(calls_per_recorder[1], 3,
+                        "Second recorder should have recorded exactly 3 frames")
+        # get_microphone should have been called with "A" first and "B" later
+        mic_calls = fake_sc.get_microphone.call_args_list
+        self.assertGreater(len(mic_calls), 0,
+                          "get_microphone should have been called")
+        self.assertEqual(mic_calls[0][0][0], "A",
+                        "First get_microphone call should be for speaker A")
+        self.assertEqual(mic_calls[-1][0][0], "B",
+                        "Last get_microphone call should be for speaker B")
 
     def test_same_speaker_no_reopen(self):
         """When the default speaker doesn't change, the recorder should not be reopened."""
