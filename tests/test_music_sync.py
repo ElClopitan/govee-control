@@ -1237,6 +1237,141 @@ class TestToggleCommands(StateDirMixin, unittest.TestCase):
         created = music_sync._process_create_time(0x7FFFFFFC)
         self.assertIsNone(created)
 
+    def test_run_cleans_pid_on_no_devices(self):
+        """run() should remove its own PID file when exiting due to no devices."""
+        my_pid = os.getpid()
+        music_sync.PID_FILE.write_text(str(my_pid))
+
+        with mock.patch.object(music_sync, "govee") as mock_govee:
+            with self.assertRaises(SystemExit) as ctx:
+                music_sync.run({"devices": []}, fps=10)
+        self.assertEqual(ctx.exception.code, 1)
+        self.assertFalse(music_sync.PID_FILE.exists(),
+                        "run() should have removed its own PID file on no devices")
+
+    def test_run_cleans_pid_on_missing_soundcard(self):
+        """run() should remove its own PID file when soundcard import fails."""
+        my_pid = os.getpid()
+        music_sync.PID_FILE.write_text(str(my_pid))
+
+        with mock.patch.dict(sys.modules, {"soundcard": None, "numpy": None}):
+            with mock.patch.object(music_sync, "govee") as mock_govee:
+                with self.assertRaises(SystemExit) as ctx:
+                    music_sync.run({"devices": [{"ip": "1.2.3.4"}]}, fps=10)
+        self.assertEqual(ctx.exception.code, 2)
+        self.assertFalse(music_sync.PID_FILE.exists(),
+                        "run() should have removed its own PID file on missing soundcard")
+
+    def test_run_cleans_pid_on_no_loopback(self):
+        """run() should remove its own PID file when no loopback device found."""
+        my_pid = os.getpid()
+        music_sync.PID_FILE.write_text(str(my_pid))
+
+        fake_speaker = mock.Mock()
+        fake_speaker.name = "Speakers X"
+
+        fake_sc = mock.Mock()
+        fake_sc.default_speaker = mock.Mock(return_value=fake_speaker)
+        fake_sc.get_microphone = mock.Mock(side_effect=Exception("not found"))
+        fake_sc.all_microphones = mock.Mock(return_value=[])
+
+        with mock.patch.dict(sys.modules, {"soundcard": fake_sc, "numpy": mock.Mock()}):
+            with mock.patch.object(music_sync, "govee") as mock_govee:
+                with self.assertRaises(SystemExit) as ctx:
+                    music_sync.run({"devices": [{"ip": "1.2.3.4"}]}, fps=10)
+        self.assertEqual(ctx.exception.code, 1)
+        self.assertFalse(music_sync.PID_FILE.exists(),
+                        "run() should have removed its own PID file on no loopback")
+
+    def test_run_leaves_other_pid_on_no_devices(self):
+        """run() should not remove a PID file that doesn't match its own PID."""
+        music_sync.PID_FILE.write_text("99999")
+
+        with mock.patch.object(music_sync, "govee") as mock_govee:
+            with self.assertRaises(SystemExit) as ctx:
+                music_sync.run({"devices": []}, fps=10)
+        self.assertEqual(ctx.exception.code, 1)
+        self.assertTrue(music_sync.PID_FILE.exists(),
+                        "run() should not have removed another process's PID file")
+        self.assertEqual(music_sync.PID_FILE.read_text().strip(), "99999")
+
+    def test_run_clear_music_active_error_does_not_skip_cleanup(self):
+        """When clear_music_active raises PermissionError, PID cleanup and restore
+        should still run."""
+        my_pid = os.getpid()
+        music_sync.PID_FILE.write_text(str(my_pid))
+
+        # Track govee calls for restore
+        govee_calls = []
+
+        def fake_color(ip, r, g, b):
+            govee_calls.append(("color", ip, r, g, b))
+
+        def fake_brightness(ip, b):
+            govee_calls.append(("brightness", ip, b))
+
+        # clear_music_active raises PermissionError
+        def fake_clear_music_active():
+            raise PermissionError("file in use")
+
+        fake_rec = mock.Mock()
+        fake_rec.record.side_effect = KeyboardInterrupt()
+        fake_rec.__enter__ = mock.Mock(return_value=fake_rec)
+        fake_rec.__exit__ = mock.Mock(return_value=False)
+
+        fake_mic = mock.Mock()
+        fake_mic.name = "Stereo Mix (loopback)"
+        fake_mic.isloopback = True
+        fake_mic.recorder = mock.Mock(return_value=fake_rec)
+
+        fake_speaker = mock.Mock()
+        fake_speaker.name = "Stereo Mix (loopback)"
+
+        fake_sc = mock.Mock()
+        fake_sc.default_speaker = mock.Mock(return_value=fake_speaker)
+        fake_sc.get_microphone = mock.Mock(return_value=fake_mic)
+        fake_sc.all_microphones = mock.Mock(return_value=[fake_mic])
+
+        fake_time = [0.0]
+
+        def fake_time_fn():
+            t = fake_time[0]
+            fake_time[0] = t + 0.1
+            return t
+
+        with mock.patch.dict(sys.modules, {
+            "soundcard": fake_sc,
+            "numpy": mock.Mock(),
+        }):
+            with mock.patch.object(arbiter, "clear_music_active", side_effect=fake_clear_music_active):
+                with mock.patch.object(music_sync, "govee") as mock_govee:
+                    mock_govee.color = fake_color
+                    mock_govee.brightness = fake_brightness
+                    mock_govee.status = mock.Mock(return_value={"msg": {"data": {"brightness": 50}}})
+                    with mock.patch("time.sleep"):
+                        with mock.patch.object(music_sync, "STOP_FLAG_FILE", self.state_dir / "music_stop"):
+                            with self.assertLogs("music_sync", level="WARNING") as cm:
+                                try:
+                                    music_sync.run(
+                                        {"devices": [{"ip": "1.2.3.4"}]},
+                                        fps=10,
+                                        time_fn=fake_time_fn,
+                                    )
+                                except KeyboardInterrupt:
+                                    pass
+
+        # PID file should be removed
+        self.assertFalse(music_sync.PID_FILE.exists(),
+                        "run() should have removed its own PID file")
+        # Restore should have happened (brightness call in finally)
+        brightness_calls = [c for c in govee_calls if c[0] == "brightness"]
+        # One at start (setting to 80), one in finally (restoring to 50)
+        self.assertEqual(len(brightness_calls), 2,
+                        f"Expected 2 brightness calls (initial + restore), got {len(brightness_calls)}")
+        # Warning about music heartbeat should be logged
+        self.assertTrue(any("music heartbeat" in log for log in cm.output),
+                       f"Expected warning about music heartbeat, got: {cm.output}")
+
 
 class TestMusicActiveCorruptFile(StateDirMixin, unittest.TestCase):
     """Test that corrupt music_active.json is treated as inactive."""
