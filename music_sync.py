@@ -20,6 +20,7 @@ Usage:
 
 import argparse
 import contextlib
+import ctypes
 import importlib.util
 import json
 import logging
@@ -29,6 +30,7 @@ import os
 import subprocess
 import sys
 import time
+from ctypes import wintypes
 from pathlib import Path
 
 import arbiter
@@ -312,6 +314,48 @@ def _is_process_alive(pid):
         return False
 
 
+def _process_create_time(pid):
+    """Return the process creation time as a Unix timestamp (float), or None.
+
+    Uses Windows API via ctypes. Returns None on any failure or when not on Windows.
+    """
+    if os.name != "nt":
+        return None
+    try:
+        PROCESS_QUERY_LIMITED_INFORMATION = 0x1000
+        k32 = ctypes.WinDLL("kernel32", use_last_error=True)
+        k32.OpenProcess.restype = wintypes.HANDLE
+        k32.OpenProcess.argtypes = [wintypes.DWORD, wintypes.BOOL, wintypes.DWORD]
+        k32.GetProcessTimes.restype = wintypes.BOOL
+        k32.GetProcessTimes.argtypes = [
+            wintypes.HANDLE,
+            ctypes.POINTER(wintypes.FILETIME),
+            ctypes.POINTER(wintypes.FILETIME),
+            ctypes.POINTER(wintypes.FILETIME),
+            ctypes.POINTER(wintypes.FILETIME),
+        ]
+        k32.CloseHandle.argtypes = [wintypes.HANDLE]
+
+        h = k32.OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, False, pid)
+        if not h:
+            return None
+        try:
+            creation = wintypes.FILETIME()
+            exit_ft = wintypes.FILETIME()
+            kernel = wintypes.FILETIME()
+            user = wintypes.FILETIME()
+            if not k32.GetProcessTimes(h, ctypes.byref(creation), ctypes.byref(exit_ft),
+                                       ctypes.byref(kernel), ctypes.byref(user)):
+                return None
+            ticks = (creation.dwHighDateTime << 32) | creation.dwLowDateTime
+            # Windows FILETIME is 100ns intervals since 1601-01-01; Unix epoch is 1970-01-01
+            return ticks / 1e7 - 11644473600
+        finally:
+            k32.CloseHandle(h)
+    except Exception:
+        return None
+
+
 def _kill_process(pid):
     """Kill a process by PID (Windows)."""
     try:
@@ -357,6 +401,22 @@ def _get_running_pid(kill_hung=True):
         arbiter.clear_music_active()
         return None
 
+    # Check if the PID was reused by another process.
+    # cmd_start writes the PID file AFTER Popen, so our process was created
+    # before the file. If the process creation time is after the file mtime
+    # (plus a small margin), the PID was reused.
+    created = _process_create_time(pid)
+    try:
+        mtime = PID_FILE.stat().st_mtime
+    except OSError:
+        mtime = None
+
+    if created is not None and mtime is not None and created > mtime + 2.0:
+        # PID was reused by another process; treat as dead
+        PID_FILE.unlink(missing_ok=True)
+        arbiter.clear_music_active()
+        return None
+
     if not arbiter.music_active():
         # Process alive but heartbeat stale. Check if we're in the grace period.
         try:
@@ -370,7 +430,9 @@ def _get_running_pid(kill_hung=True):
 
         if kill_hung:
             # Outside grace period: process is hung, kill it
-            _kill_process(pid)
+            # Only kill if we confirmed the process identity (created is not None)
+            if created is not None:
+                _kill_process(pid)
             PID_FILE.unlink(missing_ok=True)
             arbiter.clear_music_active()
             return None
