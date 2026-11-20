@@ -164,9 +164,11 @@ class TestCliGet(StateDirMixin, unittest.TestCase):
         import mode
         with mock.patch("sys.argv", ["mode.py", "get"]):
             with mock.patch("builtins.print") as mock_print:
-                with self.assertRaises(SystemExit) as cm:
-                    mode.main()
-                self.assertEqual(cm.exception.code, 0)
+                with mock.patch("govee.turn") as mock_turn:
+                    with self.assertRaises(SystemExit) as cm:
+                        mode.main()
+                    self.assertEqual(cm.exception.code, 0)
+                mock_turn.assert_not_called()
         # Check that "weather" was printed
         calls = [str(call) for call in mock_print.call_args_list]
         self.assertTrue(any("weather" in c for c in calls))
@@ -191,9 +193,11 @@ class TestCliSet(StateDirMixin, unittest.TestCase):
         import mode
         with mock.patch("sys.argv", ["mode.py", "set", "disco"]):
             with mock.patch("sys.stderr"):
-                with self.assertRaises(SystemExit) as cm:
-                    mode.main()
-                self.assertEqual(cm.exception.code, 2)
+                with mock.patch("govee.turn") as mock_turn:
+                    with self.assertRaises(SystemExit) as cm:
+                        mode.main()
+                    self.assertEqual(cm.exception.code, 2)
+                mock_turn.assert_not_called()
         self.assertEqual(arbiter.get_mode(), "off")  # unchanged
 
     def test_set_valid_mode_exits_0(self):
@@ -208,14 +212,16 @@ class TestCliSet(StateDirMixin, unittest.TestCase):
         self.assertEqual(arbiter.get_mode(), "weather")
 
     def test_set_missing_config_exits_1(self):
-        """mode.py set weather --config <missing> exits 1 and leaves mode unchanged."""
+        """mode.py set off --config <missing> exits 1 and leaves mode unchanged."""
         import mode
         missing = str(Path(self.state_dir) / "does_not_exist.json")
-        with mock.patch("sys.argv", ["mode.py", "set", "weather", "--config", missing]):
+        with mock.patch("sys.argv", ["mode.py", "set", "off", "--config", missing]):
             with mock.patch("sys.stderr"):
-                with self.assertRaises(SystemExit) as cm:
-                    mode.main()
-                self.assertEqual(cm.exception.code, 1)
+                with mock.patch("govee.turn") as mock_turn:
+                    with self.assertRaises(SystemExit) as cm:
+                        mode.main()
+                    self.assertEqual(cm.exception.code, 1)
+                mock_turn.assert_not_called()
         self.assertEqual(arbiter.get_mode(), "off")  # unchanged
 
     def test_set_off_dry_run_exits_0_no_turn(self):
@@ -229,6 +235,88 @@ class TestCliSet(StateDirMixin, unittest.TestCase):
                     self.assertEqual(cm.exception.code, 0)
                 mock_turn.assert_not_called()
         self.assertEqual(arbiter.get_mode(), "off")  # unchanged (dry-run)
+
+    def test_set_game_missing_config_exits_0(self):
+        """mode.py set game --config <missing> exits 0 and sets mode to game."""
+        import mode
+        missing = str(Path(self.state_dir) / "does_not_exist.json")
+        with mock.patch("sys.argv", ["mode.py", "set", "game", "--config", missing]):
+            with mock.patch("govee.turn") as mock_turn:
+                with mock.patch("sys.stdout"):
+                    with self.assertRaises(SystemExit) as cm:
+                        mode.main()
+                    self.assertEqual(cm.exception.code, 0)
+                mock_turn.assert_not_called()
+        self.assertEqual(arbiter.get_mode(), "game")
+
+    def test_set_game_broken_config_exits_0(self):
+        """mode.py set game --config <broken json> exits 0 and sets mode to game."""
+        import mode
+        broken = tempfile.NamedTemporaryFile(mode="w", suffix=".json", delete=False)
+        broken.write("{not json")
+        broken.close()
+        try:
+            with mock.patch("sys.argv", ["mode.py", "set", "game", "--config", broken.name]):
+                with mock.patch("govee.turn") as mock_turn:
+                    with mock.patch("sys.stdout"):
+                        with self.assertRaises(SystemExit) as cm:
+                            mode.main()
+                        self.assertEqual(cm.exception.code, 0)
+                    mock_turn.assert_not_called()
+            self.assertEqual(arbiter.get_mode(), "game")
+        finally:
+            Path(broken.name).unlink()
+
+    def test_set_off_broken_config_exits_1(self):
+        """mode.py set off --config <broken json> exits 1 and leaves mode unchanged."""
+        import mode
+        broken = tempfile.NamedTemporaryFile(mode="w", suffix=".json", delete=False)
+        broken.write("{not json")
+        broken.close()
+        try:
+            with mock.patch("sys.argv", ["mode.py", "set", "off", "--config", broken.name]):
+                with mock.patch("sys.stderr"):
+                    with mock.patch("govee.turn") as mock_turn:
+                        with self.assertRaises(SystemExit) as cm:
+                            mode.main()
+                        self.assertEqual(cm.exception.code, 1)
+                    mock_turn.assert_not_called()
+            self.assertEqual(arbiter.get_mode(), "off")  # unchanged
+        finally:
+            Path(broken.name).unlink()
+
+    def test_set_weather_dry_run_prints_no_mode_line(self):
+        """mode.py set weather --dry-run prints 'would set mode to weather' but not 'mode: weather'."""
+        import contextlib
+        import io
+        import mode
+        with mock.patch("sys.argv", ["mode.py", "set", "weather", "--dry-run", "--config", self.config_path]):
+            with mock.patch("govee.turn") as mock_turn:
+                with contextlib.redirect_stdout(io.StringIO()) as buf:
+                    with self.assertRaises(SystemExit) as cm:
+                        mode.main()
+                    self.assertEqual(cm.exception.code, 0)
+                mock_turn.assert_not_called()
+            output = buf.getvalue()
+            self.assertIn("would set mode to weather", output)
+            self.assertNotIn("mode: weather", output)
+        self.assertEqual(arbiter.get_mode(), "off")  # unchanged (dry-run)
+
+    def test_set_weather_prints_mode_line(self):
+        """mode.py set weather (no dry-run) prints 'mode: weather'."""
+        import contextlib
+        import io
+        import mode
+        with mock.patch("sys.argv", ["mode.py", "set", "weather", "--config", self.config_path]):
+            with mock.patch("govee.turn") as mock_turn:
+                with contextlib.redirect_stdout(io.StringIO()) as buf:
+                    with self.assertRaises(SystemExit) as cm:
+                        mode.main()
+                    self.assertEqual(cm.exception.code, 0)
+                mock_turn.assert_not_called()
+            output = buf.getvalue()
+            self.assertIn("mode: weather", output)
+        self.assertEqual(arbiter.get_mode(), "weather")
 
 
 class TestSetModePermissionError(StateDirMixin, unittest.TestCase):
@@ -275,9 +363,11 @@ class TestSetModePermissionError(StateDirMixin, unittest.TestCase):
             with mock.patch("arbiter.os.replace", side_effect=PermissionError("locked")):
                 with mock.patch("sys.argv", ["mode.py", "set", "game", "--config", self.config_path]):
                     with mock.patch("sys.stderr") as mock_stderr:
-                        with self.assertRaises(SystemExit) as cm:
-                            mode.main()
-                        self.assertEqual(cm.exception.code, 1)
+                        with mock.patch("govee.turn") as mock_turn:
+                            with self.assertRaises(SystemExit) as cm:
+                                mode.main()
+                            self.assertEqual(cm.exception.code, 1)
+                        mock_turn.assert_not_called()
                     # Check error message was printed to stderr
                     stderr_output = "".join(
                         call[0][0] for call in mock_stderr.write.call_args_list

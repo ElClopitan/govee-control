@@ -366,6 +366,11 @@ Modes:
 - `game` — game_sync.py may drive the strips
 - `music` — music_sync.py may drive the strips
 
+Exit codes of `mode.py`:
+- `0` — done
+- `1` — config unreadable (only for `set off`) or the mode file could not be written
+- `2` — unknown mode or bad arguments
+
 If `state/mode.json` is missing, unreadable, or contains an unknown mode, the
 current mode is treated as `off`.
 
