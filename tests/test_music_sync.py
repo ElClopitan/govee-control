@@ -776,6 +776,38 @@ class TestToggleCommands(StateDirMixin, unittest.TestCase):
             alive = music_sync._is_process_alive(1234)
         self.assertTrue(alive)
 
+    def test_is_process_alive_rejects_non_python_image(self):
+        """_is_process_alive should return False for non-Python images (stale PID)."""
+        fake_result = mock.Mock()
+        fake_result.returncode = 0
+        fake_result.stdout = '"chrome.exe","4242","Console","123456 K"\n'
+        with mock.patch("subprocess.run", return_value=fake_result):
+            alive = music_sync._is_process_alive(4242)
+        self.assertFalse(alive)
+
+    def test_is_process_alive_accepts_python_exe(self):
+        """_is_process_alive should return True for python.exe."""
+        fake_result = mock.Mock()
+        fake_result.returncode = 0
+        fake_result.stdout = '"python.exe","5555","Console","123456 K"\n'
+        with mock.patch("subprocess.run", return_value=fake_result):
+            alive = music_sync._is_process_alive(5555)
+        self.assertTrue(alive)
+
+    def test_stale_pid_reused_by_chrome_not_killed(self):
+        """_get_running_pid with old pid file + chrome.exe should not call taskkill."""
+        music_sync.PID_FILE.write_text("4242")
+        old_time = time.time() - 100
+        os.utime(music_sync.PID_FILE, (old_time, old_time))
+        fake_result = mock.Mock()
+        fake_result.returncode = 0
+        fake_result.stdout = '"chrome.exe","4242","Console","123456 K"\n'
+        with mock.patch("subprocess.run", return_value=fake_result):
+            with mock.patch.object(arbiter, "music_active", return_value=False):
+                pid = music_sync._get_running_pid()
+        self.assertIsNone(pid)
+        self.assertFalse(music_sync.PID_FILE.exists())
+
     def test_stop_flag_checked_before_signal(self):
         """The stop flag should be checked before the signal check in the loop."""
         import inspect
@@ -785,6 +817,135 @@ class TestToggleCommands(StateDirMixin, unittest.TestCase):
         self.assertGreater(stop_flag_pos, -1)
         self.assertGreater(signal_pos, -1)
         self.assertLess(stop_flag_pos, signal_pos)
+
+
+    def test_run_cleans_own_pid_file_on_exception(self):
+        """run() should remove its own PID file when exiting via exception."""
+        import os
+        my_pid = os.getpid()
+        music_sync.PID_FILE.write_text(str(my_pid))
+
+        fake_rec = mock.Mock()
+        fake_rec.record.side_effect = RuntimeError("audio capture failed")
+        fake_rec.__enter__ = mock.Mock(return_value=fake_rec)
+        fake_rec.__exit__ = mock.Mock(return_value=False)
+
+        fake_mic = mock.Mock()
+        fake_mic.name = "Stereo Mix (loopback)"
+        fake_mic.recorder = mock.Mock(return_value=fake_rec)
+
+        fake_time = [0.0]
+
+        def fake_time_fn():
+            t = fake_time[0]
+            fake_time[0] = t + 0.1
+            return t
+
+        with mock.patch.dict(sys.modules, {
+            "soundcard": mock.Mock(all_microphones=mock.Mock(return_value=[fake_mic])),
+            "numpy": mock.Mock(),
+        }):
+            with mock.patch.object(music_sync, "govee") as mock_govee:
+                mock_govee.status = mock.Mock(return_value={"msg": {"data": {"brightness": 50}}})
+                mock_govee.brightness = mock.Mock()
+                with mock.patch("time.sleep"):
+                    with mock.patch.object(music_sync, "STOP_FLAG_FILE", self.state_dir / "music_stop"):
+                        try:
+                            music_sync.run(
+                                {"devices": [{"ip": "1.2.3.4"}]},
+                                fps=10,
+                                time_fn=fake_time_fn,
+                            )
+                        except RuntimeError:
+                            pass
+
+        self.assertFalse(music_sync.PID_FILE.exists(),
+                        "run() should have removed its own PID file")
+
+    def test_run_leaves_other_pid_file(self):
+        """run() should not remove a PID file that doesn't match its own PID."""
+        music_sync.PID_FILE.write_text("99999")
+
+        fake_rec = mock.Mock()
+        fake_rec.record.side_effect = RuntimeError("audio capture failed")
+        fake_rec.__enter__ = mock.Mock(return_value=fake_rec)
+        fake_rec.__exit__ = mock.Mock(return_value=False)
+
+        fake_mic = mock.Mock()
+        fake_mic.name = "Stereo Mix (loopback)"
+        fake_mic.recorder = mock.Mock(return_value=fake_rec)
+
+        fake_time = [0.0]
+
+        def fake_time_fn():
+            t = fake_time[0]
+            fake_time[0] = t + 0.1
+            return t
+
+        with mock.patch.dict(sys.modules, {
+            "soundcard": mock.Mock(all_microphones=mock.Mock(return_value=[fake_mic])),
+            "numpy": mock.Mock(),
+        }):
+            with mock.patch.object(music_sync, "govee") as mock_govee:
+                mock_govee.status = mock.Mock(return_value={"msg": {"data": {"brightness": 50}}})
+                mock_govee.brightness = mock.Mock()
+                with mock.patch("time.sleep"):
+                    with mock.patch.object(music_sync, "STOP_FLAG_FILE", self.state_dir / "music_stop"):
+                        try:
+                            music_sync.run(
+                                {"devices": [{"ip": "1.2.3.4"}]},
+                                fps=10,
+                                time_fn=fake_time_fn,
+                            )
+                        except RuntimeError:
+                            pass
+
+        self.assertTrue(music_sync.PID_FILE.exists(),
+                        "run() should not have removed another process's PID file")
+        self.assertEqual(music_sync.PID_FILE.read_text().strip(), "99999")
+
+    def test_cmd_status_does_not_kill_hung_process(self):
+        """cmd_status should not kill a hung process (kill_hung=False)."""
+        music_sync.PID_FILE.write_text("33333")
+        old_time = time.time() - 100
+        os.utime(music_sync.PID_FILE, (old_time, old_time))
+        with mock.patch.object(music_sync, "_is_process_alive", return_value=True):
+            with mock.patch.object(arbiter, "music_active", return_value=False):
+                with mock.patch("subprocess.run") as mock_run:
+                    with mock.patch("builtins.print") as mock_print:
+                        result = music_sync.cmd_status()
+        self.assertEqual(result, 0)
+        # No taskkill should have been called
+        self.assertFalse(any(
+            "taskkill" in str(call) for call in mock_run.call_args_list
+        ))
+        # Should report ON (hung but alive)
+        self.assertIn("ON", mock_print.call_args[0][0])
+
+    def test_cmd_stop_uses_deadline(self):
+        """cmd_stop should use time.monotonic deadline, not fixed iterations."""
+        music_sync.PID_FILE.write_text("77777")
+        monotonic_calls = [0]
+
+        def fake_monotonic():
+            monotonic_calls[0] += 1
+            # Advance 1 second per call so deadline is hit after ~5 calls
+            return (monotonic_calls[0] - 1) * 1.0
+
+        with mock.patch.object(music_sync, "_is_process_alive", return_value=True):
+            with mock.patch.object(arbiter, "music_active", return_value=True):
+                with mock.patch("subprocess.run") as mock_run:
+                    with mock.patch("time.monotonic", side_effect=fake_monotonic):
+                        with mock.patch("time.sleep"):
+                            with mock.patch("builtins.print"):
+                                result = music_sync.cmd_stop()
+        self.assertEqual(result, 0)
+        # Should have called taskkill after deadline
+        self.assertTrue(any(
+            "taskkill" in str(call) for call in mock_run.call_args_list
+        ))
+        # Should have checked ~5-6 times (5 second deadline, 1s per call)
+        self.assertLessEqual(len(monotonic_calls), 8)
 
 
 class TestMusicActiveCorruptFile(StateDirMixin, unittest.TestCase):
