@@ -202,16 +202,17 @@ class TestRunOnce(StateDirMixin, unittest.TestCase):
 
     @mock.patch("agent_signal.sweep_and_restore")
     @mock.patch("game_sync.running_processes")
+    @mock.patch("govee.turn")
     @mock.patch("govee.color")
     @mock.patch("govee.brightness")
     @mock.patch("time.sleep")
-    def test_profile_change_resends(self, mock_sleep, mock_brightness, mock_color, mock_processes, mock_sweep):
-        """When profile changes, commands are resent."""
+    def test_profile_change_resends(self, mock_sleep, mock_brightness, mock_color, mock_turn, mock_processes, mock_sweep):
+        """When profile changes from game to no-game, off is sent (not default profile)."""
         import arbiter
         arbiter.set_mode("game")
 
         # First iteration: game running
-        # Second iteration: no game (default)
+        # Second iteration: no game (off sent, not default profile)
         mock_processes.side_effect = [
             {"testgame.exe"},
             {"chrome.exe"},
@@ -230,9 +231,11 @@ class TestRunOnce(StateDirMixin, unittest.TestCase):
         except KeyboardInterrupt:
             pass
 
-        # Should have sent commands twice (once for game, once for default)
-        self.assertEqual(mock_color.call_count, 2)
-        self.assertEqual(mock_brightness.call_count, 2)
+        # Should have sent game profile once, then off (not default profile)
+        self.assertEqual(mock_color.call_count, 1)
+        self.assertEqual(mock_brightness.call_count, 1)
+        self.assertEqual(mock_turn.call_count, 1)
+        mock_turn.assert_called_with("192.168.1.50", False)
 
 
 class TestConfigValidation(unittest.TestCase):

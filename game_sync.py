@@ -239,18 +239,32 @@ def run(config, interval=5, once=False, dry_run=False):
                                     print(f"warning: failed to turn off: {e}", file=sys.stderr)
                                 else:
                                     last_off_sent = True
-                            last_profile_name = profile_name
-                        elif profile is None and once:
-                            # --once mode: apply default profile (existing behavior)
-                            logger.info("no game running; applying default profile")
-                            print("no game running; applying default profile")
-                            try:
-                                apply_profile(config, default, dry_run=dry_run)
-                            except OSError as e:
-                                logger.warning("failed to apply default: %s", e)
-                                print(f"warning: failed to apply default: {e}", file=sys.stderr)
-                            else:
+                                    last_profile_name = profile_name
+                            elif last_off_sent:
                                 last_profile_name = profile_name
+                        elif profile is None and once:
+                            if default is None:
+                                # --once mode with "default": null -> turn off
+                                logger.info("no game running; turning lights off (--once, default=null)")
+                                print("no game running; turning lights off (--once, default=null)")
+                                try:
+                                    turn_all(config, False, dry_run=dry_run)
+                                except OSError as e:
+                                    logger.warning("failed to turn off: %s", e)
+                                    print(f"warning: failed to turn off: {e}", file=sys.stderr)
+                                else:
+                                    last_profile_name = profile_name
+                            else:
+                                # --once mode: apply default profile (existing behavior)
+                                logger.info("no game running; applying default profile")
+                                print("no game running; applying default profile")
+                                try:
+                                    apply_profile(config, default, dry_run=dry_run)
+                                except OSError as e:
+                                    logger.warning("failed to apply default: %s", e)
+                                    print(f"warning: failed to apply default: {e}", file=sys.stderr)
+                                else:
+                                    last_profile_name = profile_name
                         else:
                             # Game started: turn on first, then apply profile
                             if last_off_sent:

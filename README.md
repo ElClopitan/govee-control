@@ -56,9 +56,10 @@ python govee.py scan --iface-ip 192.168.1.10
 ## Game sync
 
 `game_sync.py` watches for running game processes and sets the lights to each
-game's configured colour. When no game is running, it restores a default,
-unless config has `"default": null`, in which case it sends nothing and leaves
-the lights to weather_sync or manual control.
+game's configured colour. In game mode with no game running, the lights are
+turned off. When a game starts, the lights turn on with the game's profile.
+The `"default"` profile is only used by `--once` mode (not in the continuous
+loop).
 
 ```bash
 # Run once and exit (useful for testing)
@@ -105,19 +106,24 @@ Add `default` and `games` sections to your `config.json`:
 The `exe` field is matched case-insensitively against running process names.
 When multiple games match, the first one in config order wins.
 
-### Leaving lights to weather when no game is running
+### Default profile in --once mode
 
-Set `"default": null` in your config to have game_sync send nothing when no game
-is running. This lets weather_sync (or manual settings) control the lights
-between games. When a game starts, its profile is applied as usual.
+The `"default"` profile is only used when running `game_sync.py --once` with no
+game running. In continuous loop mode, no game means the lights are turned off.
 
 ```json
 {
   "devices": [...],
-  "default": null,
+  "default": {
+    "color": "white",
+    "brightness": 40
+  },
   "games": [...]
 }
 ```
+
+Set `"default": null` to have `--once` mode turn the lights off instead of
+applying a default profile.
 
 ### Game profiles
 
