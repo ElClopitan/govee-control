@@ -799,13 +799,10 @@ def restore_state(devices, signal_cfg, cfg, default_cfg=None, dry_run=False, sav
             for dev in devices:
                 ip = dev["ip"]
                 if not dry_run:
-                    try:
-                        govee.turn(ip, False)
-                    except OSError as e:
-                        print(f"warning: could not turn off {ip}: {e}", file=sys.stderr)
+                    govee.turn(ip, False)
                 else:
                     print(f"[dry-run] would turn off {ip}")
-            print("restored saved state")
+            print("mode is off; strips turned off")
             return True
 
         # Build a map of saved states by IP

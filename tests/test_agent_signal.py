@@ -590,6 +590,67 @@ class TestRestoreFollowsMode(StateDirMixin, unittest.TestCase):
         mock_brightness.assert_not_called()
         mock_color.assert_not_called()
 
+    @mock.patch("agent_signal.govee.turn")
+    def test_clear_in_off_mode_oserror_keeps_saved_state(self, mock_turn, mock_sleep):
+        """clear in off mode with OSError: saved state kept, lock released, no crash."""
+        # Create a saved state file
+        arbiter.signal_file().parent.mkdir(parents=True, exist_ok=True)
+        saved_state = [
+            {"ip": "192.168.1.50", "on": True, "brightness": 50, "color": {"r": 255, "g": 255, "b": 255}},
+        ]
+        arbiter.signal_file().write_text(json.dumps(saved_state))
+
+        # Switch to off mode
+        arbiter.set_mode("off")
+
+        # Make govee.turn raise OSError
+        mock_turn.side_effect = OSError("unreachable")
+
+        args = mock.Mock()
+        args.command = "clear"
+        args.config = str(self.config_path)
+        args.dry_run = False
+        args.stale = False
+
+        # Should not raise
+        agent_signal.cmd_clear(args)
+
+        # Saved state should still exist (not deleted on error)
+        self.assertTrue(arbiter.signal_file().exists())
+        # Lock file should not exist (released)
+        self.assertFalse(agent_signal.LOCK_FILE.exists())
+        # Should not have called color (off mode)
+        with mock.patch("agent_signal.govee.color") as mock_color:
+            pass
+        mock_color.assert_not_called()
+
+    @mock.patch("agent_signal.govee.turn")
+    def test_sweep_in_off_mode_oserror_keeps_saved_state(self, mock_turn, mock_sleep):
+        """sweep_and_restore in off mode with OSError: returns False, saved state kept."""
+        # Create signal file (saved_state.json) but no session markers
+        signal_path = arbiter.signal_file()
+        signal_path.parent.mkdir(parents=True, exist_ok=True)
+        saved_state = [
+            {"ip": "192.168.1.50", "on": True, "brightness": 50, "color": {"r": 255, "g": 255, "b": 255}},
+            {"ip": "192.168.1.51", "on": True, "brightness": 60, "color": {"r": 0, "g": 0, "b": 255}},
+        ]
+        signal_path.write_text(json.dumps(saved_state))
+
+        # Switch to off mode
+        arbiter.set_mode("off")
+
+        # Make govee.turn raise OSError
+        mock_turn.side_effect = OSError("unreachable")
+
+        # Run sweep_and_restore
+        result = agent_signal.sweep_and_restore(config_path=str(self.config_path))
+
+        # Should have returned False (error)
+        self.assertFalse(result)
+
+        # Saved state should still exist (not deleted on error)
+        self.assertTrue(signal_path.exists())
+
 
 @mock.patch("agent_signal.time.sleep")
 class TestSignalClear(StateDirMixin, unittest.TestCase):
