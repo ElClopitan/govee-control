@@ -110,7 +110,11 @@ Examples:
         except (OSError, json.JSONDecodeError) as e:
             print(f"error: failed to load config {args.config}: {e}", file=sys.stderr)
             sys.exit(1)
-        switch(args.mode, config, dry_run=args.dry_run)
+        try:
+            switch(args.mode, config, dry_run=args.dry_run)
+        except OSError as e:
+            print(f"error: could not set mode: {e}", file=sys.stderr)
+            sys.exit(1)
         print(f"mode: {args.mode}")
         sys.exit(0)
 

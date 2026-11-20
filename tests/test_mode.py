@@ -2,6 +2,7 @@
 
 import json
 import sys
+import tempfile
 import unittest
 from pathlib import Path
 from unittest import mock
@@ -102,10 +103,9 @@ class TestCliGet(StateDirMixin, unittest.TestCase):
         import mode
         with mock.patch("sys.argv", ["mode.py", "get"]):
             with mock.patch("builtins.print") as mock_print:
-                try:
+                with self.assertRaises(SystemExit) as cm:
                     mode.main()
-                except SystemExit:
-                    pass
+                self.assertEqual(cm.exception.code, 0)
         # Check that "weather" was printed
         calls = [str(call) for call in mock_print.call_args_list]
         self.assertTrue(any("weather" in c for c in calls))
@@ -114,26 +114,117 @@ class TestCliGet(StateDirMixin, unittest.TestCase):
 class TestCliSet(StateDirMixin, unittest.TestCase):
     """Test CLI 'set' command."""
 
+    def setUp(self):
+        super().setUp()
+        # Create a temp config file for CLI tests
+        self._config_tmp = tempfile.NamedTemporaryFile(
+            mode="w", suffix=".json", delete=False
+        )
+        json.dump({"devices": [{"ip": "192.168.1.50"}]}, self._config_tmp)
+        self._config_tmp.close()
+        self.config_path = self._config_tmp.name
+        self.addCleanup(Path(self.config_path).unlink)
+
     def test_set_unknown_mode_exits_2(self):
         """mode.py set disco exits 2 and doesn't change mode.json."""
         import mode
         with mock.patch("sys.argv", ["mode.py", "set", "disco"]):
             with mock.patch("sys.stderr"):
-                try:
+                with self.assertRaises(SystemExit) as cm:
                     mode.main()
-                except SystemExit as e:
-                    self.assertEqual(e.code, 2)
+                self.assertEqual(cm.exception.code, 2)
         self.assertEqual(arbiter.get_mode(), "off")  # unchanged
 
     def test_set_valid_mode_exits_0(self):
         """mode.py set weather exits 0 and sets the mode."""
         import mode
-        with mock.patch("sys.argv", ["mode.py", "set", "weather"]):
-            with mock.patch("sys.stdout"):
-                try:
+        with mock.patch("sys.argv", ["mode.py", "set", "weather", "--config", self.config_path]):
+            with mock.patch("govee.turn"):
+                with mock.patch("sys.stdout"):
+                    with self.assertRaises(SystemExit) as cm:
+                        mode.main()
+                    self.assertEqual(cm.exception.code, 0)
+        self.assertEqual(arbiter.get_mode(), "weather")
+
+    def test_set_missing_config_exits_1(self):
+        """mode.py set weather --config <missing> exits 1 and leaves mode unchanged."""
+        import mode
+        missing = str(Path(self.state_dir) / "does_not_exist.json")
+        with mock.patch("sys.argv", ["mode.py", "set", "weather", "--config", missing]):
+            with mock.patch("sys.stderr"):
+                with self.assertRaises(SystemExit) as cm:
                     mode.main()
-                except SystemExit as e:
-                    self.assertEqual(e.code, 0)
+                self.assertEqual(cm.exception.code, 1)
+        self.assertEqual(arbiter.get_mode(), "off")  # unchanged
+
+    def test_set_off_dry_run_exits_0_no_turn(self):
+        """mode.py set off --dry-run exits 0, govee.turn not called, mode unchanged."""
+        import mode
+        with mock.patch("sys.argv", ["mode.py", "set", "off", "--dry-run", "--config", self.config_path]):
+            with mock.patch("govee.turn") as mock_turn:
+                with mock.patch("sys.stdout"):
+                    with self.assertRaises(SystemExit) as cm:
+                        mode.main()
+                    self.assertEqual(cm.exception.code, 0)
+                mock_turn.assert_not_called()
+        self.assertEqual(arbiter.get_mode(), "off")  # unchanged (dry-run)
+
+
+class TestSetModePermissionError(StateDirMixin, unittest.TestCase):
+    """Test set_mode() raises PermissionError after 3 retries."""
+
+    def setUp(self):
+        super().setUp()
+        # Create a temp config file for CLI tests
+        self._config_tmp = tempfile.NamedTemporaryFile(
+            mode="w", suffix=".json", delete=False
+        )
+        json.dump({"devices": [{"ip": "192.168.1.50"}]}, self._config_tmp)
+        self._config_tmp.close()
+        self.config_path = self._config_tmp.name
+        self.addCleanup(Path(self.config_path).unlink)
+
+    def test_set_mode_raises_on_persistent_permission_error(self):
+        """set_mode raises PermissionError when os.replace always fails."""
+        # First set a mode successfully (no patch)
+        arbiter.set_mode("weather")
+        self.assertEqual(arbiter.get_mode(), "weather")
+
+        # Now patch os.replace to always fail
+        with mock.patch("arbiter.time.sleep"):
+            with mock.patch("arbiter.os.replace", side_effect=PermissionError("locked")):
+                with self.assertRaises(PermissionError):
+                    arbiter.set_mode("game")
+
+        # Mode should still be "weather"
+        self.assertEqual(arbiter.get_mode(), "weather")
+
+        # No temp file should be left behind
+        tmp_files = list(self.state_dir.glob("mode.json.tmp.*"))
+        self.assertEqual(len(tmp_files), 0)
+
+    def test_cli_exits_1_on_set_mode_failure(self):
+        """CLI exits 1 when set_mode raises PermissionError."""
+        import mode
+
+        # First set a mode successfully
+        arbiter.set_mode("weather")
+
+        with mock.patch("arbiter.time.sleep"):
+            with mock.patch("arbiter.os.replace", side_effect=PermissionError("locked")):
+                with mock.patch("sys.argv", ["mode.py", "set", "game", "--config", self.config_path]):
+                    with mock.patch("sys.stderr") as mock_stderr:
+                        with self.assertRaises(SystemExit) as cm:
+                            mode.main()
+                        self.assertEqual(cm.exception.code, 1)
+                    # Check error message was printed to stderr
+                    stderr_output = "".join(
+                        call[0][0] for call in mock_stderr.write.call_args_list
+                        if call[0]
+                    )
+                    self.assertIn("could not set mode", stderr_output)
+
+        # Mode should still be "weather"
         self.assertEqual(arbiter.get_mode(), "weather")
 
 

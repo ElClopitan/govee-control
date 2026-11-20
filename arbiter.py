@@ -232,6 +232,7 @@ def set_mode(mode):
 
     Raises:
         ValueError: If mode is not in MODES.
+        PermissionError: If os.replace fails after 3 retries.
     """
     if mode not in MODES:
         raise ValueError(f"mode must be one of {MODES}, got {mode!r}")
@@ -251,13 +252,9 @@ def set_mode(mode):
             if attempt < 2:
                 time.sleep(0.01)
             else:
-                # Fall back: update mtime of existing file
-                if target.exists():
-                    os.utime(target, None)
-                else:
-                    raise
-                # Clean up the temp file that couldn't be replaced
+                # All retries failed; clean up and re-raise
                 tmp.unlink(missing_ok=True)
+                raise
 
 
 def weather_blocked():
