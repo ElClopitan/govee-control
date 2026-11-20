@@ -1186,5 +1186,234 @@ class TestPatternLoop(StateDirMixin, unittest.TestCase):
         self.assertEqual(first_call[0], ("192.168.1.50", 30, 136, 229))
 
 
+class TestPatternFetchInterval(StateDirMixin, unittest.TestCase):
+    """Test that weather is fetched every `interval` seconds, not every frame."""
+
+    def _make_config(self, patterns_enabled=True, frame_interval=1.0):
+        return {
+            "devices": [
+                {"name": "left", "ip": "192.168.1.50"},
+                {"name": "right", "ip": "192.168.1.51"},
+            ],
+            "weather": {
+                "latitude": 51.5,
+                "longitude": -0.1,
+                "brightness": 80,
+                "patterns_enabled": patterns_enabled,
+                "frame_interval": frame_interval,
+            },
+        }
+
+    @mock.patch("weather_sync.fetch_weather")
+    @mock.patch("govee.color")
+    @mock.patch("govee.brightness")
+    @mock.patch("time.sleep")
+    @mock.patch("time.time")
+    def test_pattern_mode_fetches_once_per_interval(self, mock_time, mock_sleep, mock_brightness, mock_color, mock_fetch):
+        """In pattern mode, fetch_weather is called once per interval, not per frame."""
+        mock_time.return_value = 1000.0
+        mock_fetch.return_value = {
+            "temperature_2m": 15.0,
+            "weather_code": 61,  # rain
+            "is_day": 1,
+        }
+        config = self._make_config(frame_interval=1.0)
+
+        # Simulate 60 frames (60 seconds)
+        sleep_count = [0]
+        def sleep_side_effect(seconds):
+            sleep_count[0] += 1
+            mock_time.return_value += 1.0  # advance 1 second per frame
+            if sleep_count[0] >= 60:
+                raise KeyboardInterrupt()
+
+        mock_sleep.side_effect = sleep_side_effect
+
+        try:
+            weather_sync.run(config, once=False, interval=900)
+        except KeyboardInterrupt:
+            pass
+
+        # Should have fetched weather exactly once (at the start)
+        self.assertEqual(mock_fetch.call_count, 1)
+        # Should have sent many frames
+        self.assertGreater(mock_color.call_count, 10)
+
+    @mock.patch("weather_sync.fetch_weather")
+    @mock.patch("govee.color")
+    @mock.patch("govee.brightness")
+    @mock.patch("time.sleep")
+    @mock.patch("time.time")
+    def test_pattern_mode_refetches_after_interval(self, mock_time, mock_sleep, mock_brightness, mock_color, mock_fetch):
+        """After interval elapses, weather is fetched again."""
+        mock_time.return_value = 1000.0
+        mock_fetch.return_value = {
+            "temperature_2m": 15.0,
+            "weather_code": 61,  # rain
+            "is_day": 1,
+        }
+        config = self._make_config(frame_interval=1.0)
+
+        # Simulate frames until interval (900s) elapses, then a few more
+        sleep_count = [0]
+        def sleep_side_effect(seconds):
+            sleep_count[0] += 1
+            mock_time.return_value += 1.0
+            if sleep_count[0] >= 905:  # 900s + 5 extra frames
+                raise KeyboardInterrupt()
+
+        mock_sleep.side_effect = sleep_side_effect
+
+        try:
+            weather_sync.run(config, once=False, interval=900)
+        except KeyboardInterrupt:
+            pass
+
+        # Should have fetched weather twice: once at start, once after 900s
+        self.assertEqual(mock_fetch.call_count, 2)
+
+
+class TestPerStripBrightness(StateDirMixin, unittest.TestCase):
+    """Test that brightness is tracked per strip, not shared."""
+
+    def _make_config(self, patterns_enabled=True, frame_interval=1.0):
+        return {
+            "devices": [
+                {"name": "left", "ip": "192.168.1.50"},
+                {"name": "right", "ip": "192.168.1.51"},
+            ],
+            "weather": {
+                "latitude": 51.5,
+                "longitude": -0.1,
+                "brightness": 80,
+                "patterns_enabled": patterns_enabled,
+                "frame_interval": frame_interval,
+            },
+        }
+
+    @mock.patch("weather_sync.fetch_weather")
+    @mock.patch("govee.color")
+    @mock.patch("govee.brightness")
+    @mock.patch("time.sleep")
+    @mock.patch("time.time")
+    def test_both_strips_receive_brightness(self, mock_time, mock_sleep, mock_brightness, mock_color, mock_fetch):
+        """Both strips receive a brightness command in pattern mode."""
+        mock_time.return_value = 1000.0
+        mock_fetch.return_value = {
+            "temperature_2m": 15.0,
+            "weather_code": 61,  # rain
+            "is_day": 1,
+        }
+        config = self._make_config(frame_interval=1.0)
+
+        # Run for 2 frames
+        sleep_count = [0]
+        def sleep_side_effect(seconds):
+            sleep_count[0] += 1
+            mock_time.return_value += 1.0
+            if sleep_count[0] >= 2:
+                raise KeyboardInterrupt()
+
+        mock_sleep.side_effect = sleep_side_effect
+
+        try:
+            weather_sync.run(config, once=False, interval=900)
+        except KeyboardInterrupt:
+            pass
+
+        # Both strips should have received a brightness command
+        brightness_ips = {call[0][0] for call in mock_brightness.call_args_list}
+        self.assertIn("192.168.1.50", brightness_ips)
+        self.assertIn("192.168.1.51", brightness_ips)
+
+    @mock.patch("weather_sync.fetch_weather")
+    @mock.patch("govee.color")
+    @mock.patch("govee.brightness")
+    def test_both_strips_receive_brightness_static(self, mock_brightness, mock_color, mock_fetch):
+        """Both strips receive a brightness command in static mode."""
+        mock_fetch.return_value = {
+            "temperature_2m": 20.0,
+            "weather_code": 0,
+            "is_day": 1,
+        }
+        config = {
+            "devices": [
+                {"name": "left", "ip": "192.168.1.50"},
+                {"name": "right", "ip": "192.168.1.51"},
+            ],
+            "weather": {
+                "latitude": 51.5,
+                "longitude": -0.1,
+                "brightness": 50,
+                "patterns_enabled": False,
+            },
+        }
+
+        weather_sync.run(config, once=True)
+
+        # Both strips should have received a brightness command
+        brightness_ips = {call[0][0] for call in mock_brightness.call_args_list}
+        self.assertIn("192.168.1.50", brightness_ips)
+        self.assertIn("192.168.1.51", brightness_ips)
+
+
+class TestFrameErrorRateLimit(StateDirMixin, unittest.TestCase):
+    """Test that frame send errors are rate-limited to one per 60 seconds."""
+
+    def _make_config(self, patterns_enabled=True, frame_interval=1.0):
+        return {
+            "devices": [
+                {"name": "left", "ip": "192.168.1.50"},
+                {"name": "right", "ip": "192.168.1.51"},
+            ],
+            "weather": {
+                "latitude": 51.5,
+                "longitude": -0.1,
+                "brightness": 80,
+                "patterns_enabled": patterns_enabled,
+                "frame_interval": frame_interval,
+            },
+        }
+
+    @mock.patch("weather_sync.fetch_weather")
+    @mock.patch("govee.color")
+    @mock.patch("govee.brightness")
+    @mock.patch("time.sleep")
+    @mock.patch("time.time")
+    def test_frame_errors_rate_limited(self, mock_time, mock_sleep, mock_brightness, mock_color, mock_fetch):
+        """10 consecutive frame errors within 60s produce at most one error log."""
+        mock_time.return_value = 1000.0
+        mock_fetch.return_value = {
+            "temperature_2m": 15.0,
+            "weather_code": 61,  # rain
+            "is_day": 1,
+        }
+        config = self._make_config(frame_interval=1.0)
+
+        # Make govee.color fail every time
+        mock_color.side_effect = OSError("network down")
+
+        # Run for 10 frames
+        sleep_count = [0]
+        def sleep_side_effect(seconds):
+            sleep_count[0] += 1
+            mock_time.return_value += 1.0
+            if sleep_count[0] >= 10:
+                raise KeyboardInterrupt()
+
+        mock_sleep.side_effect = sleep_side_effect
+
+        with self.assertLogs("weather_sync", "ERROR") as cm:
+            try:
+                weather_sync.run(config, once=False, interval=900)
+            except KeyboardInterrupt:
+                pass
+
+        # Count error log lines about frame send failures
+        frame_error_logs = [r for r in cm.records if "Failed to send to lights" in r.getMessage()]
+        # Should be at most 1 (rate-limited to one per 60s)
+        self.assertLessEqual(len(frame_error_logs), 1)
+
+
 if __name__ == "__main__":
     unittest.main()

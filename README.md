@@ -203,6 +203,56 @@ brightness N`) are not capped — if you type it, you get it.
 
 Set `max_brightness` to 100 to disable the cap. Values are clamped to 1–100.
 
+### Weather patterns
+
+When `patterns_enabled` is true (default), weather_sync uses animated patterns
+for certain weather conditions instead of static colours:
+
+- **Cloudy** (WMO codes 2-3): slow drift between grey tones (40s cycle)
+- **Rain** (WMO codes 51-67, 80-82): wave pattern between blue tones (8s cycle),
+  with strips out of phase for a rippling effect
+
+All other weather conditions use static colours.
+
+Configuration options in the `weather` section:
+
+```json
+{
+  "weather": {
+    "latitude": 51.5074,
+    "longitude": -0.1278,
+    "brightness": 50,
+    "patterns_enabled": true,
+    "frame_interval": 1.0,
+    "patterns": {
+      "cloudy": {
+        "type": "drift",
+        "color1": "#b0bec5",
+        "color2": "#eceff1",
+        "period": 40.0,
+        "brightness": 75,
+        "phase_offset": 0.0
+      },
+      "rain": {
+        "type": "wave",
+        "color1": "#1e88e5",
+        "color2": "#0d47a1",
+        "period": 8.0,
+        "brightness": 80,
+        "phase_offset": 4.0
+      }
+    }
+  }
+}
+```
+
+- `patterns_enabled`: enable/disable animated patterns (default: true)
+- `frame_interval`: seconds between animation frames (default: 1.0, min: 0.5)
+- `patterns`: override default pattern definitions for cloudy/rain
+
+Weather is fetched every `interval` seconds (default 900), not every frame.
+Between fetches, the last known weather data is used for animation.
+
 ### Colour mapping
 
 Weather conditions are mapped to colours using WMO weather codes:

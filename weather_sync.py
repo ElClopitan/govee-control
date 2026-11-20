@@ -276,13 +276,17 @@ def run(config, once=False, interval=900, dry_run=False):
         sys.exit(1)
 
     last_color = None
-    last_brightness = None
+    last_brightness = {}  # ip -> brightness (per-strip tracking)
     priority_was_active = False
     current_pattern = None
     pattern_start_time = None
     last_frame_time = {}  # ip -> last frame send time
+    last_fetch = None  # time of last weather fetch
+    last_frame_error_time = None  # for rate-limiting frame error logs
 
     while True:
+        now = time.time()
+
         # Check signal/game priority
         if arbiter.signal_active() or arbiter.game_active():
             if not priority_was_active:
@@ -291,9 +295,10 @@ def run(config, once=False, interval=900, dry_run=False):
             # Reset state so the first successful pass after the block
             # always sends, even if the colour hasn't changed.
             last_color = None
-            last_brightness = None
+            last_brightness = {}
             current_pattern = None
             pattern_start_time = None
+            last_fetch = None  # force re-fetch after priority block
             if once:
                 break
             time.sleep(min(interval, BLOCKED_POLL_SECONDS))
@@ -301,47 +306,59 @@ def run(config, once=False, interval=900, dry_run=False):
 
         priority_was_active = False
 
-        try:
-            weather = fetch_weather(lat, lon)
-        except (OSError, ValueError, KeyError) as e:
-            logger.error("Failed to fetch weather: %s", e)
-            if once:
-                sys.exit(1)
-            time.sleep(interval)
-            continue
+        # Determine if we need to fetch weather
+        need_fetch = (last_fetch is None or (now - last_fetch) >= interval)
 
-        code = weather["weather_code"]
-        if code is None:
-            logger.warning("weather_code is null; skipping this iteration")
-            if once:
-                sys.exit(1)
-            time.sleep(interval)
-            continue
+        if need_fetch:
+            try:
+                weather = fetch_weather(lat, lon)
+            except (OSError, ValueError, KeyError) as e:
+                logger.error("Failed to fetch weather: %s", e)
+                if once:
+                    sys.exit(1)
+                time.sleep(interval)
+                continue
 
-        temp = weather["temperature_2m"]
-        if temp is None:
-            logger.warning("temperature_2m is null; skipping this iteration")
-            if once:
-                sys.exit(1)
-            time.sleep(interval)
-            continue
+            code = weather["weather_code"]
+            if code is None:
+                logger.warning("weather_code is null; skipping this iteration")
+                if once:
+                    sys.exit(1)
+                time.sleep(interval)
+                continue
 
-        is_day = weather["is_day"]
+            temp = weather["temperature_2m"]
+            if temp is None:
+                logger.warning("temperature_2m is null; skipping this iteration")
+                if once:
+                    sys.exit(1)
+                time.sleep(interval)
+                continue
 
-        color_hex = weather_to_color(code, temp, is_day)
-        logger.info("Weather: code=%d temp=%.1f°C day=%d -> color=%s",
-                    code, temp, is_day, color_hex)
+            is_day = weather["is_day"]
 
-        # Determine if we should use a pattern
-        if patterns_enabled:
-            new_pattern = get_pattern_for_code(code, patterns_cfg)
+            color_hex = weather_to_color(code, temp, is_day)
+            logger.info("Weather: code=%d temp=%.1f°C day=%d -> color=%s",
+                        code, temp, is_day, color_hex)
+
+            # Determine if we should use a pattern
+            if patterns_enabled:
+                new_pattern = get_pattern_for_code(code, patterns_cfg)
+            else:
+                new_pattern = None
+
+            # If pattern changed, reset the pattern timer
+            if new_pattern != current_pattern:
+                current_pattern = new_pattern
+                pattern_start_time = now
+                if current_pattern is not None:
+                    logger.info("Starting pattern: %s", current_pattern.get("type", "unknown"))
+
+            last_fetch = now
         else:
-            new_pattern = None
-
-        # If pattern changed, reset the pattern timer
-        if new_pattern != current_pattern:
-            current_pattern = new_pattern
-            pattern_start_time = time.time()
+            # Reuse last weather data; color_hex is from previous fetch
+            # (still valid for pattern animation)
+            pass
 
         # Re-check priority just before sending (race condition fix).
         # A signal or game could have become active during the weather fetch.
@@ -349,16 +366,16 @@ def run(config, once=False, interval=900, dry_run=False):
             logger.info("skipped: signal/game became active during fetch")
             priority_was_active = True
             last_color = None
-            last_brightness = None
+            last_brightness = {}
             current_pattern = None
             pattern_start_time = None
+            last_fetch = None
             if once:
                 break
             time.sleep(min(interval, BLOCKED_POLL_SECONDS))
             continue
 
         # Send frame(s)
-        now = time.time()
         if current_pattern is not None:
             # Pattern mode: compute frame based on elapsed time
             elapsed = now - pattern_start_time
@@ -373,18 +390,21 @@ def run(config, once=False, interval=900, dry_run=False):
 
                 color_str = rgb_to_hex(r, g, b)
                 if dry_run:
-                    logger.info("[dry-run] Would set %s to %s (brightness %d) [pattern]",
-                                ip, color_str, frame_brightness)
+                    logger.debug("[dry-run] Would set %s to %s (brightness %d) [pattern]",
+                                 ip, color_str, frame_brightness)
                 else:
                     try:
                         govee.color(ip, r, g, b)
-                        if frame_brightness != last_brightness:
+                        if last_brightness.get(ip) != frame_brightness:
                             govee.brightness(ip, frame_brightness)
-                            last_brightness = frame_brightness
-                        logger.info("Set %s to %s (brightness %d) [pattern]",
-                                    ip, color_str, frame_brightness)
+                            last_brightness[ip] = frame_brightness
+                        logger.debug("Set %s to %s (brightness %d) [pattern]",
+                                     ip, color_str, frame_brightness)
                     except OSError as e:
-                        logger.error("Failed to send to lights: %s", e)
+                        # Rate-limit frame error logs to one per 60 seconds
+                        if last_frame_error_time is None or (now - last_frame_error_time) >= 60:
+                            logger.error("Failed to send to lights: %s", e)
+                            last_frame_error_time = now
                         continue
                 last_frame_time[ip] = now
                 last_color = color_str
@@ -400,9 +420,9 @@ def run(config, once=False, interval=900, dry_run=False):
                                         ip, color_hex, brightness)
                         else:
                             govee.color(ip, r, g, b)
-                            if brightness != last_brightness:
+                            if last_brightness.get(ip) != brightness:
                                 govee.brightness(ip, brightness)
-                                last_brightness = brightness
+                                last_brightness[ip] = brightness
                             logger.info("Set %s to %s (brightness %d)", ip, color_hex, brightness)
                 except OSError as e:
                     logger.error("Failed to send to lights: %s", e)
