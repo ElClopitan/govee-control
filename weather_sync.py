@@ -432,6 +432,11 @@ def run(config, once=False, interval=900, dry_run=False, rng=None, time_fn=None)
             last_fetch = None  # force re-fetch after priority block
             if once:
                 break
+            # Sweep stale session markers at most once every 60s while blocked
+            try:
+                agent_signal.sweep_stale_markers()
+            except Exception:
+                pass
             time.sleep(min(interval, BLOCKED_POLL_SECONDS))
             continue
 

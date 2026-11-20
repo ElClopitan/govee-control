@@ -20,6 +20,7 @@ import sys
 import time
 from pathlib import Path
 
+import agent_signal
 import arbiter
 import govee
 
@@ -160,6 +161,11 @@ def run(config, interval=5, once=False, dry_run=False):
                 # Reset last_profile_name so the first successful pass after
                 # the signal clears always sends, even if the profile hasn't changed.
                 last_profile_name = None
+                # Sweep stale session markers at most once every 60s while blocked
+                try:
+                    agent_signal.sweep_stale_markers()
+                except Exception:
+                    pass
             # Check music priority (second highest)
             elif arbiter.music_active():
                 if not music_was_active:

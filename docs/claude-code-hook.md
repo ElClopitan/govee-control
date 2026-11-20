@@ -77,6 +77,22 @@ the session that raised it (or `clear --all`) can.
 
 To manually reset the lights at any time, run `python agent_signal.py clear --all`.
 
+## Stale Markers
+
+Each session marker records the PID of the Claude Code process that created it.
+A marker is considered stale if its PID is no longer alive (the process died
+without running its SessionEnd hook) or if it is older than the configured max
+age (2 hours by default). Stale markers are automatically deleted when any
+`needs-input` or `clear` command runs, so a session that crashes or is killed
+won't keep the lights orange indefinitely.
+
+You can also manually sweep stale markers with `python agent_signal.py clear --stale`.
+This deletes all stale markers and, if no active markers remain, restores the
+lights to their previous state. The weather and game sync loops call this sweep
+periodically (at most once every 60 seconds) while they are blocked by an active
+signal, so the lights will clear automatically even if no one runs a manual
+clear.
+
 ## Notes
 
 - The signal colour and behaviour are configured in `config.json` under the
