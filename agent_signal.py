@@ -51,6 +51,18 @@ def signal_sessions_dir():
     return STATE_DIR / "signal_sessions"
 
 
+def marker_name(session_id):
+    """Sanitise a session_id for use as a filename.
+
+    Replaces any character that is not alphanumeric, underscore, or hyphen
+    with an underscore, and truncates to 100 characters. Returns 'manual'
+    when the id is empty.
+    """
+    if not session_id:
+        return "manual"
+    return re.sub(r"[^A-Za-z0-9_-]", "_", session_id)[:100]
+
+
 def write_session_marker(session_id, dry_run=False):
     """Write a session marker file for the given session_id.
 
@@ -58,14 +70,14 @@ def write_session_marker(session_id, dry_run=False):
     The marker file contains an ISO timestamp.
     """
     if dry_run:
-        print(f"[dry-run] would write session marker for {session_id or 'manual'}")
+        print(f"[dry-run] would write session marker for {marker_name(session_id)}")
         return
 
     sessions_dir = signal_sessions_dir()
     sessions_dir.mkdir(parents=True, exist_ok=True)
 
-    marker_name = session_id if session_id else "manual"
-    marker_path = sessions_dir / marker_name
+    name = marker_name(session_id)
+    marker_path = sessions_dir / name
     now = datetime.now(timezone.utc).isoformat()
     marker_path.write_text(now)
 
@@ -77,12 +89,12 @@ def remove_session_marker(session_id, dry_run=False):
     Returns True if a marker was removed, False if none existed.
     """
     if dry_run:
-        print(f"[dry-run] would remove session marker for {session_id or 'manual'}")
+        print(f"[dry-run] would remove session marker for {marker_name(session_id)}")
         return False
 
     sessions_dir = signal_sessions_dir()
-    marker_name = session_id if session_id else "manual"
-    marker_path = sessions_dir / marker_name
+    name = marker_name(session_id)
+    marker_path = sessions_dir / name
 
     if marker_path.exists():
         marker_path.unlink()
@@ -139,10 +151,10 @@ def has_other_active_markers(session_id, max_age_hours=None):
     Returns True if other sessions still have active markers.
     """
     active = get_active_session_markers(max_age_hours)
-    marker_name = session_id if session_id else "manual"
+    name = marker_name(session_id)
     # Remove our own marker from the list
-    if marker_name in active:
-        active.remove(marker_name)
+    if name in active:
+        active.remove(name)
     return len(active) > 0
 
 

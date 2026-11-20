@@ -2441,6 +2441,92 @@ class TestPerSessionMarkers(StateDirMixin, unittest.TestCase):
         # All markers should be gone
         self.assertFalse((sessions_dir / "session-B").exists())
 
+    @mock.patch("agent_signal.govee.status")
+    @mock.patch("agent_signal.govee.turn")
+    @mock.patch("agent_signal.govee.brightness")
+    @mock.patch("agent_signal.govee.color")
+    def test_session_id_sanitised_for_filename(
+        self, mock_color, mock_brightness, mock_turn, mock_status, mock_sleep
+    ):
+        """A session_id with path separators or '..' is sanitised before use as a filename."""
+        mock_status.return_value = {
+            "msg": {"data": {"on": True, "brightness": 50, "color": {"r": 255, "g": 255, "b": 255}}}
+        }
+
+        # Session with a malicious session_id
+        evil_id = "..\\..\\evil"
+        args = mock.Mock()
+        args.command = "needs-input"
+        args.config = str(self.config_path)
+        args.dry_run = False
+        args.force = False
+        fake_stdin = json.dumps({"session_id": evil_id})
+        with mock.patch("sys.stdin", mock.Mock(isatty=lambda: False, read=lambda: fake_stdin)):
+            with mock.patch.dict(os.environ, {"CLAUDE_CODE_SESSION_ATTENDED": "1"}):
+                agent_signal.cmd_needs_input(args)
+
+        # The marker should be inside signal_sessions/, not escaped
+        sessions_dir = agent_signal.signal_sessions_dir()
+        self.assertTrue(sessions_dir.exists())
+
+        # Count files in signal_sessions/ — should be exactly 1
+        files_in_sessions = list(sessions_dir.iterdir())
+        self.assertEqual(len(files_in_sessions), 1)
+
+        # The file should be inside signal_sessions/
+        marker = files_in_sessions[0]
+        self.assertTrue(marker.is_file())
+        self.assertEqual(marker.parent, sessions_dir)
+
+        # The filename should be sanitised (backslashes replaced with underscores)
+        self.assertEqual(marker.name, "______evil")
+
+        # No files should have been created in parent directories
+        parent_files = list(sessions_dir.parent.iterdir())
+        # Should only contain signal_sessions/ and possibly other test artifacts,
+        # but not "evil" or ".."
+        for f in parent_files:
+            self.assertNotEqual(f.name, "evil")
+
+        # Clear with the same id should remove it
+        mock_color.reset_mock()
+        mock_brightness.reset_mock()
+        mock_turn.reset_mock()
+        args_clear = mock.Mock()
+        args_clear.command = "clear"
+        args_clear.config = str(self.config_path)
+        args_clear.dry_run = False
+        args_clear.all = False
+        fake_stdin_clear = json.dumps({"session_id": evil_id})
+        with mock.patch("sys.stdin", mock.Mock(isatty=lambda: False, read=lambda: fake_stdin_clear)):
+            agent_signal.cmd_clear(args_clear)
+
+        # Marker should be gone
+        self.assertFalse(marker.exists())
+
+    def test_marker_name_function(self, mock_sleep):
+        """marker_name sanitises various inputs correctly."""
+        # Empty -> manual
+        self.assertEqual(agent_signal.marker_name(""), "manual")
+        # Normal UUID -> unchanged
+        self.assertEqual(
+            agent_signal.marker_name("550e8400-e29b-41d4-a716-446655440000"),
+            "550e8400-e29b-41d4-a716-446655440000"
+        )
+        # Path separators -> underscores
+        self.assertEqual(agent_signal.marker_name("..\\..\\evil"), "______evil")
+        self.assertEqual(agent_signal.marker_name("../evil"), "___evil")
+        self.assertEqual(agent_signal.marker_name("./evil"), "__evil")
+        # Special characters -> underscores
+        self.assertEqual(agent_signal.marker_name("a/b/c"), "a_b_c")
+        self.assertEqual(agent_signal.marker_name("a:b:c"), "a_b_c")
+        self.assertEqual(agent_signal.marker_name("a b c"), "a_b_c")
+        # Long string -> truncated to 100
+        long_id = "a" * 200
+        self.assertEqual(len(agent_signal.marker_name(long_id)), 100)
+        # Alphanumeric, underscore, hyphen -> unchanged
+        self.assertEqual(agent_signal.marker_name("abc-123_def"), "abc-123_def")
+
 
 @mock.patch("agent_signal.time.sleep")
 class TestIgnoreMessagePatterns(StateDirMixin, unittest.TestCase):
