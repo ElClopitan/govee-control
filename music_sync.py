@@ -19,6 +19,7 @@ Usage:
 """
 
 import argparse
+import contextlib
 import json
 import logging
 import logging.handlers
@@ -612,8 +613,8 @@ def run(config, fps=None, verbose=False, log_file=None, time_fn=None):
                 logger.error("Failed to set brightness on %s: %s", ip, e)
 
         # Open the recorder once for the entire run
-        with loopback.recorder(samplerate=sample_rate, channels=1) as rec:
-            while True:
+        rec = loopback.recorder(samplerate=sample_rate, channels=1).__enter__()
+        while True:
                 frame_start = time_fn()
 
                 # Check for stop flag first (before signal check) so stop works
@@ -654,9 +655,19 @@ def run(config, fps=None, verbose=False, log_file=None, time_fn=None):
                     new_loopback = pick_loopback(sc)
                     if new_loopback is not None:
                         logger.info("Reopening recorder on %s", new_loopback.name)
-                        rec.close()
-                        loopback = new_loopback
-                        rec = loopback.recorder(samplerate=sample_rate, channels=1)
+                        # Exit the old recorder (ignore exceptions from exit)
+                        try:
+                            rec.__exit__(None, None, None)
+                        except Exception:
+                            pass
+                        # Enter the new recorder
+                        try:
+                            rec = new_loopback.recorder(
+                                samplerate=sample_rate, channels=1
+                            ).__enter__()
+                        except Exception as enter_err:
+                            logger.error("Failed to enter new recorder: %s", enter_err)
+                            continue
                     continue
 
                 # Mixdown to mono if needed
@@ -729,6 +740,12 @@ def run(config, fps=None, verbose=False, log_file=None, time_fn=None):
     except KeyboardInterrupt:
         logger.info("Interrupted, restoring initial state")
     finally:
+        # Exit the recorder
+        try:
+            rec.__exit__(None, None, None)
+        except Exception:
+            pass
+
         # Clear music active state
         arbiter.clear_music_active()
 
