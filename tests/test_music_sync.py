@@ -6,6 +6,7 @@ All tests run without soundcard/numpy and without the network.
 import math
 import sys
 import unittest
+from pathlib import Path
 from unittest import mock
 
 import music_sync
@@ -216,6 +217,144 @@ class TestMusicHeartbeat(unittest.TestCase):
     def test_heartbeat_interval_constant(self):
         """HEARTBEAT_INTERVAL should be 5 seconds."""
         self.assertEqual(music_sync.HEARTBEAT_INTERVAL, 5.0)
+
+
+class TestToggleCommands(unittest.TestCase):
+    """Test the start/stop/toggle/status subcommands."""
+
+    def setUp(self):
+        """Set up temp state directory for each test."""
+        import tempfile
+        self.temp_dir = tempfile.mkdtemp()
+        self.original_state_dir = music_sync.STATE_DIR
+        self.original_pid_file = music_sync.PID_FILE
+        self.original_stop_flag = music_sync.STOP_FLAG_FILE
+        self.original_log_file = music_sync.LOG_FILE
+
+        music_sync.STATE_DIR = Path(self.temp_dir)
+        music_sync.PID_FILE = Path(self.temp_dir) / "music_sync.pid"
+        music_sync.STOP_FLAG_FILE = Path(self.temp_dir) / "music_stop"
+        music_sync.LOG_FILE = Path(self.temp_dir) / "music_sync.log"
+
+    def tearDown(self):
+        """Clean up temp state directory."""
+        import shutil
+        music_sync.STATE_DIR = self.original_state_dir
+        music_sync.PID_FILE = self.original_pid_file
+        music_sync.STOP_FLAG_FILE = self.original_stop_flag
+        music_sync.LOG_FILE = self.original_log_file
+        shutil.rmtree(self.temp_dir, ignore_errors=True)
+
+    def test_status_off_when_no_pid_file(self):
+        """status should report OFF when no pid file exists."""
+        with mock.patch("builtins.print") as mock_print:
+            result = music_sync.cmd_status()
+        self.assertEqual(result, 0)
+        mock_print.assert_called_once()
+        self.assertIn("OFF", mock_print.call_args[0][0])
+
+    def test_start_creates_pid_file(self):
+        """start should create a pid file and report ON."""
+        with mock.patch("subprocess.Popen") as mock_popen:
+            mock_proc = mock.Mock()
+            mock_proc.pid = 12345
+            mock_popen.return_value = mock_proc
+            with mock.patch("builtins.print") as mock_print:
+                result = music_sync.cmd_start()
+        self.assertEqual(result, 0)
+        self.assertTrue(music_sync.PID_FILE.exists())
+        self.assertEqual(music_sync.PID_FILE.read_text().strip(), "12345")
+        mock_print.assert_called_once()
+        self.assertIn("ON", mock_print.call_args[0][0])
+
+    def test_start_already_running(self):
+        """start should report already ON if pid file exists and process alive."""
+        music_sync.PID_FILE.write_text("99999")
+        with mock.patch.object(music_sync, "_is_process_alive", return_value=True):
+            with mock.patch.object(arbiter, "music_active", return_value=True):
+                with mock.patch("builtins.print") as mock_print:
+                    result = music_sync.cmd_start()
+        self.assertEqual(result, 0)
+        mock_print.assert_called_once()
+        self.assertIn("already ON", mock_print.call_args[0][0])
+
+    def test_stop_when_not_running(self):
+        """stop should report OFF when not running."""
+        with mock.patch("builtins.print") as mock_print:
+            result = music_sync.cmd_stop()
+        self.assertEqual(result, 0)
+        mock_print.assert_called_once()
+        self.assertIn("OFF", mock_print.call_args[0][0])
+
+    def test_stop_raises_flag_and_waits(self):
+        """stop should raise the stop flag and wait for process to exit."""
+        music_sync.PID_FILE.write_text("88888")
+        call_count = [0]
+
+        def fake_is_alive(pid):
+            call_count[0] += 1
+            # Process exits after a few checks
+            return call_count[0] < 5
+
+        with mock.patch.object(music_sync, "_is_process_alive", side_effect=fake_is_alive):
+            with mock.patch.object(arbiter, "music_active", return_value=True):
+                with mock.patch.object(music_sync, "_raise_stop_flag") as mock_raise:
+                    with mock.patch("builtins.print"):
+                        result = music_sync.cmd_stop()
+        self.assertEqual(result, 0)
+        mock_raise.assert_called_once()
+
+    def test_stop_falls_back_to_taskkill(self):
+        """stop should fall back to taskkill if process ignores flag."""
+        music_sync.PID_FILE.write_text("77777")
+        with mock.patch.object(music_sync, "_is_process_alive", return_value=True):
+            with mock.patch.object(arbiter, "music_active", return_value=True):
+                with mock.patch("subprocess.run") as mock_run:
+                    with mock.patch("time.sleep"):
+                        with mock.patch("builtins.print"):
+                            result = music_sync.cmd_stop()
+        self.assertEqual(result, 0)
+        # taskkill should have been called
+        self.assertTrue(any(
+            "taskkill" in str(call) for call in mock_run.call_args_list
+        ))
+
+    def test_toggle_starts_when_off(self):
+        """toggle should start when music mode is off."""
+        with mock.patch.object(music_sync, "cmd_start", return_value=0) as mock_start:
+            result = music_sync.cmd_toggle()
+        mock_start.assert_called_once()
+        self.assertEqual(result, 0)
+
+    def test_toggle_stops_when_on(self):
+        """toggle should stop when music mode is on."""
+        music_sync.PID_FILE.write_text("66666")
+        with mock.patch.object(music_sync, "_is_process_alive", return_value=True):
+            with mock.patch.object(arbiter, "music_active", return_value=True):
+                with mock.patch.object(music_sync, "cmd_stop", return_value=0) as mock_stop:
+                    result = music_sync.cmd_toggle()
+        mock_stop.assert_called_once()
+        self.assertEqual(result, 0)
+
+    def test_stale_pid_file_cleaned(self):
+        """A stale pid file (process dead) should be cleaned up."""
+        music_sync.PID_FILE.write_text("55555")
+        with mock.patch.object(music_sync, "_is_process_alive", return_value=False):
+            pid = music_sync._get_running_pid()
+        self.assertIsNone(pid)
+        self.assertFalse(music_sync.PID_FILE.exists())
+
+    def test_stop_flag_checked_before_signal(self):
+        """The stop flag should be checked before the signal check in the loop."""
+        # This is a logic test: verify that the stop flag file check
+        # appears before the signal_active check in the run() function
+        import inspect
+        source = inspect.getsource(music_sync.run)
+        stop_flag_pos = source.find("STOP_FLAG_FILE.exists()")
+        signal_pos = source.find("arbiter.signal_active()")
+        self.assertGreater(stop_flag_pos, -1)
+        self.assertGreater(signal_pos, -1)
+        self.assertLess(stop_flag_pos, signal_pos)
 
 
 if __name__ == "__main__":

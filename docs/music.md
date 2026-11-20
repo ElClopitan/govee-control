@@ -37,6 +37,34 @@ python tools/audio_probe.py --selftest
 
 ## Usage
 
+### Toggle on/off (recommended)
+
+Music mode is a toggled mode — it starts only when you turn it on and stays on
+until you turn it off. It never starts automatically.
+
+```bash
+# Toggle on/off
+python music_sync.py toggle
+
+# Or use the double-clickable shortcut
+music_toggle.cmd
+```
+
+### Other commands
+
+```bash
+# Start in background
+python music_sync.py start
+
+# Stop
+python music_sync.py stop
+
+# Check status
+python music_sync.py status
+```
+
+### Foreground mode (legacy)
+
 ```bash
 # Run music sync (foreground, stops on Ctrl+C)
 python music_sync.py
@@ -89,3 +117,19 @@ sync resumes on the next frame.
 
 Music sync clears its heartbeat file on every exit path (Ctrl+C, error, or
 normal exit), so game/weather sync can take over immediately.
+
+## Log file
+
+When started via `start` or `toggle`, music sync logs to `state/music_sync.log`
+(1 MB, rotated to 2 backups).
+
+## Desktop shortcut / hotkey
+
+To make it easy to toggle music mode:
+
+1. Right-click `music_toggle.cmd` in the repo root
+2. Select "Send to" → "Desktop (create shortcut)"
+3. Optionally rename the shortcut to "Music Mode"
+4. To bind a hotkey: right-click the shortcut → Properties → Hotkey field → press a key combo
+
+You can also pin the shortcut to your taskbar or use it with a Stream Deck button.

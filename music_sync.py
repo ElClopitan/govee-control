@@ -12,6 +12,10 @@ Config keys (in config.json):
 
 Usage:
   python music_sync.py [--config PATH] [--fps N] [--verbose] [--log-file PATH]
+  python music_sync.py start
+  python music_sync.py stop
+  python music_sync.py toggle
+  python music_sync.py status
 """
 
 import argparse
@@ -19,6 +23,9 @@ import json
 import logging
 import logging.handlers
 import math
+import os
+import signal
+import subprocess
 import sys
 import time
 from pathlib import Path
@@ -45,6 +52,12 @@ COLOR_CHANGE_THRESHOLD = 15
 
 # Rate-limit interval for error logs (seconds)
 ERROR_LOG_INTERVAL = 60
+
+# State files for background process management
+STATE_DIR = Path(__file__).parent / "state"
+PID_FILE = STATE_DIR / "music_sync.pid"
+STOP_FLAG_FILE = STATE_DIR / "music_stop"
+LOG_FILE = STATE_DIR / "music_sync.log"
 
 
 def analyze(samples, rate):
@@ -219,6 +232,188 @@ def color_distance(c1, c2):
     return math.sqrt(dr * dr + dg * dg + db * db)
 
 
+def _ensure_state_dir():
+    """Create state directory if it doesn't exist."""
+    STATE_DIR.mkdir(parents=True, exist_ok=True)
+
+
+def _is_process_alive(pid):
+    """Check if a process with the given PID is alive (Windows)."""
+    try:
+        result = subprocess.run(
+            ["tasklist", "/FI", f"PID eq {pid}", "/FO", "CSV", "/NH"],
+            capture_output=True,
+            text=True,
+            timeout=5,
+        )
+        return result.returncode == 0 and str(pid) in result.stdout
+    except (subprocess.TimeoutExpired, OSError):
+        return False
+
+
+def _get_running_pid():
+    """Get the PID of the running music_sync process, or None.
+
+    Checks: pid file exists, process is alive, and arbiter.music_active() is true.
+    Cleans up stale pid files.
+    """
+    if not PID_FILE.exists():
+        return None
+
+    try:
+        pid = int(PID_FILE.read_text().strip())
+    except (ValueError, OSError):
+        # Corrupt or unreadable pid file
+        PID_FILE.unlink(missing_ok=True)
+        return None
+
+    if not _is_process_alive(pid):
+        # Process is dead; clean up
+        PID_FILE.unlink(missing_ok=True)
+        arbiter.clear_music_active()
+        return None
+
+    if not arbiter.music_active():
+        # Process alive but heartbeat stale
+        PID_FILE.unlink(missing_ok=True)
+        arbiter.clear_music_active()
+        return None
+
+    return pid
+
+
+def _write_pid(pid):
+    """Write the PID to the pid file."""
+    _ensure_state_dir()
+    PID_FILE.write_text(str(pid))
+
+
+def _remove_pid():
+    """Remove the pid file."""
+    PID_FILE.unlink(missing_ok=True)
+
+
+def _remove_stop_flag():
+    """Remove the stop flag file."""
+    STOP_FLAG_FILE.unlink(missing_ok=True)
+
+
+def _raise_stop_flag():
+    """Create the stop flag file to signal the running process to stop."""
+    _ensure_state_dir()
+    STOP_FLAG_FILE.write_text(str(time.time()))
+
+
+def cmd_start():
+    """Start music sync as a background process."""
+    pid = _get_running_pid()
+    if pid is not None:
+        print(f"music mode already ON (pid {pid})")
+        return 0
+
+    _ensure_state_dir()
+    _remove_stop_flag()
+
+    # Find pythonw.exe next to sys.executable, fall back to sys.executable
+    python_exe = sys.executable
+    pythonw_exe = None
+    if os.name == "nt":
+        exe_dir = Path(python_exe).parent
+        candidate = exe_dir / "pythonw.exe"
+        if candidate.exists():
+            pythonw_exe = str(candidate)
+
+    if pythonw_exe is None:
+        pythonw_exe = python_exe
+
+    # Build command
+    cmd = [
+        pythonw_exe,
+        str(Path(__file__).resolve()),
+        "--log-file",
+        str(LOG_FILE),
+    ]
+
+    # Start detached on Windows
+    if os.name == "nt":
+        CREATE_NO_WINDOW = 0x08000000
+        DETACHED_PROCESS = 0x00000008
+        startupinfo = subprocess.STARTUPINFO()
+        startupinfo.dwFlags |= subprocess.STARTF_USESHOWWINDOW
+        startupinfo.wShowWindow = subprocess.SW_HIDE
+        proc = subprocess.Popen(
+            cmd,
+            creationflags=CREATE_NO_WINDOW | DETACHED_PROCESS,
+            startupinfo=startupinfo,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        )
+    else:
+        proc = subprocess.Popen(
+            cmd,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        )
+
+    _write_pid(proc.pid)
+    print(f"music mode ON (pid {proc.pid})")
+    return 0
+
+
+def cmd_stop():
+    """Stop the running music sync process."""
+    pid = _get_running_pid()
+    if pid is None:
+        print("music mode OFF")
+        return 0
+
+    # Signal the process to stop via flag file
+    _raise_stop_flag()
+
+    # Wait up to 5 seconds for it to exit
+    for _ in range(50):
+        if not _is_process_alive(pid):
+            break
+        time.sleep(0.1)
+
+    # If still alive, force kill
+    if _is_process_alive(pid):
+        try:
+            subprocess.run(
+                ["taskkill", "/PID", str(pid)],
+                capture_output=True,
+                timeout=5,
+            )
+        except (subprocess.TimeoutExpired, OSError):
+            pass
+
+    # Clean up
+    _remove_pid()
+    _remove_stop_flag()
+    arbiter.clear_music_active()
+    print("music mode OFF")
+    return 0
+
+
+def cmd_toggle():
+    """Toggle music sync on/off."""
+    pid = _get_running_pid()
+    if pid is not None:
+        return cmd_stop()
+    else:
+        return cmd_start()
+
+
+def cmd_status():
+    """Show music sync status."""
+    pid = _get_running_pid()
+    if pid is not None:
+        print(f"music mode ON (pid {pid})")
+    else:
+        print("music mode OFF")
+    return 0
+
+
 def run(config, fps=None, verbose=False, log_file=None, time_fn=None):
     """Run the music sync loop.
 
@@ -332,6 +527,12 @@ def run(config, fps=None, verbose=False, log_file=None, time_fn=None):
     try:
         while True:
             frame_start = time_fn()
+
+            # Check for stop flag first (before signal check) so stop works
+            # even while an agent signal is active
+            if STOP_FLAG_FILE.exists():
+                logger.info("stop flag detected; exiting")
+                break
 
             # Refresh heartbeat at least every HEARTBEAT_INTERVAL seconds
             if frame_start - last_heartbeat_time >= HEARTBEAT_INTERVAL:
@@ -453,8 +654,29 @@ def main():
   python music_sync.py
   python music_sync.py --fps 15 --verbose
   python music_sync.py --log-file music.log
+  python music_sync.py start
+  python music_sync.py stop
+  python music_sync.py toggle
+  python music_sync.py status
 """,
     )
+
+    # Subcommands
+    subparsers = parser.add_subparsers(dest="command", help="Command to run")
+
+    # start
+    subparsers.add_parser("start", help="Start music sync in background")
+
+    # stop
+    subparsers.add_parser("stop", help="Stop music sync")
+
+    # toggle
+    subparsers.add_parser("toggle", help="Toggle music sync on/off")
+
+    # status
+    subparsers.add_parser("status", help="Show music sync status")
+
+    # Legacy options (for running in foreground)
     parser.add_argument(
         "--config",
         default=str(Path(__file__).parent / "config.json"),
@@ -479,6 +701,17 @@ def main():
 
     args = parser.parse_args()
 
+    # Handle subcommands
+    if args.command == "start":
+        sys.exit(cmd_start())
+    elif args.command == "stop":
+        sys.exit(cmd_stop())
+    elif args.command == "toggle":
+        sys.exit(cmd_toggle())
+    elif args.command == "status":
+        sys.exit(cmd_status())
+
+    # No subcommand: run in foreground (legacy behavior)
     try:
         config = govee.load_config(args.config)
     except FileNotFoundError:
