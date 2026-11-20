@@ -316,7 +316,7 @@ python mode.py set off
 ```
 
 Modes:
-- `off` — no mode drives the strips; turns lights off if no signal is active
+- `off` — no mode drives the strips; turns lights off even if an active orange signal is showing
 - `weather` — weather_sync.py may drive the strips
 - `game` — game_sync.py may drive the strips
 - `music` — music_sync.py may drive the strips
@@ -361,7 +361,7 @@ python mode.py set off --dry-run
 ```
 
 Modes:
-- `off` — no mode drives the strips; turns lights off if no signal is active
+- `off` — no mode drives the strips; turns lights off even if an active orange signal is showing
 - `weather` — weather_sync.py may drive the strips
 - `game` — game_sync.py may drive the strips
 - `music` — music_sync.py may drive the strips

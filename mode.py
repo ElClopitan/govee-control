@@ -18,6 +18,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent))
 
+import agent_signal
 import arbiter
 import govee
 import music_sync
@@ -39,7 +40,7 @@ def switch(mode, config, dry_run=False):
     """
     if dry_run:
         print(f"would set mode to {mode}")
-        if mode == "off" and not arbiter.signal_active():
+        if mode == "off":
             for dev in config.get("devices", []):
                 ip = dev.get("ip")
                 if ip:
@@ -53,16 +54,22 @@ def switch(mode, config, dry_run=False):
         music_sync.cmd_start()
         return
 
-    # Only when mode is "off" and no signal is active, turn devices off.
-    # For other modes, send nothing — the mode's own script will light the strips.
-    if mode == "off" and not arbiter.signal_active():
-        for dev in config.get("devices", []):
-            ip = dev.get("ip")
-            if ip:
-                try:
-                    govee.turn(ip, False)
-                except OSError as e:
-                    print(f"warning: failed to turn off {ip}: {e}", file=sys.stderr)
+    # When mode is "off", turn all devices off even if a signal is active.
+    # Do this under the agent_signal lock so a concurrent needs-input/clear
+    # doesn't race with us.
+    if mode == "off":
+        got_lock = agent_signal.acquire_lock()
+        try:
+            for dev in config.get("devices", []):
+                ip = dev.get("ip")
+                if ip:
+                    try:
+                        govee.turn(ip, False)
+                    except OSError as e:
+                        print(f"warning: failed to turn off {ip}: {e}", file=sys.stderr)
+        finally:
+            if got_lock:
+                agent_signal.release_lock()
 
 
 def main():

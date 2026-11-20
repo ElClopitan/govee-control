@@ -10,6 +10,7 @@ from unittest import mock
 sys.path.insert(0, str(Path(__file__).parent.parent))
 sys.path.insert(0, str(Path(__file__).parent))
 
+import agent_signal
 import arbiter
 from helpers import StateDirMixin
 
@@ -27,15 +28,74 @@ class TestSwitchOff(StateDirMixin, unittest.TestCase):
         mock_turn.assert_any_call("192.168.1.1", False)
         mock_turn.assert_any_call("192.168.1.2", False)
 
-    def test_off_with_signal_active_sends_nothing(self):
-        """switch("off") with signal active sends nothing."""
-        config = {"devices": [{"ip": "192.168.1.1"}]}
+    def test_off_with_signal_active_turns_off(self):
+        """switch("off") with signal active turns off all devices."""
+        config = {"devices": [{"ip": "192.168.1.1"}, {"ip": "192.168.1.2"}]}
         # Create saved_state.json to simulate active signal
         (arbiter.STATE_DIR / "saved_state.json").write_text("[]")
         with mock.patch("govee.turn") as mock_turn:
             import mode
             mode.switch("off", config)
+        self.assertEqual(mock_turn.call_count, 2)
+        mock_turn.assert_any_call("192.168.1.1", False)
+        mock_turn.assert_any_call("192.168.1.2", False)
+        # saved_state.json should still exist (clear handles it)
+        self.assertTrue((arbiter.STATE_DIR / "saved_state.json").exists())
+
+    def test_off_lock_timeout_still_turns_off(self):
+        """switch("off") with lock timeout still turns off all devices."""
+        config = {"devices": [{"ip": "192.168.1.1"}, {"ip": "192.168.1.2"}]}
+        with mock.patch("agent_signal.acquire_lock", return_value=False):
+            with mock.patch("agent_signal.release_lock") as mock_release:
+                with mock.patch("govee.turn") as mock_turn:
+                    import mode
+                    mode.switch("off", config)
+        self.assertEqual(mock_turn.call_count, 2)
+        mock_turn.assert_any_call("192.168.1.1", False)
+        mock_turn.assert_any_call("192.168.1.2", False)
+        mock_release.assert_not_called()
+
+    def test_off_takes_and_releases_lock(self):
+        """switch("off") acquires and releases the agent_signal lock."""
+        config = {"devices": [{"ip": "192.168.1.1"}]}
+        with mock.patch("agent_signal.acquire_lock", return_value=True):
+            with mock.patch("agent_signal.release_lock") as mock_release:
+                with mock.patch("govee.turn"):
+                    import mode
+                    mode.switch("off", config)
+        mock_release.assert_called_once()
+
+    def test_off_releases_lock_on_oserror(self):
+        """switch("off") releases the lock even when govee.turn raises OSError."""
+        config = {"devices": [{"ip": "192.168.1.1"}]}
+        with mock.patch("agent_signal.acquire_lock", return_value=True):
+            with mock.patch("agent_signal.release_lock") as mock_release:
+                with mock.patch("govee.turn", side_effect=OSError("fail")):
+                    import mode
+                    mode.switch("off", config)
+        mock_release.assert_called_once()
+
+    def test_off_dry_run_with_signal_sends_nothing(self):
+        """switch("off") dry-run with signal active sends nothing and takes no lock."""
+        config = {"devices": [{"ip": "192.168.1.1"}]}
+        (arbiter.STATE_DIR / "saved_state.json").write_text("[]")
+        with mock.patch("agent_signal.acquire_lock") as mock_acquire:
+            with mock.patch("govee.turn") as mock_turn:
+                import mode
+                mode.switch("off", config, dry_run=True)
         mock_turn.assert_not_called()
+        mock_acquire.assert_not_called()
+        # Mode should still be "off" (default) with no mode.json written
+        self.assertEqual(arbiter.get_mode(), "off")
+
+    def test_off_real_lock_released(self):
+        """switch("off") releases the real lock file after turning off."""
+        config = {"devices": [{"ip": "192.168.1.1"}]}
+        with mock.patch("govee.turn"):
+            import mode
+            mode.switch("off", config)
+        # Lock file should not exist after switch
+        self.assertFalse(agent_signal.LOCK_FILE.exists())
 
     def test_off_dry_run_sends_nothing(self):
         """switch("off") with dry_run sends nothing and doesn't change mode.json."""
