@@ -40,6 +40,10 @@
       }
     }
   },
+  "music": {
+    "fps": 10,
+    "smoothing": 0.5
+  },
   "games": [
     {
       "name": "Cyberpunk 2077",

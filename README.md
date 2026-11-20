@@ -329,6 +329,44 @@ python tools/audio_probe.py --selftest
 
 This plays a test tone and verifies it's captured via WASAPI loopback.
 
+### Music sync
+
+`music_sync.py` captures system audio, analyzes frequency bands (bass, mid,
+treble), and maps them to colours sent to the strips. Bass-dominant music
+produces warm red/magenta colours, mid-dominant produces green/yellow, and
+treble-dominant produces blue/cyan. The overall volume scales brightness.
+
+```bash
+# Run music sync (foreground, stops on Ctrl+C)
+python music_sync.py
+
+# Custom frame rate (default 10 fps, range 2-20)
+python music_sync.py --fps 15
+
+# Verbose logging
+python music_sync.py --verbose
+
+# Log to file with rotation
+python music_sync.py --log-file music.log
+```
+
+Configuration in `config.json`:
+
+```json
+{
+  "music": {
+    "fps": 10,
+    "smoothing": 0.5
+  }
+}
+```
+
+- `fps`: frames per second (default 10, clamped to 2-20)
+- `smoothing`: exponential moving average factor (0-1, higher = less smoothing, default 0.5)
+
+On exit (Ctrl+C), music_sync restores each strip to the colour/brightness it had
+when it started.
+
 ## Autostart
 
 Run weather sync and game sync automatically at Windows logon (hidden, no console
