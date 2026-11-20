@@ -513,6 +513,29 @@ Configuration in `config.json`:
 On exit (Ctrl+C), music_sync restores each strip to the colour/brightness it had
 when it started.
 
+## Tray icon
+
+A Windows notification-area (tray) icon lets you switch modes by right-clicking.
+
+Install the dependencies (not installed by default):
+
+```bash
+python -m pip install --user -r requirements-tray.txt
+```
+
+Start the tray icon (no console window):
+
+```bash
+pythonw tray.py
+```
+
+Right-click the icon to pick Off / Weather / Game / Music. The icon colour
+reflects the current mode (grey=off, blue=weather, purple=game, green=music).
+"Quit" exits the tray icon without changing the mode.
+
+Windows hides new tray icons under the "^" arrow in the taskbar; drag the icon
+out to pin it. Errors are logged to `state/tray.log`.
+
 ## Autostart
 
 Run weather sync and game sync automatically at Windows logon (hidden, no console
