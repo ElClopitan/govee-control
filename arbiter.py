@@ -105,3 +105,13 @@ def clear_game_active():
     path = STATE_DIR / "game_active.json"
     if path.exists():
         path.unlink()
+
+
+def weather_blocked():
+    """Check if weather sync should be blocked by higher-priority sources.
+
+    Returns True if either an agent signal or game sync is active.
+    This is the single place where weather sync checks for priority,
+    making it easy to add more sources (e.g., music sync) later.
+    """
+    return signal_active() or game_active()

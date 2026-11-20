@@ -1804,6 +1804,212 @@ class TestThunderstormDoubleFlash(StateDirMixin, unittest.TestCase):
                          f"Expected 1 flash (second blocked), got {len(flash_calls)}")
 
 
+class TestThunderstormSignalRace(StateDirMixin, unittest.TestCase):
+    """Test that signal/game raised during thunderstorm flash stops all further writes."""
+
+    def _make_config(self):
+        return {
+            "devices": [
+                {"name": "left", "ip": "192.168.1.50"},
+                {"name": "right", "ip": "192.168.1.51"},
+            ],
+            "weather": {
+                "latitude": 51.5,
+                "longitude": -0.1,
+                "brightness": 80,
+                "patterns_enabled": True,
+                "frame_interval": 1.0,
+            },
+        }
+
+    @mock.patch("weather_sync.fetch_weather")
+    @mock.patch("govee.color")
+    @mock.patch("govee.brightness")
+    @mock.patch("time.sleep")
+    def test_signal_during_flash_stops_writes(self, mock_sleep, mock_brightness, mock_color, mock_fetch):
+        """Signal raised during flash_duration sleep: no writes after signal."""
+        import random
+        import arbiter
+
+        mock_fetch.return_value = {
+            "temperature_2m": 22.0,
+            "weather_code": 95,
+            "is_day": 1,
+        }
+        config = self._make_config()
+
+        # Seed RNG so random() < 0.3 triggers double flash
+        rng = random.Random(1)
+
+        # Controllable time
+        current_time = [1000.0]
+        def time_fn():
+            return current_time[0]
+
+        # Track when signal is raised and calls after it
+        signal_raised = [False]
+        calls_after_signal = [0]
+
+        def color_side_effect(*args, **kwargs):
+            if signal_raised[0]:
+                calls_after_signal[0] += 1
+            # Don't actually call the real function
+
+        def brightness_side_effect(*args, **kwargs):
+            if signal_raised[0]:
+                calls_after_signal[0] += 1
+            # Don't actually call the real function
+
+        mock_color.side_effect = color_side_effect
+        mock_brightness.side_effect = brightness_side_effect
+
+        # Activate signal during the flash_duration sleep (2nd sleep call)
+        sleep_count = [0]
+        def sleep_side_effect(seconds):
+            sleep_count[0] += 1
+            current_time[0] += seconds
+            if sleep_count[0] == 1:
+                # After first frame, advance to trigger flash
+                current_time[0] = 1015.0
+            elif sleep_count[0] == 2:
+                # This is the flash_duration sleep after first flash
+                # Raise signal here
+                (arbiter.STATE_DIR / "saved_state.json").write_text("[]")
+                signal_raised[0] = True
+            if sleep_count[0] >= 10:
+                raise KeyboardInterrupt()
+
+        mock_sleep.side_effect = sleep_side_effect
+
+        try:
+            weather_sync.run(config, once=False, interval=900, rng=rng, time_fn=time_fn)
+        except KeyboardInterrupt:
+            pass
+
+        # Verify signal was raised
+        self.assertTrue(signal_raised[0])
+
+        # No govee calls should happen after the signal is raised
+        self.assertEqual(calls_after_signal[0], 0,
+                         f"Expected 0 calls after signal, got {calls_after_signal[0]}")
+
+    @mock.patch("weather_sync.fetch_weather")
+    @mock.patch("govee.color")
+    @mock.patch("govee.brightness")
+    @mock.patch("time.sleep")
+    def test_signal_during_double_flash_gap_stops_writes(self, mock_sleep, mock_brightness, mock_color, mock_fetch):
+        """Signal raised during double-flash gap: no writes after signal."""
+        import random
+        import arbiter
+
+        mock_fetch.return_value = {
+            "temperature_2m": 22.0,
+            "weather_code": 95,
+            "is_day": 1,
+        }
+        config = self._make_config()
+
+        # Seed RNG so random() < 0.3 triggers double flash
+        rng = random.Random(1)
+
+        # Controllable time
+        current_time = [1000.0]
+        def time_fn():
+            return current_time[0]
+
+        # Activate signal during the 0.12s gap sleep (3rd sleep call)
+        sleep_count = [0]
+        def sleep_side_effect(seconds):
+            sleep_count[0] += 1
+            current_time[0] += seconds
+            if sleep_count[0] == 1:
+                # After first frame, advance to trigger flash
+                current_time[0] = 1015.0
+            elif sleep_count[0] == 3:
+                # This is the 0.12s gap sleep
+                # Raise signal here
+                (arbiter.STATE_DIR / "saved_state.json").write_text("[]")
+            if sleep_count[0] >= 10:
+                raise KeyboardInterrupt()
+
+        mock_sleep.side_effect = sleep_side_effect
+
+        try:
+            weather_sync.run(config, once=False, interval=900, rng=rng, time_fn=time_fn)
+        except KeyboardInterrupt:
+            pass
+
+        # Count flash brightness calls (100)
+        flash_calls = [
+            call for call in mock_brightness.call_args_list
+            if call[0][1] == 100
+        ]
+        # Should have exactly 1 flash (first flash only, second blocked)
+        self.assertEqual(len(flash_calls), 1,
+                         f"Expected 1 flash, got {len(flash_calls)}")
+
+    @mock.patch("weather_sync.fetch_weather")
+    @mock.patch("govee.color")
+    @mock.patch("govee.brightness")
+    @mock.patch("time.sleep")
+    def test_signal_before_first_flash_recheck(self, mock_sleep, mock_brightness, mock_color, mock_fetch):
+        """Signal active before first flash re-check: no flash, no base frame."""
+        import random
+        import arbiter
+
+        mock_fetch.return_value = {
+            "temperature_2m": 22.0,
+            "weather_code": 95,
+            "is_day": 1,
+        }
+        config = self._make_config()
+
+        # Seed RNG
+        rng = random.Random(1)
+
+        # Controllable time
+        current_time = [1000.0]
+        def time_fn():
+            return current_time[0]
+
+        # Patch arbiter.weather_blocked to return True from the 3rd call onwards
+        # (first two are the top-of-loop and pre-send checks)
+        original_weather_blocked = arbiter.weather_blocked
+        call_count = [0]
+        def weather_blocked_side_effect():
+            call_count[0] += 1
+            if call_count[0] >= 3:
+                # This is the re-check before the first flash (and subsequent checks)
+                return True
+            return original_weather_blocked()
+
+        with mock.patch.object(arbiter, "weather_blocked", side_effect=weather_blocked_side_effect):
+            # Advance time to trigger flash
+            sleep_count = [0]
+            def sleep_side_effect(seconds):
+                sleep_count[0] += 1
+                current_time[0] += seconds
+                if sleep_count[0] == 1:
+                    current_time[0] = 1015.0
+                if sleep_count[0] >= 5:
+                    raise KeyboardInterrupt()
+
+            mock_sleep.side_effect = sleep_side_effect
+
+            try:
+                weather_sync.run(config, once=False, interval=900, rng=rng, time_fn=time_fn)
+            except KeyboardInterrupt:
+                pass
+
+        # Should have no flash calls (blocked before flash)
+        flash_calls = [
+            call for call in mock_brightness.call_args_list
+            if call[0][1] == 100
+        ]
+        self.assertEqual(len(flash_calls), 0,
+                         f"Expected 0 flashes, got {len(flash_calls)}")
+
+
 class TestLogFileArgument(unittest.TestCase):
     """Test the --log-file argument with size rotation."""
 

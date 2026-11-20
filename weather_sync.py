@@ -339,7 +339,7 @@ def run(config, once=False, interval=900, dry_run=False, rng=None, time_fn=None)
         now = time_fn()
 
         # Check signal/game priority
-        if arbiter.signal_active() or arbiter.game_active():
+        if arbiter.weather_blocked():
             if not priority_was_active:
                 logger.info("skipped: signal/game active")
             priority_was_active = True
@@ -419,7 +419,7 @@ def run(config, once=False, interval=900, dry_run=False, rng=None, time_fn=None)
 
         # Re-check priority just before sending (race condition fix).
         # A signal or game could have become active during the weather fetch.
-        if arbiter.signal_active() or arbiter.game_active():
+        if arbiter.weather_blocked():
             logger.info("skipped: signal/game became active during fetch")
             priority_was_active = True
             last_color = None
@@ -441,111 +441,142 @@ def run(config, once=False, interval=900, dry_run=False, rng=None, time_fn=None)
             is_thunderstorm = current_pattern.get("type") == "thunderstorm"
             if is_thunderstorm and should_flash(now, next_flash_time):
                 # Re-check arbiter right before flashing
-                if not (arbiter.signal_active() or arbiter.game_active()):
-                    logger.debug("Thunderstorm flash!")
-                    flash_color = current_pattern.get("flash_color", "#ffffff")
-                    flash_brightness = current_pattern.get("flash_brightness", 100)
-                    flash_duration = current_pattern.get("flash_duration", 0.15)
-                    double_flash_prob = current_pattern.get("double_flash_prob", 0.3)
-                    flash_both_prob = current_pattern.get("flash_both_prob", 0.5)
-                    r, g, b = hex_to_rgb(flash_color)
+                if arbiter.weather_blocked():
+                    logger.debug("Skipping flash: signal/game active")
+                    # Schedule next flash and continue outer loop
+                    flash_every = current_pattern.get("flash_every", [6, 20])
+                    next_flash_time = schedule_next_flash(rng, flash_every, time_fn())
+                    continue
 
-                    # Decide which strips to flash
-                    if len(devices) == 1:
-                        flash_strips = [0]
+                logger.debug("Thunderstorm flash!")
+                flash_color = current_pattern.get("flash_color", "#ffffff")
+                flash_brightness = current_pattern.get("flash_brightness", 100)
+                flash_duration = current_pattern.get("flash_duration", 0.15)
+                double_flash_prob = current_pattern.get("double_flash_prob", 0.3)
+                flash_both_prob = current_pattern.get("flash_both_prob", 0.5)
+                r, g, b = hex_to_rgb(flash_color)
+
+                # Decide which strips to flash
+                if len(devices) == 1:
+                    flash_strips = [0]
+                else:
+                    if rng.random() < flash_both_prob:
+                        flash_strips = [0, 1]
                     else:
-                        if rng.random() < flash_both_prob:
-                            flash_strips = [0, 1]
-                        else:
-                            flash_strips = [rng.randint(0, 1)]
+                        flash_strips = [rng.randint(0, 1)]
 
-                    # Send flash frame to selected strips
+                # Send flash frame to selected strips
+                for i in flash_strips:
+                    ip = devices[i]["ip"]
+                    if dry_run:
+                        logger.debug("[dry-run] Would flash %s to %s (brightness %d)",
+                                     ip, flash_color, flash_brightness)
+                    else:
+                        try:
+                            govee.color(ip, r, g, b)
+                            govee.brightness(ip, arbiter.cap_brightness(flash_brightness, config, allow_flash=True))
+                            last_brightness[ip] = flash_brightness
+                            logger.debug("Flashed %s to %s (brightness %d)",
+                                         ip, flash_color, flash_brightness)
+                        except OSError as e:
+                            if last_frame_error_time is None or (now - last_frame_error_time) >= 60:
+                                logger.error("Failed to send to lights: %s", e)
+                                last_frame_error_time = now
+
+                # Wait for flash duration
+                time.sleep(flash_duration)
+
+                # Re-check arbiter after flash sleep, before double-flash logic
+                if arbiter.weather_blocked():
+                    logger.debug("Skipping double-flash logic: signal/game active")
+                    # Schedule next flash and continue outer loop
+                    flash_every = current_pattern.get("flash_every", [6, 20])
+                    next_flash_time = schedule_next_flash(rng, flash_every, time_fn())
+                    continue
+
+                # Double flash?
+                if rng.random() < double_flash_prob:
+                    # Send base frame during the gap (spec: 120ms of base frame)
                     for i in flash_strips:
                         ip = devices[i]["ip"]
-                        if dry_run:
-                            logger.debug("[dry-run] Would flash %s to %s (brightness %d)",
-                                         ip, flash_color, flash_brightness)
-                        else:
-                            try:
-                                govee.color(ip, r, g, b)
-                                govee.brightness(ip, arbiter.cap_brightness(flash_brightness, config, allow_flash=True))
-                                last_brightness[ip] = flash_brightness
-                                logger.debug("Flashed %s to %s (brightness %d)",
-                                             ip, flash_color, flash_brightness)
-                            except OSError as e:
-                                if last_frame_error_time is None or (now - last_frame_error_time) >= 60:
-                                    logger.error("Failed to send to lights: %s", e)
-                                    last_frame_error_time = now
-
-                    # Wait for flash duration
-                    time.sleep(flash_duration)
-
-                    # Double flash?
-                    if rng.random() < double_flash_prob:
-                        # Send base frame during the gap (spec: 120ms of base frame)
-                        for i in flash_strips:
-                            ip = devices[i]["ip"]
-                            base_r, base_g, base_b, base_brightness = pattern_frame(current_pattern, elapsed, i)
-                            base_brightness = arbiter.cap_brightness(base_brightness, config)
-                            if dry_run:
-                                logger.debug("[dry-run] Would send base frame to %s during double-flash gap", ip)
-                            else:
-                                try:
-                                    govee.color(ip, base_r, base_g, base_b)
-                                    govee.brightness(ip, base_brightness)
-                                    last_brightness[ip] = base_brightness
-                                    logger.debug("Sent base frame to %s during double-flash gap", ip)
-                                except OSError as e:
-                                    if last_frame_error_time is None or (now - last_frame_error_time) >= 60:
-                                        logger.error("Failed to send to lights: %s", e)
-                                        last_frame_error_time = now
-
-                        time.sleep(0.12)
-
-                        # Re-check arbiter before second flash
-                        if arbiter.signal_active() or arbiter.game_active():
-                            logger.debug("Skipping second flash: signal/game active")
-                        else:
-                            for i in flash_strips:
-                                ip = devices[i]["ip"]
-                                if dry_run:
-                                    logger.debug("[dry-run] Would flash %s again (double flash)", ip)
-                                else:
-                                    try:
-                                        govee.color(ip, r, g, b)
-                                        govee.brightness(ip, arbiter.cap_brightness(flash_brightness, config, allow_flash=True))
-                                        last_brightness[ip] = flash_brightness
-                                        logger.debug("Double-flashed %s", ip)
-                                    except OSError as e:
-                                        if last_frame_error_time is None or (now - last_frame_error_time) >= 60:
-                                            logger.error("Failed to send to lights: %s", e)
-                                            last_frame_error_time = now
-                            time.sleep(flash_duration)
-
-                    # Restore base frame to all strips
-                    for i, dev in enumerate(devices):
-                        ip = dev["ip"]
                         base_r, base_g, base_b, base_brightness = pattern_frame(current_pattern, elapsed, i)
                         base_brightness = arbiter.cap_brightness(base_brightness, config)
-                        base_color = rgb_to_hex(base_r, base_g, base_b)
                         if dry_run:
-                            logger.debug("[dry-run] Would restore %s to %s (brightness %d)",
-                                         ip, base_color, base_brightness)
+                            logger.debug("[dry-run] Would send base frame to %s during double-flash gap", ip)
                         else:
                             try:
                                 govee.color(ip, base_r, base_g, base_b)
                                 govee.brightness(ip, base_brightness)
                                 last_brightness[ip] = base_brightness
-                                logger.debug("Restored %s to %s (brightness %d)",
-                                             ip, base_color, base_brightness)
+                                logger.debug("Sent base frame to %s during double-flash gap", ip)
                             except OSError as e:
                                 if last_frame_error_time is None or (now - last_frame_error_time) >= 60:
                                     logger.error("Failed to send to lights: %s", e)
                                     last_frame_error_time = now
 
-                    # Schedule next flash
+                    time.sleep(0.12)
+
+                    # Re-check arbiter before second flash
+                    if arbiter.weather_blocked():
+                        logger.debug("Skipping second flash: signal/game active")
+                        # Schedule next flash and continue outer loop
+                        flash_every = current_pattern.get("flash_every", [6, 20])
+                        next_flash_time = schedule_next_flash(rng, flash_every, time_fn())
+                        continue
+                    else:
+                        for i in flash_strips:
+                            ip = devices[i]["ip"]
+                            if dry_run:
+                                logger.debug("[dry-run] Would flash %s again (double flash)", ip)
+                            else:
+                                try:
+                                    govee.color(ip, r, g, b)
+                                    govee.brightness(ip, arbiter.cap_brightness(flash_brightness, config, allow_flash=True))
+                                    last_brightness[ip] = flash_brightness
+                                    logger.debug("Double-flashed %s", ip)
+                                except OSError as e:
+                                    if last_frame_error_time is None or (now - last_frame_error_time) >= 60:
+                                        logger.error("Failed to send to lights: %s", e)
+                                        last_frame_error_time = now
+                        time.sleep(flash_duration)
+
+                # Re-check arbiter before restoring base frame
+                if arbiter.weather_blocked():
+                    logger.debug("Skipping restore: signal/game active")
+                    # Schedule next flash and continue outer loop
                     flash_every = current_pattern.get("flash_every", [6, 20])
                     next_flash_time = schedule_next_flash(rng, flash_every, time_fn())
+                    continue
+
+                # Restore base frame to all strips
+                for i, dev in enumerate(devices):
+                    ip = dev["ip"]
+                    base_r, base_g, base_b, base_brightness = pattern_frame(current_pattern, elapsed, i)
+                    base_brightness = arbiter.cap_brightness(base_brightness, config)
+                    base_color = rgb_to_hex(base_r, base_g, base_b)
+                    if dry_run:
+                        logger.debug("[dry-run] Would restore %s to %s (brightness %d)",
+                                     ip, base_color, base_brightness)
+                    else:
+                        try:
+                            govee.color(ip, base_r, base_g, base_b)
+                            govee.brightness(ip, base_brightness)
+                            last_brightness[ip] = base_brightness
+                            logger.debug("Restored %s to %s (brightness %d)",
+                                         ip, base_color, base_brightness)
+                        except OSError as e:
+                            if last_frame_error_time is None or (now - last_frame_error_time) >= 60:
+                                logger.error("Failed to send to lights: %s", e)
+                                last_frame_error_time = now
+
+                # Schedule next flash
+                flash_every = current_pattern.get("flash_every", [6, 20])
+                next_flash_time = schedule_next_flash(rng, flash_every, time_fn())
+
+            # Re-check arbiter before sending normal base frame
+            if arbiter.weather_blocked():
+                logger.debug("Skipping base frame: signal/game active")
+                continue
 
             # Send normal base frame
             for i, dev in enumerate(devices):
