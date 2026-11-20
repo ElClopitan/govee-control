@@ -2885,6 +2885,65 @@ class TestModeSwitchMusic(StateDirMixin, unittest.TestCase):
         self.assertEqual(arbiter.get_mode(), "off",
                         "cmd_stop should set mode to 'off'")
 
+    def test_cmd_start_sets_mode_music(self):
+        """cmd_start sets mode to 'music' before spawning."""
+        arbiter.set_mode("off")
+
+        with mock.patch.object(music_sync, "PID_FILE", self.state_dir / "music_sync.pid"):
+            with mock.patch.object(music_sync, "STOP_FLAG_FILE", self.state_dir / "music_stop"):
+                with mock.patch("subprocess.Popen") as mock_popen:
+                    mock_popen.return_value.pid = 99999
+                    with mock.patch("builtins.print"):
+                        rc = music_sync.cmd_start()
+
+        self.assertEqual(rc, 0)
+        self.assertEqual(arbiter.get_mode(), "music")
+        mock_popen.assert_called_once()
+
+    def test_cmd_start_missing_dependency_no_mode_change(self):
+        """cmd_start with missing dependency does not change mode."""
+        arbiter.set_mode("off")
+
+        with mock.patch.object(music_sync, "PID_FILE", self.state_dir / "music_sync.pid"):
+            with mock.patch.object(music_sync, "STOP_FLAG_FILE", self.state_dir / "music_stop"):
+                with mock.patch("subprocess.Popen") as mock_popen:
+                    with mock.patch("importlib.util.find_spec", return_value=None):
+                        with mock.patch("builtins.print"):
+                            rc = music_sync.cmd_start()
+
+        self.assertNotEqual(rc, 0)
+        self.assertEqual(arbiter.get_mode(), "off")
+        mock_popen.assert_not_called()
+
+    def test_cmd_start_set_mode_oserror(self):
+        """cmd_start returns 1 when set_mode raises OSError."""
+        arbiter.set_mode("off")
+
+        with mock.patch.object(music_sync, "PID_FILE", self.state_dir / "music_sync.pid"):
+            with mock.patch.object(music_sync, "STOP_FLAG_FILE", self.state_dir / "music_stop"):
+                with mock.patch("subprocess.Popen") as mock_popen:
+                    with mock.patch.object(arbiter, "set_mode", side_effect=OSError("locked")):
+                        with mock.patch("builtins.print"):
+                            rc = music_sync.cmd_start()
+
+        self.assertEqual(rc, 1)
+        mock_popen.assert_not_called()
+
+    def test_cmd_toggle_running_sets_mode_off(self):
+        """cmd_toggle while running stops music and sets mode to 'off'."""
+        arbiter.set_mode("music")
+
+        with mock.patch.object(music_sync, "PID_FILE", self.state_dir / "music_sync.pid"):
+            with mock.patch.object(music_sync, "STOP_FLAG_FILE", self.state_dir / "music_stop"):
+                with mock.patch.object(music_sync, "_get_running_pid", return_value=12345):
+                    with mock.patch.object(music_sync, "_is_process_alive", return_value=False):
+                        with mock.patch.object(arbiter, "music_active", return_value=True):
+                            with mock.patch("builtins.print"):
+                                rc = music_sync.cmd_toggle()
+
+        self.assertEqual(rc, 0)
+        self.assertEqual(arbiter.get_mode(), "off")
+
 
 if __name__ == "__main__":
     unittest.main()

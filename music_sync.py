@@ -519,6 +519,13 @@ def cmd_start():
               file=sys.stderr)
         return 2
 
+    # Select music mode before spawning the background process
+    try:
+        arbiter.set_mode("music")
+    except OSError as e:
+        print(f"music mode: cannot set mode: {e}", file=sys.stderr)
+        return 1
+
     _ensure_state_dir()
     _remove_stop_flag()
 

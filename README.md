@@ -433,6 +433,17 @@ python tools/audio_probe.py --selftest
 
 This plays a test tone and verifies it's captured via WASAPI loopback.
 
+### Switching to music mode
+
+Music mode is switched on with `python mode.py set music` (or `music_toggle.cmd`).
+It is switched off by picking another mode (`python mode.py set off`, `weather`,
+or `game`). When music mode is selected, `music_sync.py` runs in the background
+and drives the strips.
+
+If there is no audio device, the strips are turned off but music mode stays
+selected and retries. If there is silence for more than `music.silence_seconds`
+(default 2.0 seconds), the strips are turned off until audio resumes.
+
 ### Music sync
 
 `music_sync.py` captures system audio, analyzes frequency bands (bass, mid,
@@ -454,19 +465,37 @@ python music_sync.py --verbose
 python music_sync.py --log-file music.log
 ```
 
+Debugging commands (these also switch modes):
+
+```bash
+# Start music sync in background (selects music mode)
+python music_sync.py start
+
+# Stop music sync (sets mode to off)
+python music_sync.py stop
+
+# Toggle music sync on/off
+python music_sync.py toggle
+
+# Show music sync status
+python music_sync.py status
+```
+
 Configuration in `config.json`:
 
 ```json
 {
   "music": {
     "fps": 10,
-    "smoothing": 0.5
+    "smoothing": 0.5,
+    "silence_seconds": 2.0
   }
 }
 ```
 
 - `fps`: frames per second (default 10, clamped to 2-20)
 - `smoothing`: exponential moving average factor (0-1, higher = less smoothing, default 0.5)
+- `silence_seconds`: seconds of silence before turning strips off (default 2.0)
 
 On exit (Ctrl+C), music_sync restores each strip to the colour/brightness it had
 when it started.
