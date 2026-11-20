@@ -1436,12 +1436,14 @@ class TestPickLoopback(unittest.TestCase):
     """Test pick_loopback device selection."""
 
     def test_uses_default_speaker_loopback(self):
-        """pick_loopback should use the default speaker's loopback by name."""
+        """pick_loopback should use the default speaker's loopback by id."""
         fake_speaker = mock.Mock()
         fake_speaker.name = "Speakers X"
+        fake_speaker.id = "{0.0.0.00000000}.{spk}"
 
         fake_mic = mock.Mock()
         fake_mic.name = "Speakers X"
+        fake_mic.id = "{0.0.0.00000000}.{spk}"
         fake_mic.isloopback = True
 
         fake_sc = mock.Mock()
@@ -1450,7 +1452,33 @@ class TestPickLoopback(unittest.TestCase):
 
         result = music_sync.pick_loopback(fake_sc)
         self.assertIs(result, fake_mic)
-        fake_sc.get_microphone.assert_called_once_with("Speakers X", include_loopback=True)
+        fake_sc.get_microphone.assert_called_once_with("{0.0.0.00000000}.{spk}", include_loopback=True)
+
+    def test_ignores_non_loopback_match(self):
+        """If get_microphone returns a non-loopback mic, fall back to first loopback."""
+        fake_speaker = mock.Mock()
+        fake_speaker.name = "Speakers X"
+        fake_speaker.id = "{0.0.0.00000000}.{spk}"
+
+        # get_microphone returns a non-loopback mic (same-name headset mic bug)
+        fake_non_loopback = mock.Mock()
+        fake_non_loopback.name = "Speakers X"
+        fake_non_loopback.id = "{0.0.0.00000000}.{spk}"
+        fake_non_loopback.isloopback = False
+
+        # But all_microphones has a real loopback
+        fake_loopback = mock.Mock()
+        fake_loopback.name = "Speakers X (loopback)"
+        fake_loopback.id = "{0.0.0.00000000}.{spk}"
+        fake_loopback.isloopback = True
+
+        fake_sc = mock.Mock()
+        fake_sc.default_speaker = mock.Mock(return_value=fake_speaker)
+        fake_sc.get_microphone = mock.Mock(return_value=fake_non_loopback)
+        fake_sc.all_microphones = mock.Mock(return_value=[fake_non_loopback, fake_loopback])
+
+        result = music_sync.pick_loopback(fake_sc)
+        self.assertIs(result, fake_loopback)
 
     def test_falls_back_to_first_loopback_mic(self):
         """If get_microphone raises, fall back to first isloopback mic."""

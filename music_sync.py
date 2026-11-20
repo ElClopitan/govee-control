@@ -49,7 +49,7 @@ logger = logging.getLogger(__name__)
 def pick_loopback(sc):
     """Pick the loopback microphone for the default speaker.
 
-    Tries to get the loopback device for the default speaker by name.
+    Tries to get the loopback device for the default speaker by id.
     Falls back to the first microphone with isloopback=True, then to None.
 
     Args:
@@ -60,8 +60,11 @@ def pick_loopback(sc):
     """
     try:
         speaker = sc.default_speaker()
-        mic = sc.get_microphone(str(speaker.name), include_loopback=True)
-        return mic
+        mic = sc.get_microphone(speaker.id, include_loopback=True)
+        if not getattr(mic, "isloopback", False):
+            logger.warning("get_microphone returned non-loopback for speaker id %s", speaker.id)
+        else:
+            return mic
     except Exception as e:
         logger.warning("Could not get loopback for default speaker: %s", e)
 
