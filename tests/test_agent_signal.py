@@ -1414,11 +1414,14 @@ class TestSignalLogging(StateDirMixin, unittest.TestCase):
         args.dry_run = False
         args.force = False
 
-        agent_signal.cmd_needs_input(args)
+        # Ensure attended session so signal is applied
+        with mock.patch.dict(os.environ, {"CLAUDE_CODE_SESSION_ATTENDED": "1"}):
+            agent_signal.cmd_needs_input(args)
 
         # Check log file exists and contains the event
-        self.assertTrue(agent_signal.SIGNAL_LOG.exists())
-        log_content = agent_signal.SIGNAL_LOG.read_text()
+        log_path = agent_signal.signal_log_path()
+        self.assertTrue(log_path.exists())
+        log_content = log_path.read_text()
         self.assertIn("needs-input applied", log_content)
 
     @mock.patch("agent_signal.govee.status")
@@ -1439,8 +1442,9 @@ class TestSignalLogging(StateDirMixin, unittest.TestCase):
             agent_signal.cmd_needs_input(args)
 
         # Check log file exists and contains the event
-        self.assertTrue(agent_signal.SIGNAL_LOG.exists())
-        log_content = agent_signal.SIGNAL_LOG.read_text()
+        log_path = agent_signal.signal_log_path()
+        self.assertTrue(log_path.exists())
+        log_content = log_path.read_text()
         self.assertIn("needs-input skipped-unattended", log_content)
 
     @mock.patch("agent_signal.govee.turn")
@@ -1465,8 +1469,9 @@ class TestSignalLogging(StateDirMixin, unittest.TestCase):
         agent_signal.cmd_clear(args)
 
         # Check log file exists and contains the event
-        self.assertTrue(agent_signal.SIGNAL_LOG.exists())
-        log_content = agent_signal.SIGNAL_LOG.read_text()
+        log_path = agent_signal.signal_log_path()
+        self.assertTrue(log_path.exists())
+        log_content = log_path.read_text()
         self.assertIn("clear applied", log_content)
 
     @mock.patch("agent_signal.govee.turn")
@@ -1484,8 +1489,9 @@ class TestSignalLogging(StateDirMixin, unittest.TestCase):
         agent_signal.cmd_clear(args)
 
         # Check log file exists and contains the event
-        self.assertTrue(agent_signal.SIGNAL_LOG.exists())
-        log_content = agent_signal.SIGNAL_LOG.read_text()
+        log_path = agent_signal.signal_log_path()
+        self.assertTrue(log_path.exists())
+        log_content = log_path.read_text()
         self.assertIn("clear no-signal", log_content)
 
     @mock.patch("agent_signal.govee.status")
@@ -1512,7 +1518,8 @@ class TestSignalLogging(StateDirMixin, unittest.TestCase):
             agent_signal.cmd_needs_input(args)
 
         # Check log contains session_id
-        log_content = agent_signal.SIGNAL_LOG.read_text()
+        log_path = agent_signal.signal_log_path()
+        log_content = log_path.read_text()
         self.assertIn("session=test-session-123", log_content)
 
     @mock.patch("agent_signal.govee.status")
@@ -1541,6 +1548,40 @@ class TestSignalLogging(StateDirMixin, unittest.TestCase):
 
         # Should not crash, signal should be applied
         self.assertTrue(arbiter.signal_file().exists())
+
+    def test_log_path_resolved_at_call_time(self):
+        """Log events land in the patched STATE_DIR, not the real one.
+
+        This verifies that signal_log_path() resolves the path at call time
+        using the current module value of STATE_DIR, so tests that patch
+        STATE_DIR don't pollute the real state/signal.log.
+        """
+        # Record the real signal log path (before patching)
+        real_state_dir = Path(agent_signal.__file__).parent / "state"
+        real_log = real_state_dir / "signal.log"
+
+        # Record real log size before
+        if real_log.exists():
+            real_size_before = real_log.stat().st_size
+        else:
+            real_size_before = 0
+
+        # Log an event (STATE_DIR is patched by StateDirMixin)
+        agent_signal.log_signal_event("test", "log-path-check")
+
+        # The log should be in the test's state directory
+        test_log = agent_signal.signal_log_path()
+        self.assertTrue(test_log.exists())
+        self.assertIn("test log-path-check", test_log.read_text())
+
+        # The real log should be unchanged
+        if real_log.exists():
+            real_size_after = real_log.stat().st_size
+            self.assertEqual(
+                real_size_before,
+                real_size_after,
+                "Real signal.log was modified by test (log path not resolved at call time)"
+            )
 
 
 class TestBrightnessCap(StateDirMixin, unittest.TestCase):

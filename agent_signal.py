@@ -27,9 +27,17 @@ LOCK_TIMEOUT = 10.0
 LOCK_STALE = 30.0
 STATUS_TIMEOUT = 1.0
 SAVE_STATE_BUDGET = 5.0
-SIGNAL_LOG = STATE_DIR / "signal.log"
 LOG_MAX_BYTES = 200 * 1024  # 200 KB
 LOG_MAX_LINES = 100
+
+
+def signal_log_path():
+    """Return the path to the signal log, resolved at call time.
+
+    This uses the current module value of STATE_DIR so that tests can
+    patch STATE_DIR and have log events land in the test directory.
+    """
+    return STATE_DIR / "signal.log"
 
 DEFAULT_SIGNAL = {
     "color": "#ff6a00",
@@ -78,15 +86,17 @@ def log_signal_event(command, action, hook_input=None):
     try:
         STATE_DIR.mkdir(parents=True, exist_ok=True)
 
+        log_path = signal_log_path()
+
         # Truncate if too large
-        if SIGNAL_LOG.exists():
+        if log_path.exists():
             try:
-                size = SIGNAL_LOG.stat().st_size
+                size = log_path.stat().st_size
                 if size > LOG_MAX_BYTES:
                     # Keep last 100 lines
-                    with open(SIGNAL_LOG, "r") as f:
+                    with open(log_path, "r") as f:
                         lines = f.readlines()
-                    with open(SIGNAL_LOG, "w") as f:
+                    with open(log_path, "w") as f:
                         f.writelines(lines[-LOG_MAX_LINES:])
             except OSError:
                 pass
@@ -105,7 +115,7 @@ def log_signal_event(command, action, hook_input=None):
             line += f" msg={message}"
         line += "\n"
 
-        with open(SIGNAL_LOG, "a") as f:
+        with open(log_path, "a") as f:
             f.write(line)
     except OSError:
         pass
