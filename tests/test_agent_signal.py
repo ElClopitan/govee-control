@@ -18,6 +18,7 @@ import govee
 from helpers import StateDirMixin
 
 
+@mock.patch("agent_signal.time.sleep")
 class TestSignalNeedsInput(StateDirMixin, unittest.TestCase):
     """Test the needs-input command."""
 
@@ -43,7 +44,7 @@ class TestSignalNeedsInput(StateDirMixin, unittest.TestCase):
     @mock.patch("agent_signal.govee.brightness")
     @mock.patch("agent_signal.govee.color")
     def test_needs_input_saves_state_and_sets_color(
-        self, mock_color, mock_brightness, mock_turn, mock_status
+        self, mock_color, mock_brightness, mock_turn, mock_status, mock_sleep
     ):
         """needs-input saves current state and sets signal colour."""
         # Mock status responses
@@ -76,7 +77,7 @@ class TestSignalNeedsInput(StateDirMixin, unittest.TestCase):
     @mock.patch("agent_signal.govee.brightness")
     @mock.patch("agent_signal.govee.color")
     def test_second_needs_input_keeps_first_saved_state(
-        self, mock_color, mock_brightness, mock_turn, mock_status
+        self, mock_color, mock_brightness, mock_turn, mock_status, mock_sleep
     ):
         """Calling needs-input twice does not overwrite the saved original state."""
         # First call: save state
@@ -116,7 +117,7 @@ class TestSignalNeedsInput(StateDirMixin, unittest.TestCase):
     @mock.patch("agent_signal.govee.brightness")
     @mock.patch("agent_signal.govee.color")
     def test_status_exception_does_not_crash(
-        self, mock_color, mock_brightness, mock_turn, mock_status
+        self, mock_color, mock_brightness, mock_turn, mock_status, mock_sleep
     ):
         """govee.status raising an exception does not crash needs-input."""
         # With retry logic, first device gets 3 OSError attempts, then succeeds
@@ -143,7 +144,7 @@ class TestSignalNeedsInput(StateDirMixin, unittest.TestCase):
     @mock.patch("agent_signal.govee.brightness")
     @mock.patch("agent_signal.govee.color")
     def test_needs_input_saves_onoff_false(
-        self, mock_color, mock_brightness, mock_turn, mock_status
+        self, mock_color, mock_brightness, mock_turn, mock_status, mock_sleep
     ):
         """needs-input with onOff: 0 saves 'on': false."""
         mock_status.side_effect = [
@@ -167,7 +168,7 @@ class TestSignalNeedsInput(StateDirMixin, unittest.TestCase):
     @mock.patch("agent_signal.govee.brightness")
     @mock.patch("agent_signal.govee.color")
     def test_needs_input_saves_color_tem_in_kelvin(
-        self, mock_color, mock_brightness, mock_turn, mock_status
+        self, mock_color, mock_brightness, mock_turn, mock_status, mock_sleep
     ):
         """needs-input saves colorTemInKelvin from status."""
         mock_status.side_effect = [
@@ -191,7 +192,7 @@ class TestSignalNeedsInput(StateDirMixin, unittest.TestCase):
     @mock.patch("agent_signal.govee.brightness")
     @mock.patch("agent_signal.govee.color")
     def test_needs_input_all_status_none_writes_empty_marker(
-        self, mock_color, mock_brightness, mock_turn, mock_status
+        self, mock_color, mock_brightness, mock_turn, mock_status, mock_sleep
     ):
         """needs-input where all devices return None: writes [] marker, signal still sent."""
         # With retry logic, each device gets 3 attempts
@@ -213,6 +214,7 @@ class TestSignalNeedsInput(StateDirMixin, unittest.TestCase):
         self.assertEqual(mock_color.call_count, 2)
 
 
+@mock.patch("agent_signal.time.sleep")
 class TestSignalClear(StateDirMixin, unittest.TestCase):
     """Test the clear command."""
 
@@ -231,7 +233,7 @@ class TestSignalClear(StateDirMixin, unittest.TestCase):
     @mock.patch("agent_signal.govee.turn")
     @mock.patch("agent_signal.govee.brightness")
     @mock.patch("agent_signal.govee.color")
-    def test_clear_restores_and_deletes_file(self, mock_color, mock_brightness, mock_turn):
+    def test_clear_restores_and_deletes_file(self, mock_color, mock_brightness, mock_turn, mock_sleep):
         """clear restores saved state and deletes the file."""
         # Create a saved state file
         arbiter.signal_file().parent.mkdir(parents=True, exist_ok=True)
@@ -260,7 +262,7 @@ class TestSignalClear(StateDirMixin, unittest.TestCase):
     @mock.patch("agent_signal.govee.brightness")
     @mock.patch("agent_signal.govee.color")
     def test_clear_no_saved_file_no_default_sends_nothing(
-        self, mock_color, mock_brightness, mock_turn
+        self, mock_color, mock_brightness, mock_turn, mock_sleep
     ):
         """clear with no saved file and no default sends nothing (negative test)."""
         args = mock.Mock()
@@ -279,7 +281,7 @@ class TestSignalClear(StateDirMixin, unittest.TestCase):
     @mock.patch("agent_signal.govee.brightness")
     @mock.patch("agent_signal.govee.color")
     def test_clear_no_saved_state_with_default_config_sends_nothing(
-        self, mock_color, mock_brightness, mock_turn
+        self, mock_color, mock_brightness, mock_turn, mock_sleep
     ):
         """clear with no saved state and a config that HAS a default key sends nothing."""
         # Add default to config
@@ -298,7 +300,7 @@ class TestSignalClear(StateDirMixin, unittest.TestCase):
         mock_brightness.assert_not_called()
         mock_color.assert_not_called()
 
-    def test_clear_no_saved_state_no_config_file(self):
+    def test_clear_no_saved_state_no_config_file(self, mock_sleep):
         """clear with no saved state and a non-existent config path exits normally."""
         args = mock.Mock()
         args.command = "clear"
@@ -312,7 +314,7 @@ class TestSignalClear(StateDirMixin, unittest.TestCase):
     @mock.patch("agent_signal.govee.brightness")
     @mock.patch("agent_signal.govee.color")
     def test_clear_off_device_turn_off_last(
-        self, mock_color, mock_brightness, mock_turn
+        self, mock_color, mock_brightness, mock_turn, mock_sleep
     ):
         """clear with a saved 'on': false device sends turn(ip, False) LAST."""
         arbiter.signal_file().parent.mkdir(parents=True, exist_ok=True)
@@ -346,7 +348,7 @@ class TestSignalClear(StateDirMixin, unittest.TestCase):
     @mock.patch("agent_signal.govee.brightness")
     @mock.patch("agent_signal.govee.color")
     def test_clear_on_device_turn_on_first(
-        self, mock_color, mock_brightness, mock_turn
+        self, mock_color, mock_brightness, mock_turn, mock_sleep
     ):
         """clear with a saved 'on': true device sends turn(ip, True) FIRST."""
         arbiter.signal_file().parent.mkdir(parents=True, exist_ok=True)
@@ -380,7 +382,7 @@ class TestSignalClear(StateDirMixin, unittest.TestCase):
     @mock.patch("agent_signal.govee.brightness")
     @mock.patch("agent_signal.govee.color")
     def test_clear_empty_array_applies_default_to_all(
-        self, mock_color, mock_brightness, mock_turn
+        self, mock_color, mock_brightness, mock_turn, mock_sleep
     ):
         """clear with a file containing []: applies default config to all devices, file is deleted."""
         arbiter.signal_file().parent.mkdir(parents=True, exist_ok=True)
@@ -412,7 +414,7 @@ class TestSignalClear(StateDirMixin, unittest.TestCase):
     @mock.patch("agent_signal.govee.brightness")
     @mock.patch("agent_signal.govee.color")
     def test_clear_invalid_json_file_deleted(
-        self, mock_color, mock_brightness, mock_turn
+        self, mock_color, mock_brightness, mock_turn, mock_sleep
     ):
         """clear with a file containing invalid JSON: no exception, fallback applied, file deleted."""
         arbiter.signal_file().parent.mkdir(parents=True, exist_ok=True)
@@ -441,7 +443,7 @@ class TestSignalClear(StateDirMixin, unittest.TestCase):
     @mock.patch("agent_signal.govee.brightness")
     @mock.patch("agent_signal.govee.color")
     def test_clear_corrupt_json_prints_only_signal_cleared(
-        self, mock_color, mock_brightness, mock_turn
+        self, mock_color, mock_brightness, mock_turn, mock_sleep
     ):
         """clear with corrupt JSON prints only 'signal cleared' (no 'no active signal' message)."""
         import io
@@ -475,6 +477,7 @@ class TestSignalClear(StateDirMixin, unittest.TestCase):
         self.assertIn("failed to parse saved state", stderr)
 
 
+@mock.patch("agent_signal.time.sleep")
 class TestOSErrorHandling(StateDirMixin, unittest.TestCase):
     """Test that OSError from govee.send() does not crash the hooks."""
 
@@ -496,7 +499,7 @@ class TestOSErrorHandling(StateDirMixin, unittest.TestCase):
     @mock.patch("agent_signal.govee.turn")
     @mock.patch("agent_signal.govee.brightness")
     @mock.patch("agent_signal.govee.color")
-    def test_clear_oserror_does_not_crash(self, mock_color, mock_brightness, mock_turn):
+    def test_clear_oserror_does_not_crash(self, mock_color, mock_brightness, mock_turn, mock_sleep):
         """clear with govee.turn raising OSError: no crash, saved state kept, lock released."""
         # Create a saved state file
         arbiter.signal_file().parent.mkdir(parents=True, exist_ok=True)
@@ -526,7 +529,7 @@ class TestOSErrorHandling(StateDirMixin, unittest.TestCase):
     @mock.patch("agent_signal.govee.brightness")
     @mock.patch("agent_signal.govee.color")
     def test_needs_input_oserror_does_not_crash(
-        self, mock_color, mock_brightness, mock_turn, mock_status
+        self, mock_color, mock_brightness, mock_turn, mock_status, mock_sleep
     ):
         """needs-input with govee.color raising OSError: no crash, saved state kept, lock released."""
         # Mock status to answer
@@ -556,7 +559,7 @@ class TestOSErrorHandling(StateDirMixin, unittest.TestCase):
     @mock.patch("agent_signal.govee.color")
     @mock.patch("agent_signal.acquire_lock")
     def test_needs_input_lock_timeout_skips_signal(
-        self, mock_lock, mock_color, mock_brightness, mock_turn, mock_status
+        self, mock_lock, mock_color, mock_brightness, mock_turn, mock_status, mock_sleep
     ):
         """needs-input with lock timeout: no signal colour set, no saved state, exit 0."""
         # Lock times out
@@ -582,6 +585,7 @@ class TestOSErrorHandling(StateDirMixin, unittest.TestCase):
         self.assertFalse(agent_signal.LOCK_FILE.exists())
 
 
+@mock.patch("agent_signal.time.sleep")
 class TestSignalDryRun(StateDirMixin, unittest.TestCase):
     """Test dry-run mode."""
 
@@ -600,7 +604,7 @@ class TestSignalDryRun(StateDirMixin, unittest.TestCase):
     @mock.patch("agent_signal.govee.brightness")
     @mock.patch("agent_signal.govee.color")
     def test_dry_run_does_not_send_commands(
-        self, mock_color, mock_brightness, mock_turn, mock_status
+        self, mock_color, mock_brightness, mock_turn, mock_status, mock_sleep
     ):
         """dry-run mode prints but does not send commands."""
         mock_status.return_value = {"msg": {"data": {"on": True, "brightness": 50, "color": {"r": 255, "g": 255, "b": 255}}}}
@@ -720,12 +724,13 @@ class TestLocking(StateDirMixin, unittest.TestCase):
         # Lock file should be gone
         self.assertFalse(agent_signal.LOCK_FILE.exists())
 
+    @mock.patch("agent_signal.time.sleep")
     @mock.patch("agent_signal.govee.status")
     @mock.patch("agent_signal.govee.turn")
     @mock.patch("agent_signal.govee.brightness")
     @mock.patch("agent_signal.govee.color")
     def test_needs_input_recheck_under_lock(
-        self, mock_color, mock_brightness, mock_turn, mock_status
+        self, mock_color, mock_brightness, mock_turn, mock_status, mock_sleep
     ):
         """needs-input re-checks for saved state under the lock."""
         # Mock status responses
@@ -752,13 +757,14 @@ class TestLocking(StateDirMixin, unittest.TestCase):
         # Status should not have been called (saved state already exists)
         mock_status.assert_not_called()
 
+    @mock.patch("agent_signal.time.sleep")
     @mock.patch("agent_signal.govee.status")
     @mock.patch("agent_signal.govee.turn")
     @mock.patch("agent_signal.govee.brightness")
     @mock.patch("agent_signal.govee.color")
     @mock.patch("agent_signal.acquire_lock")
     def test_needs_input_always_acquires_lock(
-        self, mock_lock, mock_color, mock_brightness, mock_turn, mock_status
+        self, mock_lock, mock_color, mock_brightness, mock_turn, mock_status, mock_sleep
     ):
         """needs-input always acquires the lock, even when saved state already exists."""
         mock_lock.return_value = True
@@ -845,12 +851,13 @@ class TestLocking(StateDirMixin, unittest.TestCase):
             f"lock held {hold_time}s, exceeding LOCK_TIMEOUT - 1.5 = {agent_signal.LOCK_TIMEOUT - 1.5}s"
         )
 
+    @mock.patch("agent_signal.time.sleep")
     @mock.patch("agent_signal.govee.status")
     @mock.patch("agent_signal.govee.turn")
     @mock.patch("agent_signal.govee.brightness")
     @mock.patch("agent_signal.govee.color")
     def test_status_retry_on_oserror(
-        self, mock_color, mock_brightness, mock_turn, mock_status
+        self, mock_color, mock_brightness, mock_turn, mock_status, mock_sleep
     ):
         """save_state retries govee.status on OSError up to 3 times."""
         # First two calls raise OSError, third succeeds
@@ -874,11 +881,12 @@ class TestLocking(StateDirMixin, unittest.TestCase):
         saved = json.loads(arbiter.signal_file().read_text())
         self.assertEqual(len(saved), 2)
 
+    @mock.patch("agent_signal.time.sleep")
     @mock.patch("agent_signal.govee.turn")
     @mock.patch("agent_signal.govee.brightness")
     @mock.patch("agent_signal.govee.color")
     def test_restore_fallback_for_missing_device(
-        self, mock_color, mock_brightness, mock_turn
+        self, mock_color, mock_brightness, mock_turn, mock_sleep
     ):
         """restore_state applies default config for devices missing from saved state."""
         # Create a saved state file with only one device
@@ -907,6 +915,7 @@ class TestLocking(StateDirMixin, unittest.TestCase):
         mock_brightness.assert_any_call("192.168.1.51", 40)
 
 
+@mock.patch("agent_signal.time.sleep")
 class TestSignalArbiterIntegration(StateDirMixin, unittest.TestCase):
     """Test that agent_signal and arbiter are tied together via signal_file()."""
 
@@ -924,7 +933,7 @@ class TestSignalArbiterIntegration(StateDirMixin, unittest.TestCase):
     @mock.patch("agent_signal.govee.brightness")
     @mock.patch("agent_signal.govee.color")
     def test_needs_input_makes_arbiter_signal_active(
-        self, mock_color, mock_brightness, mock_turn, mock_status
+        self, mock_color, mock_brightness, mock_turn, mock_status, mock_sleep
     ):
         """needs-input creates the signal file that arbiter.signal_active() checks."""
         mock_status.return_value = {
@@ -949,7 +958,7 @@ class TestSignalArbiterIntegration(StateDirMixin, unittest.TestCase):
     @mock.patch("agent_signal.govee.brightness")
     @mock.patch("agent_signal.govee.color")
     def test_clear_makes_arbiter_signal_inactive(
-        self, mock_color, mock_brightness, mock_turn, mock_status
+        self, mock_color, mock_brightness, mock_turn, mock_status, mock_sleep
     ):
         """clear deletes the signal file that arbiter.signal_active() checks."""
         mock_status.return_value = {
@@ -1049,6 +1058,7 @@ class TestSaveStateTimeout(StateDirMixin, unittest.TestCase):
         self.assertEqual(saved, [])
 
 
+@mock.patch("agent_signal.time.sleep")
 class TestLoadSavedStateShapeValidation(StateDirMixin, unittest.TestCase):
     """Test that load_saved_state validates the shape of saved state data."""
 
@@ -1066,7 +1076,7 @@ class TestLoadSavedStateShapeValidation(StateDirMixin, unittest.TestCase):
     @mock.patch("agent_signal.govee.turn")
     @mock.patch("agent_signal.govee.brightness")
     @mock.patch("agent_signal.govee.color")
-    def test_clear_object_not_list(self, mock_color, mock_brightness, mock_turn):
+    def test_clear_object_not_list(self, mock_color, mock_brightness, mock_turn, mock_sleep):
         """clear with a file containing an object (not a list): no crash, fallback applied, file deleted."""
         arbiter.signal_file().parent.mkdir(parents=True, exist_ok=True)
         arbiter.signal_file().write_text('{"ip": "192.168.1.50"}')
@@ -1093,7 +1103,7 @@ class TestLoadSavedStateShapeValidation(StateDirMixin, unittest.TestCase):
     @mock.patch("agent_signal.govee.turn")
     @mock.patch("agent_signal.govee.brightness")
     @mock.patch("agent_signal.govee.color")
-    def test_clear_mixed_valid_invalid_entries(self, mock_color, mock_brightness, mock_turn):
+    def test_clear_mixed_valid_invalid_entries(self, mock_color, mock_brightness, mock_turn, mock_sleep):
         """clear with a list containing invalid and valid entries: valid restored, invalid dropped."""
         arbiter.signal_file().parent.mkdir(parents=True, exist_ok=True)
         # First entry is invalid (no "ip" field), second is valid
@@ -1120,7 +1130,7 @@ class TestLoadSavedStateShapeValidation(StateDirMixin, unittest.TestCase):
     @mock.patch("agent_signal.govee.turn")
     @mock.patch("agent_signal.govee.brightness")
     @mock.patch("agent_signal.govee.color")
-    def test_clear_null_json(self, mock_color, mock_brightness, mock_turn):
+    def test_clear_null_json(self, mock_color, mock_brightness, mock_turn, mock_sleep):
         """clear with a file containing 'null': fallback applied to all devices, file deleted."""
         arbiter.signal_file().parent.mkdir(parents=True, exist_ok=True)
         arbiter.signal_file().write_text("null")
@@ -1144,6 +1154,7 @@ class TestLoadSavedStateShapeValidation(StateDirMixin, unittest.TestCase):
         self.assertFalse(arbiter.signal_file().exists())
 
 
+@mock.patch("agent_signal.time.sleep")
 class TestSignalStateFiltering(StateDirMixin, unittest.TestCase):
     """Test that signal colour is not saved or restored as previous state."""
 
@@ -1168,7 +1179,7 @@ class TestSignalStateFiltering(StateDirMixin, unittest.TestCase):
     @mock.patch("agent_signal.govee.brightness")
     @mock.patch("agent_signal.govee.color")
     def test_save_state_skips_signal_color(
-        self, mock_color, mock_brightness, mock_turn, mock_status
+        self, mock_color, mock_brightness, mock_turn, mock_status, mock_sleep
     ):
         """save_state skips devices showing the signal colour."""
         # First device shows signal colour (#ff6a00 = 255, 106, 0)
@@ -1195,7 +1206,7 @@ class TestSignalStateFiltering(StateDirMixin, unittest.TestCase):
     @mock.patch("agent_signal.govee.brightness")
     @mock.patch("agent_signal.govee.color")
     def test_restore_state_skips_signal_color(
-        self, mock_color, mock_brightness, mock_turn
+        self, mock_color, mock_brightness, mock_turn, mock_sleep
     ):
         """restore_state skips saved entries matching the signal colour."""
         # Create a saved state where one device has the signal colour
@@ -1222,7 +1233,6 @@ class TestSignalStateFiltering(StateDirMixin, unittest.TestCase):
         mock_color.assert_any_call("192.168.1.51", 176, 190, 197, kelvin=0)
         mock_brightness.assert_any_call("192.168.1.51", 50)
 
-    @mock.patch("agent_signal.time.sleep")
     @mock.patch("agent_signal.govee.status")
     @mock.patch("agent_signal.govee.turn")
     @mock.patch("agent_signal.govee.brightness")
@@ -1261,7 +1271,6 @@ class TestSignalStateFiltering(StateDirMixin, unittest.TestCase):
         saved = json.loads(arbiter.signal_file().read_text())
         self.assertEqual(saved, [])
 
-    @mock.patch("agent_signal.time.sleep")
     @mock.patch("agent_signal.govee.turn")
     @mock.patch("agent_signal.govee.brightness")
     @mock.patch("agent_signal.govee.color")
@@ -1297,6 +1306,7 @@ class TestSignalStateFiltering(StateDirMixin, unittest.TestCase):
         self.assertNotIn("deleted", stdout)
 
 
+@mock.patch("agent_signal.time.sleep")
 class TestClearWithNullDefault(StateDirMixin, unittest.TestCase):
     """Test that clear with "default": null uses built-in default."""
 
@@ -1317,7 +1327,6 @@ class TestClearWithNullDefault(StateDirMixin, unittest.TestCase):
         }
         self.config_path.write_text(json.dumps(self.config))
 
-    @mock.patch("agent_signal.time.sleep")
     @mock.patch("agent_signal.govee.status")
     @mock.patch("agent_signal.govee.turn")
     @mock.patch("agent_signal.govee.brightness")
@@ -1389,6 +1398,7 @@ class TestIsUnattended(unittest.TestCase):
         self.assertFalse(agent_signal.is_unattended(env))
 
 
+@mock.patch("agent_signal.time.sleep")
 class TestNeedsInputUnattended(StateDirMixin, unittest.TestCase):
     """Test that needs-input skips unattended sessions."""
 
@@ -1412,7 +1422,7 @@ class TestNeedsInputUnattended(StateDirMixin, unittest.TestCase):
     @mock.patch("agent_signal.govee.brightness")
     @mock.patch("agent_signal.govee.color")
     def test_unattended_skips_signal(
-        self, mock_color, mock_brightness, mock_turn, mock_status
+        self, mock_color, mock_brightness, mock_turn, mock_status, mock_sleep
     ):
         """Unattended session: no govee calls, no saved state, exit 0."""
         mock_status.return_value = {
@@ -1442,7 +1452,7 @@ class TestNeedsInputUnattended(StateDirMixin, unittest.TestCase):
     @mock.patch("agent_signal.govee.brightness")
     @mock.patch("agent_signal.govee.color")
     def test_attended_applies_signal(
-        self, mock_color, mock_brightness, mock_turn, mock_status
+        self, mock_color, mock_brightness, mock_turn, mock_status, mock_sleep
     ):
         """Attended session (env var missing): signal applied as before."""
         mock_status.return_value = {
@@ -1468,7 +1478,7 @@ class TestNeedsInputUnattended(StateDirMixin, unittest.TestCase):
     @mock.patch("agent_signal.govee.brightness")
     @mock.patch("agent_signal.govee.color")
     def test_include_unattended_true_applies_signal(
-        self, mock_color, mock_brightness, mock_turn, mock_status
+        self, mock_color, mock_brightness, mock_turn, mock_status, mock_sleep
     ):
         """include_unattended: true -> signal applied even for unattended."""
         mock_status.return_value = {
@@ -1497,7 +1507,7 @@ class TestNeedsInputUnattended(StateDirMixin, unittest.TestCase):
     @mock.patch("agent_signal.govee.brightness")
     @mock.patch("agent_signal.govee.color")
     def test_force_flag_applies_signal(
-        self, mock_color, mock_brightness, mock_turn, mock_status
+        self, mock_color, mock_brightness, mock_turn, mock_status, mock_sleep
     ):
         """--force flag -> signal applied even for unattended."""
         mock_status.return_value = {
@@ -1518,6 +1528,7 @@ class TestNeedsInputUnattended(StateDirMixin, unittest.TestCase):
         self.assertEqual(mock_color.call_count, 1)
 
 
+@mock.patch("agent_signal.time.sleep")
 class TestSignalLogging(StateDirMixin, unittest.TestCase):
     """Test that signal events are logged."""
 
@@ -1541,7 +1552,7 @@ class TestSignalLogging(StateDirMixin, unittest.TestCase):
     @mock.patch("agent_signal.govee.brightness")
     @mock.patch("agent_signal.govee.color")
     def test_needs_input_logs_applied(
-        self, mock_color, mock_brightness, mock_turn, mock_status
+        self, mock_color, mock_brightness, mock_turn, mock_status, mock_sleep
     ):
         """needs-input logs 'applied' when signal is set."""
         mock_status.return_value = {
@@ -1569,7 +1580,7 @@ class TestSignalLogging(StateDirMixin, unittest.TestCase):
     @mock.patch("agent_signal.govee.brightness")
     @mock.patch("agent_signal.govee.color")
     def test_unattended_logs_skipped(
-        self, mock_color, mock_brightness, mock_turn, mock_status
+        self, mock_color, mock_brightness, mock_turn, mock_status, mock_sleep
     ):
         """Unattended session logs 'skipped-unattended'."""
         args = mock.Mock()
@@ -1591,7 +1602,7 @@ class TestSignalLogging(StateDirMixin, unittest.TestCase):
     @mock.patch("agent_signal.govee.brightness")
     @mock.patch("agent_signal.govee.color")
     def test_clear_logs_applied(
-        self, mock_color, mock_brightness, mock_turn
+        self, mock_color, mock_brightness, mock_turn, mock_sleep
     ):
         """clear logs 'applied' when signal is cleared."""
         # Create a saved state file
@@ -1618,7 +1629,7 @@ class TestSignalLogging(StateDirMixin, unittest.TestCase):
     @mock.patch("agent_signal.govee.brightness")
     @mock.patch("agent_signal.govee.color")
     def test_clear_no_signal_logs_no_signal(
-        self, mock_color, mock_brightness, mock_turn
+        self, mock_color, mock_brightness, mock_turn, mock_sleep
     ):
         """clear with no signal logs 'no-signal'."""
         args = mock.Mock()
@@ -1639,7 +1650,7 @@ class TestSignalLogging(StateDirMixin, unittest.TestCase):
     @mock.patch("agent_signal.govee.brightness")
     @mock.patch("agent_signal.govee.color")
     def test_log_contains_session_id(
-        self, mock_color, mock_brightness, mock_turn, mock_status
+        self, mock_color, mock_brightness, mock_turn, mock_status, mock_sleep
     ):
         """Log contains session_id from hook input."""
         mock_status.return_value = {
@@ -1667,7 +1678,7 @@ class TestSignalLogging(StateDirMixin, unittest.TestCase):
     @mock.patch("agent_signal.govee.brightness")
     @mock.patch("agent_signal.govee.color")
     def test_bad_stdin_json_no_crash(
-        self, mock_color, mock_brightness, mock_turn, mock_status
+        self, mock_color, mock_brightness, mock_turn, mock_status, mock_sleep
     ):
         """Bad stdin JSON does not crash."""
         mock_status.return_value = {
@@ -1689,7 +1700,7 @@ class TestSignalLogging(StateDirMixin, unittest.TestCase):
         # Should not crash, signal should be applied
         self.assertTrue(arbiter.signal_file().exists())
 
-    def test_log_path_resolved_at_call_time(self):
+    def test_log_path_resolved_at_call_time(self, mock_sleep):
         """Log events land in the patched STATE_DIR, not the real one.
 
         This verifies that signal_log_path() resolves the path at call time
@@ -1724,6 +1735,7 @@ class TestSignalLogging(StateDirMixin, unittest.TestCase):
             )
 
 
+@mock.patch("agent_signal.time.sleep")
 class TestBrightnessCap(StateDirMixin, unittest.TestCase):
     """Test that brightness is capped at max_brightness (default 80)."""
 
@@ -1747,7 +1759,7 @@ class TestBrightnessCap(StateDirMixin, unittest.TestCase):
     @mock.patch("agent_signal.govee.brightness")
     @mock.patch("agent_signal.govee.color")
     def test_signal_brightness_capped_at_80(
-        self, mock_color, mock_brightness, mock_turn, mock_status
+        self, mock_color, mock_brightness, mock_turn, mock_status, mock_sleep
     ):
         """Signal brightness of 100 is capped to 80 (default max_brightness)."""
         mock_status.return_value = {
@@ -1769,6 +1781,7 @@ class TestBrightnessCap(StateDirMixin, unittest.TestCase):
         self.assertEqual(mock_brightness.call_args[0][1], 80)
 
 
+@mock.patch("agent_signal.time.sleep")
 class TestPerSessionMarkers(StateDirMixin, unittest.TestCase):
     """Test per-session signal markers."""
 
@@ -1792,7 +1805,7 @@ class TestPerSessionMarkers(StateDirMixin, unittest.TestCase):
     @mock.patch("agent_signal.govee.brightness")
     @mock.patch("agent_signal.govee.color")
     def test_needs_input_writes_session_marker(
-        self, mock_color, mock_brightness, mock_turn, mock_status
+        self, mock_color, mock_brightness, mock_turn, mock_status, mock_sleep
     ):
         """needs-input writes a session marker file."""
         mock_status.return_value = {
@@ -1821,7 +1834,7 @@ class TestPerSessionMarkers(StateDirMixin, unittest.TestCase):
     @mock.patch("agent_signal.govee.brightness")
     @mock.patch("agent_signal.govee.color")
     def test_needs_input_no_session_id_uses_manual(
-        self, mock_color, mock_brightness, mock_turn, mock_status
+        self, mock_color, mock_brightness, mock_turn, mock_status, mock_sleep
     ):
         """needs-input with no session_id writes 'manual' marker."""
         mock_status.return_value = {
@@ -1849,7 +1862,7 @@ class TestPerSessionMarkers(StateDirMixin, unittest.TestCase):
     @mock.patch("agent_signal.govee.brightness")
     @mock.patch("agent_signal.govee.color")
     def test_two_sessions_clear_one_keeps_signal(
-        self, mock_color, mock_brightness, mock_turn, mock_status
+        self, mock_color, mock_brightness, mock_turn, mock_status, mock_sleep
     ):
         """Two sessions set signal; one clears -> signal stays (no restore)."""
         mock_status.return_value = {
@@ -1916,7 +1929,7 @@ class TestPerSessionMarkers(StateDirMixin, unittest.TestCase):
     @mock.patch("agent_signal.govee.brightness")
     @mock.patch("agent_signal.govee.color")
     def test_last_session_clear_restores(
-        self, mock_color, mock_brightness, mock_turn, mock_status
+        self, mock_color, mock_brightness, mock_turn, mock_status, mock_sleep
     ):
         """Last session to clear restores the lights."""
         mock_status.return_value = {
@@ -1985,7 +1998,7 @@ class TestPerSessionMarkers(StateDirMixin, unittest.TestCase):
     @mock.patch("agent_signal.govee.brightness")
     @mock.patch("agent_signal.govee.color")
     def test_clear_unknown_session_with_marker_present_no_restore(
-        self, mock_color, mock_brightness, mock_turn, mock_status
+        self, mock_color, mock_brightness, mock_turn, mock_status, mock_sleep
     ):
         """Clear from unknown session with another session's marker present -> no restore."""
         mock_status.return_value = {
@@ -2025,7 +2038,7 @@ class TestPerSessionMarkers(StateDirMixin, unittest.TestCase):
     @mock.patch("agent_signal.govee.brightness")
     @mock.patch("agent_signal.govee.color")
     def test_stale_marker_ignored_and_deleted(
-        self, mock_color, mock_brightness, mock_turn, mock_status
+        self, mock_color, mock_brightness, mock_turn, mock_status, mock_sleep
     ):
         """Stale marker (older than max_age_hours) is ignored and deleted."""
         mock_status.return_value = {
@@ -2073,7 +2086,7 @@ class TestPerSessionMarkers(StateDirMixin, unittest.TestCase):
     @mock.patch("agent_signal.govee.brightness")
     @mock.patch("agent_signal.govee.color")
     def test_legacy_no_marker_dir_restores(
-        self, mock_color, mock_brightness, mock_turn, mock_status
+        self, mock_color, mock_brightness, mock_turn, mock_status, mock_sleep
     ):
         """Legacy: saved_state.json exists but no marker dir -> clear restores."""
         # Create saved state directly (no marker dir)
@@ -2101,7 +2114,7 @@ class TestPerSessionMarkers(StateDirMixin, unittest.TestCase):
     @mock.patch("agent_signal.govee.brightness")
     @mock.patch("agent_signal.govee.color")
     def test_clear_all_restores_regardless_of_markers(
-        self, mock_color, mock_brightness, mock_turn, mock_status
+        self, mock_color, mock_brightness, mock_turn, mock_status, mock_sleep
     ):
         """clear --all restores regardless of remaining markers."""
         mock_status.return_value = {
