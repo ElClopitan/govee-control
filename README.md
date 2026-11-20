@@ -279,12 +279,28 @@ When multiple light sources are active, they follow this priority order:
 
 The priority system uses file-based state in the `state/` directory:
 - `state/saved_state.json` — exists when an agent signal is active
+- `state/signal_sessions/` — per-session marker files; one file per Claude session that raised the signal
 - `state/game_active.json` — exists when game sync is active (contains the profile name); game sync rewrites this file every loop iteration as a heartbeat, and if it's older than 60 seconds it's considered stale so weather sync can resume
 - `state/agent_signal.lock` — lock file used to serialise concurrent agent signal hooks
 
 Concurrent `needs-input` and `clear` hooks are serialised with `state/agent_signal.lock` to prevent race conditions where multiple Claude sessions run the hooks simultaneously.
 
 When a higher-priority source becomes inactive, the next source in the priority chain re-applies its colour on the next sync cycle.
+
+### Per-session signal markers
+
+When multiple Claude sessions are running, each session that raises the signal
+writes a marker file to `state/signal_sessions/<session_id>`. When a session
+clears the signal, only its own marker is removed. The lights stay orange until
+the last session's marker is removed.
+
+- Markers older than 8 hours (configurable via `signal.marker_max_age_hours`)
+  are considered stale and are automatically deleted.
+- If `saved_state.json` exists but the marker directory is empty or missing
+  (legacy state from before this feature), the next `clear` restores the lights
+  as before.
+- `agent_signal.py clear --all` is a manual escape hatch that restores the
+  lights regardless of remaining markers.
 
 ### Clear fallback
 

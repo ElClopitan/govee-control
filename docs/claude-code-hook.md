@@ -45,11 +45,19 @@ If your settings.json already has a `hooks` key, merge these two events into it 
 
 1. When an agent needs input, Claude Code sends a notification. The `Notification`
    hook fires and runs `agent_signal.py needs-input`, which turns the lights to the
-   configured signal colour (default: orange `#ff6a00`).
+   configured signal colour (default: orange `#ff6a00`). Each session writes a
+   marker file to `state/signal_sessions/<session_id>` so the signal can be
+   tracked per session.
 
 2. When the user submits a prompt (responding to the agent), the `UserPromptSubmit`
-   hook fires and runs `agent_signal.py clear`, which restores the lights to their
+   hook fires and runs `agent_signal.py clear`, which removes that session's
+   marker. If other sessions still have active markers, the lights stay orange.
+   When the last session's marker is removed, the lights are restored to their
    previous state.
+
+If multiple Claude sessions are running and one raises the signal while another
+is idle, the idle session's prompt submission will not clear the signal — only
+the session that raised it (or `clear --all`) can.
 
 ## Notes
 

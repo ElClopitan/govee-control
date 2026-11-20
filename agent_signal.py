@@ -29,6 +29,7 @@ STATUS_TIMEOUT = 1.0
 SAVE_STATE_BUDGET = 4.0  # lock is held for save_state + set_signal_color; with blink on for 2 strips set_signal_color takes ~4 s, so total must stay under LOCK_TIMEOUT with margin
 LOG_MAX_BYTES = 200 * 1024  # 200 KB
 LOG_MAX_LINES = 100
+MARKER_MAX_AGE_HOURS_DEFAULT = 8
 
 
 def signal_log_path():
@@ -38,6 +39,110 @@ def signal_log_path():
     patch STATE_DIR and have log events land in the test directory.
     """
     return STATE_DIR / "signal.log"
+
+
+def signal_sessions_dir():
+    """Return the path to the signal sessions directory, resolved at call time.
+
+    This uses the current module value of STATE_DIR so that tests can
+    patch STATE_DIR and have session markers land in the test directory.
+    """
+    return STATE_DIR / "signal_sessions"
+
+
+def write_session_marker(session_id, dry_run=False):
+    """Write a session marker file for the given session_id.
+
+    If session_id is empty, uses 'manual' as the marker name.
+    The marker file contains an ISO timestamp.
+    """
+    if dry_run:
+        print(f"[dry-run] would write session marker for {session_id or 'manual'}")
+        return
+
+    sessions_dir = signal_sessions_dir()
+    sessions_dir.mkdir(parents=True, exist_ok=True)
+
+    marker_name = session_id if session_id else "manual"
+    marker_path = sessions_dir / marker_name
+    now = datetime.now(timezone.utc).isoformat()
+    marker_path.write_text(now)
+
+
+def remove_session_marker(session_id, dry_run=False):
+    """Remove the session marker file for the given session_id.
+
+    If session_id is empty, removes the 'manual' marker.
+    Returns True if a marker was removed, False if none existed.
+    """
+    if dry_run:
+        print(f"[dry-run] would remove session marker for {session_id or 'manual'}")
+        return False
+
+    sessions_dir = signal_sessions_dir()
+    marker_name = session_id if session_id else "manual"
+    marker_path = sessions_dir / marker_name
+
+    if marker_path.exists():
+        marker_path.unlink()
+        return True
+    return False
+
+
+def get_active_session_markers(max_age_hours=None):
+    """Get a list of non-stale session marker names.
+
+    Markers older than max_age_hours are considered stale and are deleted.
+    If max_age_hours is None, uses the default.
+    Returns a list of session_id strings (or 'manual').
+    """
+    if max_age_hours is None:
+        max_age_hours = MARKER_MAX_AGE_HOURS_DEFAULT
+
+    sessions_dir = signal_sessions_dir()
+    if not sessions_dir.exists():
+        return []
+
+    now = datetime.now(timezone.utc)
+    active = []
+    stale = []
+
+    for marker_path in sessions_dir.iterdir():
+        if not marker_path.is_file():
+            continue
+        try:
+            content = marker_path.read_text().strip()
+            marker_time = datetime.fromisoformat(content)
+            age_hours = (now - marker_time).total_seconds() / 3600
+            if age_hours <= max_age_hours:
+                active.append(marker_path.name)
+            else:
+                stale.append(marker_path)
+        except (ValueError, OSError):
+            # Corrupt marker, treat as stale
+            stale.append(marker_path)
+
+    # Delete stale markers
+    for marker_path in stale:
+        try:
+            marker_path.unlink()
+        except OSError:
+            pass
+
+    return active
+
+
+def has_other_active_markers(session_id, max_age_hours=None):
+    """Check if there are other active session markers besides the given one.
+
+    Returns True if other sessions still have active markers.
+    """
+    active = get_active_session_markers(max_age_hours)
+    marker_name = session_id if session_id else "manual"
+    # Remove our own marker from the list
+    if marker_name in active:
+        active.remove(marker_name)
+    return len(active) > 0
 
 DEFAULT_SIGNAL = {
     "color": "#ff6a00",
@@ -437,6 +542,7 @@ def restore_state(devices, signal_cfg, cfg, default_cfg=None, dry_run=False, sav
 def cmd_needs_input(args):
     """Handle the needs-input command."""
     hook_input = read_hook_input()
+    session_id = hook_input.get("session_id", "")
 
     # Check if unattended and not forced
     if not args.force and is_unattended():
@@ -471,6 +577,9 @@ def cmd_needs_input(args):
         if not signal_path.exists() or args.dry_run:
             save_state(devices, signal_cfg, dry_run=args.dry_run)
 
+        # Write session marker
+        write_session_marker(session_id, dry_run=args.dry_run)
+
         try:
             set_signal_color(devices, signal_cfg, cfg, dry_run=args.dry_run)
         except OSError as e:
@@ -486,7 +595,9 @@ def cmd_needs_input(args):
 def cmd_clear(args):
     """Handle the clear command."""
     hook_input = read_hook_input()
+    session_id = hook_input.get("session_id", "")
     signal_path = arbiter.signal_file()
+
     # Fast path: if no saved state, nothing to do (no lock needed)
     if not signal_path.exists():
         log_signal_event("clear", "no-signal", hook_input)
@@ -501,6 +612,7 @@ def cmd_clear(args):
 
     signal_cfg = get_signal_config(cfg)
     default_cfg = cfg.get("default")
+    max_age_hours = signal_cfg.get("marker_max_age_hours", MARKER_MAX_AGE_HOURS_DEFAULT)
 
     # Acquire lock before restoring state
     if not acquire_lock(dry_run=args.dry_run):
@@ -513,6 +625,16 @@ def cmd_clear(args):
         if not signal_path.exists():
             log_signal_event("clear", "no-signal", hook_input)
             print("no active signal; nothing to do")
+            return
+
+        # Remove this session's marker
+        removed = remove_session_marker(session_id, dry_run=args.dry_run)
+
+        # Check if other sessions still have active markers
+        if not args.all and has_other_active_markers(session_id, max_age_hours):
+            # Other sessions still waiting, keep the signal
+            log_signal_event("clear", "kept-other-sessions", hook_input)
+            print("signal kept (other sessions still waiting)")
             return
 
         # Load saved state once, without quiet, so warnings go to stderr
@@ -560,6 +682,11 @@ def main():
         "--force",
         action="store_true",
         help="apply signal even for unattended/background sessions",
+    )
+    parser.add_argument(
+        "--all",
+        action="store_true",
+        help="clear all session markers and restore lights (manual escape hatch)",
     )
 
     args = parser.parse_args()
