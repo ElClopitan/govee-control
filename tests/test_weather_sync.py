@@ -1590,6 +1590,220 @@ class TestThunderstormPattern(StateDirMixin, unittest.TestCase):
             self.assertLessEqual(b, 80, f"Non-flash brightness {b} exceeds 80")
 
 
+class TestThunderstormDoubleFlash(StateDirMixin, unittest.TestCase):
+    """Test thunderstorm double-flash sequence and arbiter interaction."""
+
+    def _make_config(self):
+        return {
+            "devices": [
+                {"name": "left", "ip": "192.168.1.50"},
+                {"name": "right", "ip": "192.168.1.51"},
+            ],
+            "weather": {
+                "latitude": 51.5,
+                "longitude": -0.1,
+                "brightness": 80,
+                "patterns_enabled": True,
+                "frame_interval": 1.0,
+            },
+        }
+
+    @mock.patch("weather_sync.fetch_weather")
+    @mock.patch("govee.color")
+    @mock.patch("govee.brightness")
+    @mock.patch("time.sleep")
+    def test_double_flash_sends_base_frame_in_gap(self, mock_sleep, mock_brightness, mock_color, mock_fetch):
+        """Double flash: flash 100 -> base <= 80 -> flash 100 -> base <= 80.
+
+        Uses a seeded RNG where random() < 0.3 forces the double flash.
+        """
+        import random
+        import arbiter
+
+        mock_fetch.return_value = {
+            "temperature_2m": 22.0,
+            "weather_code": 95,
+            "is_day": 1,
+        }
+        config = self._make_config()
+
+        # Seed RNG so random() < 0.3 triggers double flash
+        # random.Random(42).random() = 0.639... (not < 0.3)
+        # We need to find a seed where random() < 0.3
+        # random.Random(1).random() = 0.134... (yes!)
+        rng = random.Random(1)
+
+        # Controllable time
+        current_time = [1000.0]
+        def time_fn():
+            return current_time[0]
+
+        # Advance time to trigger flash, then exit
+        sleep_count = [0]
+        def sleep_side_effect(seconds):
+            sleep_count[0] += 1
+            current_time[0] += seconds
+            if sleep_count[0] == 1:
+                # After first frame, advance to trigger flash
+                current_time[0] = 1015.0
+            if sleep_count[0] >= 10:
+                raise KeyboardInterrupt()
+
+        mock_sleep.side_effect = sleep_side_effect
+
+        try:
+            weather_sync.run(config, once=False, interval=900, rng=rng, time_fn=time_fn)
+        except KeyboardInterrupt:
+            pass
+
+        # Extract brightness calls for the first device
+        brightness_calls = [
+            (call[0][0], call[0][1])
+            for call in mock_brightness.call_args_list
+            if call[0][0] == "192.168.1.50"
+        ]
+
+        # Find flash brightness values (100)
+        flash_indices = [i for i, (ip, b) in enumerate(brightness_calls) if b == 100]
+
+        # Should have at least 2 flashes (double flash)
+        self.assertGreaterEqual(len(flash_indices), 2,
+                                f"Expected at least 2 flashes, got {len(flash_indices)}")
+
+        # Check that between the two flashes, there's a base frame <= 80
+        first_flash = flash_indices[0]
+        second_flash = flash_indices[1]
+
+        # There should be a brightness call between the two flashes that is <= 80
+        between_calls = brightness_calls[first_flash + 1:second_flash]
+        self.assertGreater(len(between_calls), 0,
+                           "Expected base frame between flashes")
+
+        # The last call before the second flash should be <= 80 (base frame)
+        last_before_second = between_calls[-1]
+        self.assertLessEqual(last_before_second[1], 80,
+                             f"Expected base frame <= 80 between flashes, got {last_before_second[1]}")
+
+    @mock.patch("weather_sync.fetch_weather")
+    @mock.patch("govee.color")
+    @mock.patch("govee.brightness")
+    @mock.patch("time.sleep")
+    def test_flash_intervals_within_range(self, mock_sleep, mock_brightness, mock_color, mock_fetch):
+        """Across >= 50 flashes, every gap is within [6, 20] seconds."""
+        import random
+
+        mock_fetch.return_value = {
+            "temperature_2m": 22.0,
+            "weather_code": 95,
+            "is_day": 1,
+        }
+        config = self._make_config()
+
+        # Use a seeded RNG for reproducibility
+        rng = random.Random(42)
+
+        # Track intervals by patching rng.uniform
+        intervals = []
+        original_uniform = rng.uniform
+        def uniform_side_effect(a, b):
+            result = original_uniform(a, b)
+            intervals.append(result)
+            return result
+        rng.uniform = uniform_side_effect
+
+        current_time = [1000.0]
+        def time_fn():
+            return current_time[0]
+
+        # Run for enough time to get 50+ flashes
+        # With flash_every [6, 20], average is 13s, so 50 flashes ~ 650s
+        # Use 800 to be safe
+        sleep_count = [0]
+        def sleep_side_effect(seconds):
+            sleep_count[0] += 1
+            current_time[0] += seconds
+            if sleep_count[0] >= 800:
+                raise KeyboardInterrupt()
+
+        mock_sleep.side_effect = sleep_side_effect
+
+        try:
+            weather_sync.run(config, once=False, interval=900, rng=rng, time_fn=time_fn)
+        except KeyboardInterrupt:
+            pass
+
+        # Should have at least 50 intervals (one per flash)
+        self.assertGreaterEqual(len(intervals), 50,
+                                f"Expected >= 50 flash intervals, got {len(intervals)}")
+
+        # Check all intervals are within [6, 20]
+        for i, interval in enumerate(intervals):
+            self.assertGreaterEqual(interval, 6.0,
+                                    f"Flash interval {interval} < 6.0 at flash {i}")
+            self.assertLessEqual(interval, 20.0,
+                                 f"Flash interval {interval} > 20.0 at flash {i}")
+
+    @mock.patch("weather_sync.fetch_weather")
+    @mock.patch("govee.color")
+    @mock.patch("govee.brightness")
+    @mock.patch("time.sleep")
+    def test_arbiter_blocks_second_flash(self, mock_sleep, mock_brightness, mock_color, mock_fetch):
+        """If arbiter activates between flashes, second flash is skipped."""
+        import random
+        import arbiter
+
+        mock_fetch.return_value = {
+            "temperature_2m": 22.0,
+            "weather_code": 95,
+            "is_day": 1,
+        }
+        config = self._make_config()
+
+        # Seed RNG so random() < 0.3 triggers double flash
+        rng = random.Random(1)
+
+        # Controllable time
+        current_time = [1000.0]
+        def time_fn():
+            return current_time[0]
+
+        # Activate signal during the double-flash gap
+        sleep_count = [0]
+        def sleep_side_effect(seconds):
+            sleep_count[0] += 1
+            current_time[0] += seconds
+            if sleep_count[0] == 1:
+                # After first frame, advance to trigger flash
+                current_time[0] = 1015.0
+            elif sleep_count[0] == 2:
+                # This is the flash_duration sleep after first flash
+                # Activate signal before the double-flash gap
+                (arbiter.STATE_DIR / "saved_state.json").write_text("[]")
+            elif sleep_count[0] == 3:
+                # This is the 0.12s gap sleep
+                # Signal is active, second flash should be skipped
+                pass
+            if sleep_count[0] >= 10:
+                raise KeyboardInterrupt()
+
+        mock_sleep.side_effect = sleep_side_effect
+
+        try:
+            weather_sync.run(config, once=False, interval=900, rng=rng, time_fn=time_fn)
+        except KeyboardInterrupt:
+            pass
+
+        # Count flash brightness calls (100)
+        flash_calls = [
+            call for call in mock_brightness.call_args_list
+            if call[0][1] == 100
+        ]
+
+        # Should have exactly 1 flash (first flash only, second blocked)
+        self.assertEqual(len(flash_calls), 1,
+                         f"Expected 1 flash (second blocked), got {len(flash_calls)}")
+
+
 class TestLogFileArgument(unittest.TestCase):
     """Test the --log-file argument with size rotation."""
 

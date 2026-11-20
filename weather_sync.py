@@ -153,68 +153,6 @@ def should_flash(now, next_flash_time):
     return next_flash_time is not None and now >= next_flash_time
 
 
-def thunderstorm_flash_frame(pattern, strip_index, devices, rng, flash_both_prob):
-    """Determine which strips to flash and return flash frame data.
-
-    Args:
-        pattern: Thunderstorm pattern definition
-        strip_index: Current strip index being processed
-        devices: List of device dicts
-        rng: random.Random instance
-        flash_both_prob: Probability of flashing both strips
-
-    Returns:
-        (should_flash_this_strip, r, g, b, brightness) tuple
-    """
-    # Decide once per flash event which strips to flash
-    # We use a deterministic approach: if strip_index is 0, make the decision
-    # and store it; if strip_index > 0, use the stored decision.
-    # For simplicity in this design, we'll flash both or just this strip based on probability.
-
-    flash_color = pattern.get("flash_color", "#ffffff")
-    flash_brightness = pattern.get("flash_brightness", 100)
-    r, g, b = hex_to_rgb(flash_color)
-
-    # For single strip, always flash it
-    if len(devices) == 1:
-        return (True, r, g, b, flash_brightness)
-
-    # For multiple strips, decide based on probability
-    # strip_index 0: decide whether to flash both
-    # strip_index > 0: flash only if both were decided
-    if strip_index == 0:
-        flash_both = rng.random() < flash_both_prob
-        # Store decision in a way that strip 1 can access
-        # We'll use a simple approach: return a marker
-        thunderstorm_flash_frame._flash_both = flash_both
-        return (True, r, g, b, flash_brightness)
-    else:
-        # Only flash if both were decided
-        return (thunderstorm_flash_frame._flash_both, r, g, b, flash_brightness)
-
-
-thunderstorm_flash_frame._flash_both = False
-
-
-def schedule_next_flash(rng, flash_every, now):
-    """Schedule the next flash time.
-
-    Args:
-        rng: random.Random instance
-        flash_every: [min, max] seconds between flashes
-        now: current time
-
-    Returns:
-        Next flash time (float)
-    """
-    min_interval, max_interval = flash_every
-    interval = rng.uniform(min_interval, max_interval)
-    return now + interval
-
-
-def should_flash(now, next_flash_time):
-    """Check if it's time to flash."""
-    return next_flash_time is not None and now >= next_flash_time
 
 
 def get_pattern_for_code(code, patterns_cfg):
@@ -544,23 +482,45 @@ def run(config, once=False, interval=900, dry_run=False, rng=None, time_fn=None)
 
                     # Double flash?
                     if rng.random() < double_flash_prob:
-                        # Brief pause, then flash again
-                        time.sleep(0.12)
+                        # Send base frame during the gap (spec: 120ms of base frame)
                         for i in flash_strips:
                             ip = devices[i]["ip"]
+                            base_r, base_g, base_b, base_brightness = pattern_frame(current_pattern, elapsed, i)
+                            base_brightness = arbiter.cap_brightness(base_brightness, config)
                             if dry_run:
-                                logger.debug("[dry-run] Would flash %s again (double flash)", ip)
+                                logger.debug("[dry-run] Would send base frame to %s during double-flash gap", ip)
                             else:
                                 try:
-                                    govee.color(ip, r, g, b)
-                                    govee.brightness(ip, arbiter.cap_brightness(flash_brightness, config, allow_flash=True))
-                                    last_brightness[ip] = flash_brightness
-                                    logger.debug("Double-flashed %s", ip)
+                                    govee.color(ip, base_r, base_g, base_b)
+                                    govee.brightness(ip, base_brightness)
+                                    last_brightness[ip] = base_brightness
+                                    logger.debug("Sent base frame to %s during double-flash gap", ip)
                                 except OSError as e:
                                     if last_frame_error_time is None or (now - last_frame_error_time) >= 60:
                                         logger.error("Failed to send to lights: %s", e)
                                         last_frame_error_time = now
-                        time.sleep(flash_duration)
+
+                        time.sleep(0.12)
+
+                        # Re-check arbiter before second flash
+                        if arbiter.signal_active() or arbiter.game_active():
+                            logger.debug("Skipping second flash: signal/game active")
+                        else:
+                            for i in flash_strips:
+                                ip = devices[i]["ip"]
+                                if dry_run:
+                                    logger.debug("[dry-run] Would flash %s again (double flash)", ip)
+                                else:
+                                    try:
+                                        govee.color(ip, r, g, b)
+                                        govee.brightness(ip, arbiter.cap_brightness(flash_brightness, config, allow_flash=True))
+                                        last_brightness[ip] = flash_brightness
+                                        logger.debug("Double-flashed %s", ip)
+                                    except OSError as e:
+                                        if last_frame_error_time is None or (now - last_frame_error_time) >= 60:
+                                            logger.error("Failed to send to lights: %s", e)
+                                            last_frame_error_time = now
+                            time.sleep(flash_duration)
 
                     # Restore base frame to all strips
                     for i, dev in enumerate(devices):
