@@ -400,7 +400,7 @@ def sweep_and_restore(config_path=None, dry_run=False):
     devices = cfg.get("devices", [])
     if not devices:
         print("no devices in config", file=sys.stderr)
-        sys.exit(1)
+        return False
 
     default_cfg = cfg.get("default")
 

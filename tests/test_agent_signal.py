@@ -14,7 +14,9 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 sys.path.insert(0, str(Path(__file__).parent))
 import agent_signal
 import arbiter
+import game_sync
 import govee
+import weather_sync
 from helpers import StateDirMixin
 
 
@@ -3090,6 +3092,239 @@ class TestStaleMarkers(StateDirMixin, unittest.TestCase):
             with mock.patch("ctypes.WinDLL", side_effect=Exception("test error")):
                 result = agent_signal.find_claude_pid()
                 self.assertIsNone(result)
+
+
+class TestSweepAndRestore(StateDirMixin, unittest.TestCase):
+    """Test sweep_and_restore() behavior."""
+
+    def setUp(self):
+        """Create a temp config and state directory for each test."""
+        super().setUp()
+        self.config_path = self.state_dir / "config.json"
+        self.config = {
+            "devices": [
+                {"name": "left", "ip": "192.168.1.50"},
+                {"name": "right", "ip": "192.168.1.51"},
+            ],
+            "signal": {
+                "color": "#ff6a00",
+                "brightness": 100,
+                "blink": False,
+            },
+        }
+        self.config_path.write_text(json.dumps(self.config))
+
+    @mock.patch("agent_signal.govee.status")
+    @mock.patch("agent_signal.govee.turn")
+    @mock.patch("agent_signal.govee.brightness")
+    @mock.patch("agent_signal.govee.color")
+    def test_sweep_and_restore_zero_markers_restores(
+        self, mock_color, mock_brightness, mock_turn, mock_status
+    ):
+        """signal active + zero markers -> sweep_and_restore() restores."""
+        mock_status.return_value = {
+            "msg": {"data": {"on": True, "brightness": 50, "color": {"r": 255, "g": 255, "b": 255}}}
+        }
+
+        # Create signal file (saved_state.json) but no session markers
+        signal_path = arbiter.signal_file()
+        signal_path.parent.mkdir(parents=True, exist_ok=True)
+        signal_path.write_text("[]")
+
+        # Run sweep_and_restore
+        result = agent_signal.sweep_and_restore(config_path=str(self.config_path))
+
+        # Should have restored
+        self.assertTrue(result)
+        mock_color.assert_called()
+        # Signal file should be gone
+        self.assertFalse(signal_path.exists())
+
+    @mock.patch("agent_signal.govee.status")
+    @mock.patch("agent_signal.govee.turn")
+    @mock.patch("agent_signal.govee.brightness")
+    @mock.patch("agent_signal.govee.color")
+    @mock.patch("agent_signal.pid_alive", return_value=True)
+    def test_sweep_and_restore_live_marker_no_restore(
+        self, mock_pid_alive, mock_color, mock_brightness, mock_turn, mock_status
+    ):
+        """signal active + one live marker -> no govee calls, returns False."""
+        mock_status.return_value = {
+            "msg": {"data": {"on": True, "brightness": 50, "color": {"r": 255, "g": 255, "b": 255}}}
+        }
+
+        # Create signal file and a live session marker
+        signal_path = arbiter.signal_file()
+        signal_path.parent.mkdir(parents=True, exist_ok=True)
+        signal_path.write_text("[]")
+
+        sessions_dir = agent_signal.signal_sessions_dir()
+        sessions_dir.mkdir(parents=True, exist_ok=True)
+        from datetime import datetime, timezone
+        now = datetime.now(timezone.utc).isoformat()
+        (sessions_dir / "test-session").write_text(
+            json.dumps({"pid": os.getpid(), "created": now})
+        )
+
+        # Run sweep_and_restore
+        result = agent_signal.sweep_and_restore(config_path=str(self.config_path))
+
+        # Should NOT have restored
+        self.assertFalse(result)
+        mock_color.assert_not_called()
+        # Signal file should still be there
+        self.assertTrue(signal_path.exists())
+
+    @mock.patch("agent_signal.govee.status")
+    @mock.patch("agent_signal.govee.turn")
+    @mock.patch("agent_signal.govee.brightness")
+    @mock.patch("agent_signal.govee.color")
+    @mock.patch("agent_signal.pid_alive", return_value=False)
+    def test_sweep_and_restore_dead_pid_restores(
+        self, mock_pid_alive, mock_color, mock_brightness, mock_turn, mock_status
+    ):
+        """signal active + one marker with a dead pid -> marker deleted, restore happens."""
+        mock_status.return_value = {
+            "msg": {"data": {"on": True, "brightness": 50, "color": {"r": 255, "g": 255, "b": 255}}}
+        }
+
+        # Create signal file and a session marker with a dead pid
+        signal_path = arbiter.signal_file()
+        signal_path.parent.mkdir(parents=True, exist_ok=True)
+        signal_path.write_text("[]")
+
+        sessions_dir = agent_signal.signal_sessions_dir()
+        sessions_dir.mkdir(parents=True, exist_ok=True)
+        from datetime import datetime, timezone
+        now = datetime.now(timezone.utc).isoformat()
+        (sessions_dir / "test-session").write_text(
+            json.dumps({"pid": 99999, "created": now})
+        )
+
+        # Run sweep_and_restore
+        result = agent_signal.sweep_and_restore(config_path=str(self.config_path))
+
+        # Should have restored
+        self.assertTrue(result)
+        mock_color.assert_called()
+        # Marker should be deleted
+        self.assertFalse((sessions_dir / "test-session").exists())
+        # Signal file should be gone
+        self.assertFalse(signal_path.exists())
+
+    @mock.patch("agent_signal._marker_is_stale")
+    def test_get_active_session_markers_calls_marker_is_stale(self, mock_is_stale):
+        """get_active_session_markers calls _marker_is_stale."""
+        mock_is_stale.return_value = False
+
+        sessions_dir = agent_signal.signal_sessions_dir()
+        sessions_dir.mkdir(parents=True, exist_ok=True)
+        from datetime import datetime, timezone
+        now = datetime.now(timezone.utc).isoformat()
+        (sessions_dir / "test-session").write_text(now)
+
+        agent_signal.get_active_session_markers()
+
+        mock_is_stale.assert_called()
+
+    @mock.patch("agent_signal._marker_is_stale")
+    def test_sweep_stale_markers_calls_marker_is_stale(self, mock_is_stale):
+        """sweep_stale_markers calls _marker_is_stale."""
+        mock_is_stale.return_value = True
+
+        sessions_dir = agent_signal.signal_sessions_dir()
+        sessions_dir.mkdir(parents=True, exist_ok=True)
+        from datetime import datetime, timezone
+        now = datetime.now(timezone.utc).isoformat()
+        (sessions_dir / "test-session").write_text(now)
+
+        agent_signal.sweep_stale_markers()
+
+        mock_is_stale.assert_called()
+
+    @mock.patch("agent_signal.govee.status")
+    @mock.patch("agent_signal.govee.turn")
+    @mock.patch("agent_signal.govee.brightness")
+    @mock.patch("agent_signal.govee.color")
+    def test_sweep_and_restore_no_devices_returns_false(
+        self, mock_color, mock_brightness, mock_turn, mock_status
+    ):
+        """sweep_and_restore with no devices returns False (no SystemExit)."""
+        # Create config with no devices
+        no_devices_config = {
+            "signal": {
+                "color": "#ff6a00",
+                "brightness": 100,
+                "blink": False,
+            },
+        }
+        no_devices_path = self.state_dir / "config_no_devices.json"
+        no_devices_path.write_text(json.dumps(no_devices_config))
+
+        # Create signal file
+        signal_path = arbiter.signal_file()
+        signal_path.parent.mkdir(parents=True, exist_ok=True)
+        signal_path.write_text("[]")
+
+        # Run sweep_and_restore - should return False, not raise SystemExit
+        result = agent_signal.sweep_and_restore(config_path=str(no_devices_path))
+        self.assertFalse(result)
+
+
+class TestSweepThrottle(unittest.TestCase):
+    """Test sweep_and_restore throttle in game_sync and weather_sync loops."""
+
+    @mock.patch("agent_signal.sweep_and_restore")
+    @mock.patch("game_sync.running_processes")
+    @mock.patch("govee.color")
+    @mock.patch("govee.brightness")
+    @mock.patch("time.monotonic")
+    @mock.patch("time.sleep")
+    def test_game_sync_sweep_throttle(
+        self, mock_sleep, mock_monotonic, mock_brightness, mock_color, mock_processes, mock_sweep
+    ):
+        """game_sync loop calls sweep_and_restore once while blocked < 60s, again after 60s."""
+        import arbiter
+
+        # Create a temp state dir
+        import tempfile
+        from pathlib import Path
+        tmpdir = tempfile.TemporaryDirectory()
+        self.addCleanup(tmpdir.cleanup)
+        state_dir = Path(tmpdir.name)
+
+        with mock.patch.object(arbiter, "STATE_DIR", state_dir):
+            # Create signal file
+            signal_path = arbiter.signal_file()
+            signal_path.parent.mkdir(parents=True, exist_ok=True)
+            signal_path.write_text("[]")
+
+            mock_processes.return_value = {"testgame.exe"}
+            config = {
+                "devices": [{"name": "left", "ip": "192.168.1.50"}],
+                "games": [
+                    {"name": "Test Game", "exe": "testgame.exe", "color": "red", "brightness": 80},
+                ],
+                "default": {"color": "white", "brightness": 40},
+            }
+
+            # Simulate time: 0, 10, 20, 30, 40, 50, 60, 70
+            mock_monotonic.side_effect = [0, 10, 20, 30, 40, 50, 60, 70]
+
+            call_count = [0]
+            def sleep_side_effect(seconds):
+                call_count[0] += 1
+                if call_count[0] >= 7:
+                    raise KeyboardInterrupt()
+            mock_sleep.side_effect = sleep_side_effect
+
+            try:
+                game_sync.run(config, interval=1)
+            except KeyboardInterrupt:
+                pass
+
+            # sweep_and_restore should be called twice: at t=0 and t=60
+            self.assertEqual(mock_sweep.call_count, 2)
 
 
 if __name__ == "__main__":
