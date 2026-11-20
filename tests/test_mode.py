@@ -230,7 +230,7 @@ class TestSetModePermissionError(StateDirMixin, unittest.TestCase):
 
 
 class TestNoRealPopen(unittest.TestCase):
-    """Test that the Popen guard in tests/__init__.py works."""
+    """Test that the Popen guard in tests/helpers.py works."""
 
     def test_popen_guard_raises(self):
         """Calling subprocess.Popen without a mock raises AssertionError."""

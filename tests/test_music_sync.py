@@ -2646,13 +2646,15 @@ class TestModeSwitchMusic(StateDirMixin, unittest.TestCase):
         # Set mode to music first
         arbiter.set_mode("music")
 
-        # Create a fake running process
-        music_sync.PID_FILE.write_text("12345")
+        with mock.patch.object(music_sync, "PID_FILE", self.state_dir / "music_sync.pid"):
+            with mock.patch.object(music_sync, "STOP_FLAG_FILE", self.state_dir / "music_stop"):
+                # Create a fake running process
+                music_sync.PID_FILE.write_text("12345")
 
-        with mock.patch.object(music_sync, "_is_process_alive", return_value=False):
-            with mock.patch.object(arbiter, "music_active", return_value=True):
-                with mock.patch("builtins.print"):
-                    music_sync.cmd_stop()
+                with mock.patch.object(music_sync, "_is_process_alive", return_value=False):
+                    with mock.patch.object(arbiter, "music_active", return_value=True):
+                        with mock.patch("builtins.print"):
+                            music_sync.cmd_stop()
 
         self.assertEqual(arbiter.get_mode(), "off",
                         "cmd_stop should set mode to 'off'")
