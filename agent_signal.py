@@ -31,7 +31,7 @@ def find_claude_pid():
 
     On Windows, uses kernel32 CreateToolhelp32Snapshot / Process32FirstW /
     Process32NextW to enumerate processes and find the first ancestor whose
-    exe name is claude.exe or node.exe (case-insensitive).
+    exe name is claude.exe or node.exe (case-insensitive, exact match).
     Returns None on any error or on non-Windows.
     """
     if platform.system() != "Windows":
@@ -45,8 +45,6 @@ def find_claude_pid():
 
         # Constants
         TH32CS_SNAPPROCESS = 0x00000002
-        PROCESS_QUERY_LIMITED_INFORMATION = 0x1000
-        STILL_ACTIVE = 259
 
         # PROCESSENTRY32W structure
         class PROCESSENTRY32W(ctypes.Structure):
@@ -54,7 +52,7 @@ def find_claude_pid():
                 ("dwSize", wintypes.DWORD),
                 ("cntUsage", wintypes.DWORD),
                 ("th32ProcessID", wintypes.DWORD),
-                ("th32DefaultHeapID", wintypes.POINTER(wintypes.ULONG)),
+                ("th32DefaultHeapID", ctypes.c_size_t),
                 ("th32ModuleID", wintypes.DWORD),
                 ("cntThreads", wintypes.DWORD),
                 ("th32ParentProcessID", wintypes.DWORD),
@@ -63,48 +61,53 @@ def find_claude_pid():
                 ("szExeFile", wintypes.WCHAR * 260),
             ]
 
-        # Get current process ID
-        current_pid = os.getpid()
+        # Set restype/argtypes for kernel32 functions
+        kernel32.CreateToolhelp32Snapshot.restype = wintypes.HANDLE
+        kernel32.CreateToolhelp32Snapshot.argtypes = [wintypes.DWORD, wintypes.DWORD]
+        kernel32.Process32FirstW.restype = wintypes.BOOL
+        kernel32.Process32FirstW.argtypes = [wintypes.HANDLE, ctypes.POINTER(PROCESSENTRY32W)]
+        kernel32.Process32NextW.restype = wintypes.BOOL
+        kernel32.Process32NextW.argtypes = [wintypes.HANDLE, ctypes.POINTER(PROCESSENTRY32W)]
+        kernel32.CloseHandle.restype = wintypes.BOOL
+        kernel32.CloseHandle.argtypes = [wintypes.HANDLE]
 
-        # Walk up the parent chain
-        visited = set()
-        while current_pid not in visited:
-            visited.add(current_pid)
+        # Take ONE snapshot and build a dict of pid -> (parent_pid, exe_name)
+        snapshot = kernel32.CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0)
+        if snapshot == wintypes.HANDLE(-1).value:
+            return None
 
-            # Take a snapshot of all processes
-            snapshot = kernel32.CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0)
-            if snapshot == wintypes.HANDLE(-1).value:
+        try:
+            pe = PROCESSENTRY32W()
+            pe.dwSize = ctypes.sizeof(PROCESSENTRY32W)
+
+            if not kernel32.Process32FirstW(snapshot, ctypes.byref(pe)):
                 return None
 
-            try:
-                pe = PROCESSENTRY32W()
-                pe.dwSize = ctypes.sizeof(PROCESSENTRY32W)
+            # Build process tree map
+            process_map = {}
+            while True:
+                pid = pe.th32ProcessID
+                parent_pid = pe.th32ParentProcessID
+                exe_name = pe.szExeFile.lower()
+                process_map[pid] = (parent_pid, exe_name)
 
-                if not kernel32.Process32FirstW(snapshot, ctypes.byref(pe)):
+                if not kernel32.Process32NextW(snapshot, ctypes.byref(pe)):
                     break
+        finally:
+            kernel32.CloseHandle(snapshot)
 
-                found = False
-                while True:
-                    if pe.th32ProcessID == current_pid:
-                        # Found our process, check exe name
-                        exe_name = pe.szExeFile.lower()
-                        if "claude.exe" in exe_name or "node.exe" in exe_name:
-                            return pe.th32ProcessID
-                        # Move to parent
-                        current_pid = pe.th32ParentProcessID
-                        found = True
-                        break
+        # Walk up the parent chain from our own PID
+        current_pid = os.getpid()
+        visited = set()
+        while current_pid in process_map and current_pid not in visited:
+            visited.add(current_pid)
+            parent_pid, exe_name = process_map[current_pid]
 
-                    if not kernel32.Process32NextW(snapshot, ctypes.byref(pe)):
-                        break
+            # Check if this process is claude.exe or node.exe (exact match)
+            if exe_name == "claude.exe" or exe_name == "node.exe":
+                return current_pid
 
-                if not found:
-                    break
-            finally:
-                kernel32.CloseHandle(snapshot)
-
-            if current_pid == 0:
-                break
+            current_pid = parent_pid
 
         return None
     except Exception:
@@ -227,6 +230,37 @@ def remove_session_marker(session_id, dry_run=False):
     return False
 
 
+def _marker_is_stale(marker_path, now, max_age_hours):
+    """Check if a session marker is stale (dead pid or too old).
+
+    Returns True if the marker is stale, False if it's still active.
+    """
+    try:
+        content = marker_path.read_text().strip()
+        # Try to parse as JSON (new format with pid)
+        try:
+            marker_data = json.loads(content)
+            pid = marker_data.get("pid")
+            created_str = marker_data.get("created", content)
+        except json.JSONDecodeError:
+            # Old format: just an ISO timestamp
+            pid = None
+            created_str = content
+
+        marker_time = datetime.fromisoformat(created_str)
+        age_hours = (now - marker_time).total_seconds() / 3600
+
+        # Check if pid is dead
+        if pid is not None and not pid_alive(pid):
+            return True
+        if age_hours > max_age_hours:
+            return True
+        return False
+    except (ValueError, OSError):
+        # Corrupt marker, treat as stale
+        return True
+
+
 def get_active_session_markers(max_age_hours=None):
     """Get a list of non-stale session marker names.
 
@@ -248,31 +282,10 @@ def get_active_session_markers(max_age_hours=None):
     for marker_path in sessions_dir.iterdir():
         if not marker_path.is_file():
             continue
-        try:
-            content = marker_path.read_text().strip()
-            # Try to parse as JSON (new format with pid)
-            try:
-                marker_data = json.loads(content)
-                pid = marker_data.get("pid")
-                created_str = marker_data.get("created", content)
-            except json.JSONDecodeError:
-                # Old format: just an ISO timestamp
-                pid = None
-                created_str = content
-
-            marker_time = datetime.fromisoformat(created_str)
-            age_hours = (now - marker_time).total_seconds() / 3600
-
-            # Check if pid is dead
-            if pid is not None and not pid_alive(pid):
-                stale.append(marker_path)
-            elif age_hours > max_age_hours:
-                stale.append(marker_path)
-            else:
-                active.append(marker_path.name)
-        except (ValueError, OSError):
-            # Corrupt marker, treat as stale
+        if _marker_is_stale(marker_path, now, max_age_hours):
             stale.append(marker_path)
+        else:
+            active.append(marker_path.name)
 
     # Delete stale markers
     for marker_path in stale:
@@ -337,32 +350,7 @@ def sweep_stale_markers(max_age_hours=None, dry_run=False):
     for marker_path in sessions_dir.iterdir():
         if not marker_path.is_file():
             continue
-        try:
-            content = marker_path.read_text().strip()
-            # Try to parse as JSON (new format with pid)
-            try:
-                marker_data = json.loads(content)
-                pid = marker_data.get("pid")
-                created_str = marker_data.get("created", content)
-            except json.JSONDecodeError:
-                # Old format: just an ISO timestamp
-                pid = None
-                created_str = content
-
-            marker_time = datetime.fromisoformat(created_str)
-            age_hours = (now - marker_time).total_seconds() / 3600
-
-            # Check if pid is dead or too old
-            if pid is not None and not pid_alive(pid):
-                if not dry_run:
-                    marker_path.unlink()
-                stale_count += 1
-            elif age_hours > max_age_hours:
-                if not dry_run:
-                    marker_path.unlink()
-                stale_count += 1
-        except (ValueError, OSError):
-            # Corrupt marker, treat as stale
+        if _marker_is_stale(marker_path, now, max_age_hours):
             if not dry_run:
                 try:
                     marker_path.unlink()
@@ -371,6 +359,77 @@ def sweep_stale_markers(max_age_hours=None, dry_run=False):
             stale_count += 1
 
     return stale_count
+
+
+def sweep_and_restore(config_path=None, dry_run=False):
+    """Sweep stale markers and restore if no active markers remain.
+
+    Sweeps stale markers (dead pid or too old). If a signal is active and
+    no active markers remain (including when the sweep count is 0), restores
+    the lights exactly like a normal clear.
+
+    Returns True if a restore happened, False otherwise.
+    """
+    if config_path is None:
+        config_path = str(Path(__file__).parent / "config.json")
+
+    cfg = load_config(config_path)
+    signal_cfg = get_signal_config(cfg)
+    max_age_hours = signal_cfg.get("marker_max_age_hours", MARKER_MAX_AGE_HOURS_DEFAULT)
+
+    stale_count = sweep_stale_markers(max_age_hours, dry_run=dry_run)
+
+    signal_path = arbiter.signal_file()
+    if not signal_path.exists():
+        # No signal active, nothing to restore
+        if stale_count > 0:
+            log_signal_event("clear", f"stale-swept n={stale_count}")
+            print(f"clear stale-swept n={stale_count}")
+        return False
+
+    # Check if any active markers remain
+    active = get_active_session_markers(max_age_hours)
+    if active:
+        # Other sessions still waiting
+        if stale_count > 0:
+            log_signal_event("clear", f"stale-swept n={stale_count}")
+            print(f"clear stale-swept n={stale_count}")
+        return False
+
+    # No active markers remain, restore
+    devices = cfg.get("devices", [])
+    if not devices:
+        print("no devices in config", file=sys.stderr)
+        sys.exit(1)
+
+    default_cfg = cfg.get("default")
+
+    if not acquire_lock(dry_run=dry_run):
+        log_signal_event("clear", "lock-timeout")
+        return False
+
+    try:
+        # Re-check under the lock
+        if not signal_path.exists():
+            log_signal_event("clear", "no-signal")
+            print("no active signal; nothing to do")
+            return False
+
+        saved = load_saved_state()
+        try:
+            restore_state(devices, signal_cfg, cfg, default_cfg=default_cfg, dry_run=dry_run, saved=saved)
+        except OSError as e:
+            print(f"warning: could not restore lights: {e}", file=sys.stderr)
+            log_signal_event("clear", "oserror")
+            return False
+        delete_saved_state(dry_run=dry_run, quiet=not saved)
+        delete_all_session_markers(dry_run=dry_run)
+        log_signal_event("clear", "applied")
+        print("signal cleared")
+        return True
+    finally:
+        release_lock(dry_run=dry_run)
+
 
 DEFAULT_SIGNAL = {
     "color": "#ff6a00",
@@ -857,47 +916,7 @@ def cmd_clear(args):
     # Handle --stale flag: sweep stale markers and restore if none remain
     stale_flag = getattr(args, "stale", False)
     if stale_flag is True:
-        cfg = load_config(args.config)
-        signal_cfg = get_signal_config(cfg)
-        max_age_hours = signal_cfg.get("marker_max_age_hours", MARKER_MAX_AGE_HOURS_DEFAULT)
-
-        stale_count = sweep_stale_markers(max_age_hours, dry_run=args.dry_run)
-        log_signal_event("clear", f"stale-swept n={stale_count}", hook_input)
-        print(f"clear stale-swept n={stale_count}")
-
-        # If no active markers remain and a signal is active, restore
-        if stale_count > 0 and signal_path.exists():
-            active = get_active_session_markers(max_age_hours)
-            if not active:
-                devices = cfg.get("devices", [])
-                if not devices:
-                    print("no devices in config", file=sys.stderr)
-                    sys.exit(1)
-                default_cfg = cfg.get("default")
-
-                if not acquire_lock(dry_run=args.dry_run):
-                    log_signal_event("clear", "lock-timeout", hook_input)
-                    return
-
-                try:
-                    if not signal_path.exists():
-                        log_signal_event("clear", "no-signal", hook_input)
-                        print("no active signal; nothing to do")
-                        return
-
-                    saved = load_saved_state()
-                    try:
-                        restore_state(devices, signal_cfg, cfg, default_cfg=default_cfg, dry_run=args.dry_run, saved=saved)
-                    except OSError as e:
-                        print(f"warning: could not restore lights: {e}", file=sys.stderr)
-                        log_signal_event("clear", "oserror", hook_input)
-                        return
-                    delete_saved_state(dry_run=args.dry_run, quiet=not saved)
-                    delete_all_session_markers(dry_run=args.dry_run)
-                    log_signal_event("clear", "applied", hook_input)
-                    print("signal cleared")
-                finally:
-                    release_lock(dry_run=args.dry_run)
+        sweep_and_restore(config_path=args.config, dry_run=args.dry_run)
         return
 
     # Fast path: if no saved state, nothing to do (no lock needed)

@@ -411,6 +411,7 @@ def run(config, once=False, interval=900, dry_run=False, rng=None, time_fn=None)
     next_fetch_at = None  # next scheduled fetch time (when fetch_on_the_hour is true)
     last_frame_error_time = None  # for rate-limiting frame error logs
     current_is_day = None  # track day/night for pattern switching
+    last_sweep_time = None  # for rate-limiting sweep_and_restore
 
     # Thunderstorm flash state
     next_flash_time = None
@@ -433,10 +434,12 @@ def run(config, once=False, interval=900, dry_run=False, rng=None, time_fn=None)
             if once:
                 break
             # Sweep stale session markers at most once every 60s while blocked
-            try:
-                agent_signal.sweep_stale_markers()
-            except Exception:
-                pass
+            if last_sweep_time is None or (now - last_sweep_time) >= 60:
+                try:
+                    agent_signal.sweep_and_restore()
+                    last_sweep_time = now
+                except Exception:
+                    pass
             time.sleep(min(interval, BLOCKED_POLL_SECONDS))
             continue
 

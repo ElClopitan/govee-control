@@ -432,12 +432,20 @@ class TestSignalPriority(StateDirMixin, unittest.TestCase):
     @mock.patch("game_sync.running_processes")
     @mock.patch("govee.color")
     @mock.patch("govee.brightness")
-    def test_signal_active_skips_send(self, mock_brightness, mock_color, mock_processes):
+    @mock.patch("agent_signal.pid_alive")
+    def test_signal_active_skips_send(self, mock_pid_alive, mock_brightness, mock_color, mock_processes):
         """When signal is active, game sync does not send to lights."""
         import arbiter
-        # Create signal file
+        import agent_signal
+        from datetime import datetime, timezone
+        # Create signal file and a session marker with a recent timestamp
         (arbiter.STATE_DIR / "saved_state.json").write_text("[]")
+        sessions_dir = agent_signal.signal_sessions_dir()
+        sessions_dir.mkdir(parents=True, exist_ok=True)
+        now = datetime.now(timezone.utc).isoformat()
+        (sessions_dir / "test-session").write_text('{"pid": 12345, "created": "' + now + '"}')
 
+        mock_pid_alive.return_value = True
         mock_processes.return_value = {"testgame.exe"}
         config = self._make_config()
 
@@ -451,13 +459,21 @@ class TestSignalPriority(StateDirMixin, unittest.TestCase):
     @mock.patch("govee.color")
     @mock.patch("govee.brightness")
     @mock.patch("time.sleep")
-    def test_signal_cleared_reapplies_profile(self, mock_sleep, mock_brightness, mock_color, mock_processes):
+    @mock.patch("agent_signal.pid_alive")
+    def test_signal_cleared_reapplies_profile(self, mock_pid_alive, mock_sleep, mock_brightness, mock_color, mock_processes):
         """After signal clears, game sync re-applies profile even if unchanged."""
         import arbiter
+        import agent_signal
+        from datetime import datetime, timezone
 
-        # Start with signal active
+        # Start with signal active and a session marker with a recent timestamp
         (arbiter.STATE_DIR / "saved_state.json").write_text("[]")
+        sessions_dir = agent_signal.signal_sessions_dir()
+        sessions_dir.mkdir(parents=True, exist_ok=True)
+        now = datetime.now(timezone.utc).isoformat()
+        (sessions_dir / "test-session").write_text('{"pid": 12345, "created": "' + now + '"}')
 
+        mock_pid_alive.return_value = True
         mock_processes.return_value = {"testgame.exe"}
         config = self._make_config()
 
@@ -467,8 +483,9 @@ class TestSignalPriority(StateDirMixin, unittest.TestCase):
         def sleep_side_effect(seconds):
             call_count[0] += 1
             if call_count[0] == 1:
-                # Remove signal file between iterations
+                # Remove signal file and session marker between iterations
                 (arbiter.STATE_DIR / "saved_state.json").unlink()
+                (sessions_dir / "test-session").unlink()
             if call_count[0] >= 2:
                 raise KeyboardInterrupt()
         mock_sleep.side_effect = sleep_side_effect
@@ -615,7 +632,8 @@ class TestGameActiveState(StateDirMixin, unittest.TestCase):
     @mock.patch("govee.color")
     @mock.patch("govee.brightness")
     @mock.patch("time.sleep")
-    def test_reapply_after_signal_clear_survives_failure(self, mock_sleep, mock_brightness, mock_color, mock_processes):
+    @mock.patch("agent_signal.pid_alive")
+    def test_reapply_after_signal_clear_survives_failure(self, mock_pid_alive, mock_sleep, mock_brightness, mock_color, mock_processes):
         """After signal clears, re-apply even if first attempt fails.
 
         Pass 1: applies profile
@@ -625,7 +643,10 @@ class TestGameActiveState(StateDirMixin, unittest.TestCase):
         Total: apply_profile called 3 times (1, 3, 4)
         """
         import arbiter
+        import agent_signal
+        from datetime import datetime, timezone
 
+        mock_pid_alive.return_value = True
         mock_processes.return_value = {"testgame.exe"}
         config = self._make_config()
 
@@ -635,11 +656,18 @@ class TestGameActiveState(StateDirMixin, unittest.TestCase):
         def sleep_side_effect(seconds):
             sleep_count[0] += 1
             if sleep_count[0] == 1:
-                # After pass 1, activate signal
+                # After pass 1, activate signal with a session marker with a recent timestamp
                 (arbiter.STATE_DIR / "saved_state.json").write_text("[]")
+                sessions_dir = agent_signal.signal_sessions_dir()
+                sessions_dir.mkdir(parents=True, exist_ok=True)
+                now = datetime.now(timezone.utc).isoformat()
+                (sessions_dir / "test-session").write_text('{"pid": 12345, "created": "' + now + '"}')
             elif sleep_count[0] == 2:
-                # After pass 2 (signal active), remove signal
+                # After pass 2 (signal active), remove signal and marker
                 (arbiter.STATE_DIR / "saved_state.json").unlink()
+                sessions_dir = agent_signal.signal_sessions_dir()
+                if (sessions_dir / "test-session").exists():
+                    (sessions_dir / "test-session").unlink()
             elif sleep_count[0] == 4:
                 # After pass 4 (successful re-apply), exit
                 raise KeyboardInterrupt()

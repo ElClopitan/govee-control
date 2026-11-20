@@ -130,6 +130,7 @@ def run(config, interval=5, once=False, dry_run=False):
     last_profile_name = None
     signal_was_active = False
     music_was_active = False
+    last_sweep_time = None  # for rate-limiting sweep_and_restore
 
     try:
         while True:
@@ -162,10 +163,13 @@ def run(config, interval=5, once=False, dry_run=False):
                 # the signal clears always sends, even if the profile hasn't changed.
                 last_profile_name = None
                 # Sweep stale session markers at most once every 60s while blocked
-                try:
-                    agent_signal.sweep_stale_markers()
-                except Exception:
-                    pass
+                now = time.time()
+                if last_sweep_time is None or (now - last_sweep_time) >= 60:
+                    try:
+                        agent_signal.sweep_and_restore()
+                        last_sweep_time = now
+                    except Exception:
+                        pass
             # Check music priority (second highest)
             elif arbiter.music_active():
                 if not music_was_active:
