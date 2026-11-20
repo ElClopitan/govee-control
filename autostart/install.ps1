@@ -13,9 +13,12 @@
 .PARAMETER DryRun
     Print what would be done without actually registering or removing tasks.
 
+.PARAMETER NoStart
+    Register the tasks but do not start them immediately.
+
 .EXAMPLE
     .\install.ps1
-    Installs both tasks.
+    Installs both tasks and starts them.
 
 .EXAMPLE
     .\install.ps1 -DryRun
@@ -28,7 +31,8 @@
 
 param(
     [switch]$Uninstall,
-    [switch]$DryRun
+    [switch]$DryRun,
+    [switch]$NoStart
 )
 
 $ErrorActionPreference = "Stop"
@@ -44,6 +48,9 @@ try {
     Write-Error "pythonw.exe not found in PATH. Install Python or add it to PATH."
     exit 1
 }
+
+# Current user for the trigger and registration
+$user = whoami
 
 $tasks = @(
     @{
@@ -67,6 +74,11 @@ if ($Uninstall) {
             Write-Host "[dry-run] Would remove task: $($t.Name)"
         } else {
             try {
+                Stop-ScheduledTask -TaskName $t.Name -ErrorAction SilentlyContinue
+            } catch {
+                # Task may not be running; ignore
+            }
+            try {
                 Unregister-ScheduledTask -TaskName $t.Name -Confirm:$false
                 Write-Host "Removed task: $($t.Name)"
             } catch {
@@ -82,8 +94,17 @@ if ($Uninstall) {
 } else {
     Write-Host "Installing Govee autostart tasks..."
 
+    # Ensure state directory exists for log files
+    if (-not $DryRun) {
+        $stateDir = Join-Path $repoRoot "state"
+        if (-not (Test-Path $stateDir)) {
+            New-Item -ItemType Directory -Path $stateDir -Force | Out-Null
+            Write-Host "Created state directory: $stateDir"
+        }
+    }
+
     # Build trigger: at logon for current user
-    $trigger = New-ScheduledTaskTrigger -AtLogOn
+    $trigger = New-ScheduledTaskTrigger -AtLogOn -User $user
 
     # Build settings: no time limit, restart on failure, don't start if running
     $settings = New-ScheduledTaskSettingsSet `
@@ -92,39 +113,62 @@ if ($Uninstall) {
         -RestartInterval (New-TimeSpan -Minutes 1) `
         -MultipleInstances IgnoreNew
 
+    $anyFailed = $false
+
     foreach ($t in $tasks) {
         $arg = "$($t.Script) --log-file $($t.LogFile)"
         if ($DryRun) {
             Write-Host "[dry-run] Would register task: $($t.Name)"
-            Write-Host "  Trigger: AtLogOn (current user)"
+            Write-Host "  Trigger: AtLogOn, user $user"
             Write-Host "  Execute: $pythonw"
             Write-Host "  Argument: $arg"
             Write-Host "  WorkingDirectory: $repoRoot"
             Write-Host "  Settings: no time limit, restart 3x on failure (1 min apart), ignore new instances"
+            if (-not $NoStart) {
+                Write-Host "  Would start task immediately after registration"
+            }
         } else {
-            $action = New-ScheduledTaskAction `
-                -Execute $pythonw `
-                -Argument $arg `
-                -WorkingDirectory $repoRoot
+            try {
+                $action = New-ScheduledTaskAction `
+                    -Execute $pythonw `
+                    -Argument $arg `
+                    -WorkingDirectory $repoRoot
 
-            Register-ScheduledTask `
-                -TaskName $t.Name `
-                -Trigger $trigger `
-                -Action $action `
-                -Settings $settings `
-                -Description $t.Description `
-                -User (whoami) `
-                -RunLevel Limited `
-                -Force
+                Register-ScheduledTask `
+                    -TaskName $t.Name `
+                    -Trigger $trigger `
+                    -Action $action `
+                    -Settings $settings `
+                    -Description $t.Description `
+                    -User $user `
+                    -RunLevel Limited `
+                    -Force
 
-            Write-Host "Registered task: $($t.Name)"
+                Write-Host "Registered task: $($t.Name)"
+
+                if (-not $NoStart) {
+                    Start-ScheduledTask -TaskName $t.Name
+                    Write-Host "Started task: $($t.Name)"
+                }
+            } catch {
+                Write-Host "ERROR: could not register `"$($t.Name)`": $($_.Exception.Message)" -ForegroundColor Red
+                $anyFailed = $true
+            }
         }
     }
 
     if ($DryRun) {
         Write-Host "[dry-run] Done (no changes made)."
     } else {
-        Write-Host "Done. Tasks will run at your next logon."
-        Write-Host "To test now: Start-ScheduledTask -TaskName `"Govee weather sync`""
+        if ($anyFailed) {
+            Write-Host "Some tasks failed to register. Check the errors above." -ForegroundColor Red
+            exit 1
+        }
+        if ($NoStart) {
+            Write-Host "Done. Tasks will run at your next logon."
+        } else {
+            Write-Host "Done. Tasks are running now and will run at each logon."
+            Write-Host "To check status: Get-ScheduledTask -TaskName 'Govee*' | Format-Table TaskName, State"
+        }
     }
 }

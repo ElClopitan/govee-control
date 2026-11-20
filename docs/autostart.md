@@ -27,10 +27,19 @@ cd C:\path\to\Govee
 powershell -NoProfile -File autostart\install.ps1
 ```
 
+This registers the tasks and starts them immediately. The tasks will also run
+at each logon.
+
 To preview what would be installed without making changes:
 
 ```powershell
 powershell -NoProfile -File autostart\install.ps1 -DryRun
+```
+
+To register the tasks but not start them immediately:
+
+```powershell
+powershell -NoProfile -File autostart\install.ps1 -NoStart
 ```
 
 ## Uninstall
@@ -38,6 +47,8 @@ powershell -NoProfile -File autostart\install.ps1 -DryRun
 ```powershell
 powershell -NoProfile -File autostart\install.ps1 -Uninstall
 ```
+
+This stops any running tasks and removes them.
 
 ## Check status
 
@@ -95,3 +106,20 @@ Disable-ScheduledTask -TaskName "Govee game sync"
 ```
 
 Re-enable with `Enable-ScheduledTask`.
+
+## Troubleshooting
+
+If the tasks don't seem to be running:
+
+1. Check that the tasks are registered and enabled:
+   ```powershell
+   Get-ScheduledTask -TaskName "Govee*" | Format-Table TaskName, State, Enabled
+   ```
+
+2. Check the log files for errors:
+   - `state/weather_sync.log`
+   - `state/game_sync.log`
+
+3. If registration failed with "Access is denied", make sure you're running
+   the install script as a normal user (not admin) and that the script is
+   using the `-User` parameter with the AtLogOn trigger.
