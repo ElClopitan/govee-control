@@ -787,11 +787,27 @@ def restore_state(devices, signal_cfg, cfg, default_cfg=None, dry_run=False, sav
     """Restore saved state. Returns True if state was restored, False if none.
 
     If saved is None, loads it from the saved state file.
+    If the current mode is "off", turns all devices off instead of restoring.
     """
     if saved is None:
         saved = load_saved_state()
 
     if saved is not None:
+        # Check current mode: if "off", turn all devices off instead of restoring
+        mode = arbiter.get_mode()
+        if mode == "off":
+            for dev in devices:
+                ip = dev["ip"]
+                if not dry_run:
+                    try:
+                        govee.turn(ip, False)
+                    except OSError as e:
+                        print(f"warning: could not turn off {ip}: {e}", file=sys.stderr)
+                else:
+                    print(f"[dry-run] would turn off {ip}")
+            print("restored saved state")
+            return True
+
         # Build a map of saved states by IP
         saved_by_ip = {s["ip"]: s for s in saved}
 

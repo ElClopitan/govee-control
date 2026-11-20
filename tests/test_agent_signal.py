@@ -401,6 +401,197 @@ class TestNeedsInputOffMode(StateDirMixin, unittest.TestCase):
 
 
 @mock.patch("agent_signal.time.sleep")
+class TestRestoreFollowsMode(StateDirMixin, unittest.TestCase):
+    """Test that restore follows the current mode (off mode turns strips off)."""
+
+    def setUp(self):
+        super().setUp()
+        self.config_path = self.state_dir / "config.json"
+        self.config = {
+            "devices": [
+                {"name": "left", "ip": "192.168.1.50"},
+                {"name": "right", "ip": "192.168.1.51"},
+            ],
+            "signal": {
+                "color": "#ff6a00",
+                "brightness": 100,
+                "blink": False,
+            },
+        }
+        self.config_path.write_text(json.dumps(self.config))
+        arbiter.set_mode("weather")
+
+    @mock.patch("agent_signal.govee.status")
+    @mock.patch("agent_signal.govee.turn")
+    @mock.patch("agent_signal.govee.brightness")
+    @mock.patch("agent_signal.govee.color")
+    def test_clear_in_off_mode_turns_off(
+        self, mock_color, mock_brightness, mock_turn, mock_status, mock_sleep
+    ):
+        """clear in off mode turns all devices off, does not restore saved colour."""
+        mock_status.return_value = {
+            "msg": {"data": {"on": True, "brightness": 50, "color": {"r": 255, "g": 255, "b": 255}}}
+        }
+
+        # Set up needs-input signal in weather mode
+        args = mock.Mock()
+        args.command = "needs-input"
+        args.config = str(self.config_path)
+        args.dry_run = False
+        args.force = False
+        with mock.patch.dict(os.environ, {"CLAUDE_CODE_SESSION_ATTENDED": "1"}):
+            agent_signal.cmd_needs_input(args)
+
+        # Now switch to off mode
+        arbiter.set_mode("off")
+
+        # Reset mocks to only track calls after mode change
+        mock_color.reset_mock()
+        mock_brightness.reset_mock()
+        mock_turn.reset_mock()
+
+        # Clear the signal
+        args.command = "clear"
+        args.stale = False
+        agent_signal.cmd_clear(args)
+
+        # Should have turned off both devices
+        self.assertEqual(mock_turn.call_count, 2)
+        for call in mock_turn.call_args_list:
+            self.assertFalse(call[0][1])  # second arg is False (off)
+
+        # Should NOT have restored the saved colour
+        mock_color.assert_not_called()
+        mock_brightness.assert_not_called()
+
+        # Saved state file should be gone
+        self.assertFalse(arbiter.signal_file().exists())
+
+    @mock.patch("agent_signal.govee.status")
+    @mock.patch("agent_signal.govee.turn")
+    @mock.patch("agent_signal.govee.brightness")
+    @mock.patch("agent_signal.govee.color")
+    def test_clear_in_game_mode_restores(
+        self, mock_color, mock_brightness, mock_turn, mock_status, mock_sleep
+    ):
+        """clear in game mode restores saved state as normal."""
+        mock_status.return_value = {
+            "msg": {"data": {"on": True, "brightness": 50, "color": {"r": 255, "g": 255, "b": 255}}}
+        }
+
+        # Set up needs-input signal
+        args = mock.Mock()
+        args.command = "needs-input"
+        args.config = str(self.config_path)
+        args.dry_run = False
+        args.force = False
+        with mock.patch.dict(os.environ, {"CLAUDE_CODE_SESSION_ATTENDED": "1"}):
+            agent_signal.cmd_needs_input(args)
+
+        # Switch to game mode
+        arbiter.set_mode("game")
+
+        # Reset mocks to only track calls after mode change
+        mock_color.reset_mock()
+        mock_brightness.reset_mock()
+        mock_turn.reset_mock()
+
+        # Clear the signal
+        args.command = "clear"
+        args.stale = False
+        agent_signal.cmd_clear(args)
+
+        # Should have restored the saved state (brightness and color calls)
+        self.assertEqual(mock_brightness.call_count, 2)
+        self.assertEqual(mock_color.call_count, 2)
+
+        # Saved state file should be gone
+        self.assertFalse(arbiter.signal_file().exists())
+
+    @mock.patch("agent_signal.govee.status")
+    @mock.patch("agent_signal.govee.turn")
+    @mock.patch("agent_signal.govee.brightness")
+    @mock.patch("agent_signal.govee.color")
+    def test_sweep_in_off_mode_turns_off(
+        self, mock_color, mock_brightness, mock_turn, mock_status, mock_sleep
+    ):
+        """sweep_and_restore in off mode turns all devices off."""
+        mock_status.return_value = {
+            "msg": {"data": {"on": True, "brightness": 50, "color": {"r": 255, "g": 255, "b": 255}}}
+        }
+
+        # Create signal file (saved_state.json) but no session markers
+        signal_path = arbiter.signal_file()
+        signal_path.parent.mkdir(parents=True, exist_ok=True)
+        saved_state = [
+            {"ip": "192.168.1.50", "on": True, "brightness": 50, "color": {"r": 255, "g": 255, "b": 255}},
+            {"ip": "192.168.1.51", "on": True, "brightness": 60, "color": {"r": 0, "g": 0, "b": 255}},
+        ]
+        signal_path.write_text(json.dumps(saved_state))
+
+        # Switch to off mode
+        arbiter.set_mode("off")
+
+        # Run sweep_and_restore
+        result = agent_signal.sweep_and_restore(config_path=str(self.config_path))
+
+        # Should have restored (turned off)
+        self.assertTrue(result)
+
+        # Should have turned off both devices
+        self.assertEqual(mock_turn.call_count, 2)
+        for call in mock_turn.call_args_list:
+            self.assertFalse(call[0][1])  # second arg is False (off)
+
+        # Should NOT have restored the saved colour
+        mock_color.assert_not_called()
+        mock_brightness.assert_not_called()
+
+        # Signal file should be gone
+        self.assertFalse(signal_path.exists())
+
+    @mock.patch("agent_signal.govee.status")
+    @mock.patch("agent_signal.govee.turn")
+    @mock.patch("agent_signal.govee.brightness")
+    @mock.patch("agent_signal.govee.color")
+    def test_clear_off_mode_dry_run_sends_nothing(
+        self, mock_color, mock_brightness, mock_turn, mock_status, mock_sleep
+    ):
+        """clear in off mode with --dry-run sends nothing."""
+        mock_status.return_value = {
+            "msg": {"data": {"on": True, "brightness": 50, "color": {"r": 255, "g": 255, "b": 255}}}
+        }
+
+        # Set up needs-input signal
+        args = mock.Mock()
+        args.command = "needs-input"
+        args.config = str(self.config_path)
+        args.dry_run = False
+        args.force = False
+        with mock.patch.dict(os.environ, {"CLAUDE_CODE_SESSION_ATTENDED": "1"}):
+            agent_signal.cmd_needs_input(args)
+
+        # Switch to off mode
+        arbiter.set_mode("off")
+
+        # Reset mocks to only track calls after mode change
+        mock_color.reset_mock()
+        mock_brightness.reset_mock()
+        mock_turn.reset_mock()
+
+        # Clear with dry-run
+        args.command = "clear"
+        args.dry_run = True
+        args.stale = False
+        agent_signal.cmd_clear(args)
+
+        # No govee calls in dry-run
+        mock_turn.assert_not_called()
+        mock_brightness.assert_not_called()
+        mock_color.assert_not_called()
+
+
+@mock.patch("agent_signal.time.sleep")
 class TestSignalClear(StateDirMixin, unittest.TestCase):
     """Test the clear command."""
 
@@ -415,6 +606,7 @@ class TestSignalClear(StateDirMixin, unittest.TestCase):
             ],
         }
         self.config_path.write_text(json.dumps(self.config))
+        arbiter.set_mode("weather")
 
     @mock.patch("agent_signal.govee.turn")
     @mock.patch("agent_signal.govee.brightness")
@@ -1277,6 +1469,7 @@ class TestLoadSavedStateShapeValidation(StateDirMixin, unittest.TestCase):
             ],
         }
         self.config_path.write_text(json.dumps(self.config))
+        arbiter.set_mode("weather")
 
     @mock.patch("agent_signal.govee.turn")
     @mock.patch("agent_signal.govee.brightness")
@@ -3324,6 +3517,7 @@ class TestSweepAndRestore(StateDirMixin, unittest.TestCase):
             },
         }
         self.config_path.write_text(json.dumps(self.config))
+        arbiter.set_mode("weather")
 
     @mock.patch("agent_signal.govee.status")
     @mock.patch("agent_signal.govee.turn")
