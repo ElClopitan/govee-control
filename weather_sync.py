@@ -27,6 +27,7 @@ Colour mapping (WMO weather codes):
 import argparse
 import json
 import logging
+import logging.handlers
 import math
 import random
 import sys
@@ -685,13 +686,28 @@ def main():
         action="store_true",
         help="Enable verbose logging",
     )
+    parser.add_argument(
+        "--log-file",
+        default=None,
+        help="Log to this file with size rotation (1MB, 2 backups)",
+    )
 
     args = parser.parse_args()
 
-    logging.basicConfig(
-        level=logging.DEBUG if args.verbose else logging.INFO,
-        format="%(asctime)s %(levelname)s %(message)s",
-    )
+    log_level = logging.DEBUG if args.verbose else logging.INFO
+    if args.log_file:
+        # Log to file with rotation
+        handler = logging.handlers.RotatingFileHandler(
+            args.log_file, maxBytes=1_000_000, backupCount=2
+        )
+        handler.setFormatter(logging.Formatter("%(asctime)s %(levelname)s %(message)s"))
+        logger.addHandler(handler)
+        logger.setLevel(log_level)
+    else:
+        logging.basicConfig(
+            level=log_level,
+            format="%(asctime)s %(levelname)s %(message)s",
+        )
 
     try:
         config = govee.load_config(args.config)

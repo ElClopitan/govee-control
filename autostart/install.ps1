@@ -49,11 +49,13 @@ $tasks = @(
     @{
         Name = "Govee weather sync"
         Script = "weather_sync.py"
+        LogFile = "state\weather_sync.log"
         Description = "Run Govee weather sync at logon (hidden)"
     },
     @{
         Name = "Govee game sync"
         Script = "game_sync.py"
+        LogFile = "state\game_sync.log"
         Description = "Run Govee game sync at logon (hidden)"
     }
 )
@@ -91,17 +93,18 @@ if ($Uninstall) {
         -MultipleInstances IgnoreNew
 
     foreach ($t in $tasks) {
+        $arg = "$($t.Script) --log-file $($t.LogFile)"
         if ($DryRun) {
             Write-Host "[dry-run] Would register task: $($t.Name)"
             Write-Host "  Trigger: AtLogOn (current user)"
             Write-Host "  Execute: $pythonw"
-            Write-Host "  Argument: $($t.Script)"
+            Write-Host "  Argument: $arg"
             Write-Host "  WorkingDirectory: $repoRoot"
             Write-Host "  Settings: no time limit, restart 3x on failure (1 min apart), ignore new instances"
         } else {
             $action = New-ScheduledTaskAction `
                 -Execute $pythonw `
-                -Argument $t.Script `
+                -Argument $arg `
                 -WorkingDirectory $repoRoot
 
             Register-ScheduledTask `

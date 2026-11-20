@@ -670,5 +670,90 @@ class TestBrightnessCap(StateDirMixin, unittest.TestCase):
         self.assertEqual(mock_brightness.call_args[0][1], 80)
 
 
+class TestLogFileArgument(unittest.TestCase):
+    """Test the --log-file argument with size rotation."""
+
+    def test_log_file_creates_file(self):
+        """Running with --log-file creates the log file."""
+        import tempfile
+        import os
+        from unittest import mock
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            log_path = os.path.join(tmpdir, "test.log")
+            config_path = os.path.join(tmpdir, "config.json")
+
+            # Create a minimal config
+            config = {
+                "devices": [{"name": "test", "ip": "192.168.1.1"}],
+                "games": [
+                    {"name": "Test Game", "exe": "testgame.exe", "color": "red", "brightness": 50},
+                ],
+            }
+            with open(config_path, "w") as f:
+                json.dump(config, f)
+
+            # Mock running_processes to return no games
+            with mock.patch("game_sync.running_processes") as mock_procs:
+                mock_procs.return_value = set()
+
+                # Run with --log-file and --once
+                with mock.patch("sys.argv", [
+                    "game_sync.py",
+                    "--once",
+                    "--dry-run",
+                    "--config", config_path,
+                    "--log-file", log_path,
+                ]):
+                    game_sync.main()
+
+            # Close logger handlers to release file handles (Windows)
+            for handler in game_sync.logger.handlers[:]:
+                handler.close()
+                game_sync.logger.removeHandler(handler)
+
+            # Log file should exist and contain log entries
+            self.assertTrue(os.path.exists(log_path))
+            with open(log_path, "r") as f:
+                content = f.read()
+            self.assertIn("INFO", content)
+
+    def test_no_log_file_without_argument(self):
+        """Without --log-file, no log file is created."""
+        import tempfile
+        import os
+        from unittest import mock
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            log_path = os.path.join(tmpdir, "test.log")
+            config_path = os.path.join(tmpdir, "config.json")
+
+            # Create a minimal config
+            config = {
+                "devices": [{"name": "test", "ip": "192.168.1.1"}],
+                "games": [
+                    {"name": "Test Game", "exe": "testgame.exe", "color": "red", "brightness": 50},
+                ],
+            }
+            with open(config_path, "w") as f:
+                json.dump(config, f)
+
+            # Mock running_processes to return no games
+            with mock.patch("game_sync.running_processes") as mock_procs:
+                mock_procs.return_value = set()
+
+                # Run without --log-file
+                with mock.patch("sys.argv", [
+                    "game_sync.py",
+                    "--once",
+                    "--dry-run",
+                    "--config", config_path,
+                ]):
+                    game_sync.main()
+
+            # Log file should NOT exist
+            self.assertFalse(os.path.exists(log_path))
+
+
 if __name__ == "__main__":
     unittest.main()

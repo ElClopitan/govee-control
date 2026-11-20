@@ -13,6 +13,8 @@ import argparse
 import csv
 import io
 import json
+import logging
+import logging.handlers
 import subprocess
 import sys
 import time
@@ -20,6 +22,8 @@ from pathlib import Path
 
 import arbiter
 import govee
+
+logger = logging.getLogger(__name__)
 
 
 def running_processes():
@@ -82,6 +86,7 @@ def apply_profile(config, profile, dry_run=False):
     try:
         r, g, b = govee.parse_color(color_str)
     except ValueError:
+        logger.warning("invalid colour %r, using white", color_str)
         print(f"Warning: invalid colour {color_str!r}, using white", file=sys.stderr)
         r, g, b = 255, 255, 255
 
@@ -90,10 +95,12 @@ def apply_profile(config, profile, dry_run=False):
         if not ip:
             continue
         if dry_run:
+            logger.info("[dry-run] color #%02x%02x%02x brightness %d%% -> %s", r, g, b, brightness_val, ip)
             print(f"[dry-run] color #{r:02x}{g:02x}{b:02x} brightness {brightness_val}% -> {ip}")
         else:
             govee.color(ip, r, g, b)
             govee.brightness(ip, brightness_val)
+            logger.info("color #%02x%02x%02x brightness %d%% -> %s", r, g, b, brightness_val, ip)
             print(f"color #{r:02x}{g:02x}{b:02x} brightness {brightness_val}% -> {ip}")
 
 
@@ -144,6 +151,7 @@ def run(config, interval=5, once=False, dry_run=False):
             # Check signal priority
             if arbiter.signal_active():
                 if not signal_was_active:
+                    logger.info("signal active; skipping game sync")
                     print("signal active; skipping game sync")
                 signal_was_active = True
                 # Reset last_profile_name so the first successful pass after
@@ -155,19 +163,23 @@ def run(config, interval=5, once=False, dry_run=False):
                     # Re-check signal just before applying (race condition fix).
                     # A signal could have become active since we last checked.
                     if arbiter.signal_active():
+                        logger.info("signal active; skipping game sync")
                         print("signal active; skipping game sync")
                         last_profile_name = None
                     else:
                         # If default is null (no game -> leave lights alone),
                         # don't send anything; just mark as applied.
                         if profile is None:
+                            logger.info("no game running; leaving lights to weather/manual")
                             print("no game running; leaving lights to weather/manual")
                             last_profile_name = profile_name
                         else:
+                            logger.info("Switching to: %s", profile_name)
                             print(f"Switching to: {profile_name}")
                             try:
                                 apply_profile(config, profile, dry_run=dry_run)
                             except OSError as e:
+                                logger.warning("failed to apply %s: %s", profile_name, e)
                                 print(f"warning: failed to apply {profile_name}: {e}", file=sys.stderr)
                             else:
                                 last_profile_name = profile_name
@@ -214,19 +226,36 @@ def main():
         action="store_true",
         help="print what would be sent instead of sending",
     )
+    parser.add_argument(
+        "--log-file",
+        default=None,
+        help="Log to this file with size rotation (1MB, 2 backups)",
+    )
 
     args = parser.parse_args()
+
+    if args.log_file:
+        # Log to file with rotation
+        handler = logging.handlers.RotatingFileHandler(
+            args.log_file, maxBytes=1_000_000, backupCount=2
+        )
+        handler.setFormatter(logging.Formatter("%(asctime)s %(levelname)s %(message)s"))
+        logger.addHandler(handler)
+        logger.setLevel(logging.INFO)
 
     try:
         config = govee.load_config(args.config)
     except FileNotFoundError:
+        logger.error("Config not found: %s", args.config)
         print(f"Config not found: {args.config}", file=sys.stderr)
         sys.exit(1)
     except json.JSONDecodeError as e:
+        logger.error("Invalid JSON in config: %s", e)
         print(f"Invalid JSON in config: {e}", file=sys.stderr)
         sys.exit(1)
 
     if "games" not in config:
+        logger.error("Config missing 'games' key")
         print("Config missing 'games' key", file=sys.stderr)
         sys.exit(1)
 

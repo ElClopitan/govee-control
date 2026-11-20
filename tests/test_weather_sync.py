@@ -1590,5 +1590,94 @@ class TestThunderstormPattern(StateDirMixin, unittest.TestCase):
             self.assertLessEqual(b, 80, f"Non-flash brightness {b} exceeds 80")
 
 
+class TestLogFileArgument(unittest.TestCase):
+    """Test the --log-file argument with size rotation."""
+
+    def test_log_file_creates_file(self):
+        """Running with --log-file creates the log file."""
+        import tempfile
+        import os
+        from unittest import mock
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            log_path = os.path.join(tmpdir, "test.log")
+            config_path = os.path.join(tmpdir, "config.json")
+
+            # Create a minimal config
+            config = {
+                "devices": [{"name": "test", "ip": "192.168.1.1"}],
+                "weather": {"latitude": 51.5, "longitude": -0.1, "brightness": 50},
+            }
+            with open(config_path, "w") as f:
+                json.dump(config, f)
+
+            # Mock fetch_weather to return clear sky
+            with mock.patch("weather_sync.fetch_weather") as mock_fetch:
+                mock_fetch.return_value = {
+                    "temperature_2m": 20.0,
+                    "weather_code": 0,
+                    "is_day": 1,
+                }
+
+                # Run with --log-file and --once
+                with mock.patch("sys.argv", [
+                    "weather_sync.py",
+                    "--once",
+                    "--dry-run",
+                    "--config", config_path,
+                    "--log-file", log_path,
+                ]):
+                    weather_sync.main()
+
+            # Close logger handlers to release file handles (Windows)
+            for handler in weather_sync.logger.handlers[:]:
+                handler.close()
+                weather_sync.logger.removeHandler(handler)
+
+            # Log file should exist and contain log entries
+            self.assertTrue(os.path.exists(log_path))
+            with open(log_path, "r") as f:
+                content = f.read()
+            self.assertIn("INFO", content)
+
+    def test_no_log_file_without_argument(self):
+        """Without --log-file, no log file is created."""
+        import tempfile
+        import os
+        from unittest import mock
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            log_path = os.path.join(tmpdir, "test.log")
+            config_path = os.path.join(tmpdir, "config.json")
+
+            # Create a minimal config
+            config = {
+                "devices": [{"name": "test", "ip": "192.168.1.1"}],
+                "weather": {"latitude": 51.5, "longitude": -0.1, "brightness": 50},
+            }
+            with open(config_path, "w") as f:
+                json.dump(config, f)
+
+            # Mock fetch_weather to return clear sky
+            with mock.patch("weather_sync.fetch_weather") as mock_fetch:
+                mock_fetch.return_value = {
+                    "temperature_2m": 20.0,
+                    "weather_code": 0,
+                    "is_day": 1,
+                }
+
+                # Run without --log-file
+                with mock.patch("sys.argv", [
+                    "weather_sync.py",
+                    "--once",
+                    "--dry-run",
+                    "--config", config_path,
+                ]):
+                    weather_sync.main()
+
+            # Log file should NOT exist
+            self.assertFalse(os.path.exists(log_path))
+
+
 if __name__ == "__main__":
     unittest.main()

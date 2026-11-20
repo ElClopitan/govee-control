@@ -55,12 +55,17 @@ Start-ScheduledTask -TaskName "Govee weather sync"
 
 ## Logs
 
-The scheduled tasks run `pythonw.exe` directly, so there is no console output
-and no redirected log files. `weather_sync.py` uses Python's `logging` module
-and writes to stderr; `game_sync.py` prints status messages to stdout. When
-run via the scheduled tasks, this output is discarded.
+The scheduled tasks run `pythonw.exe` directly with `--log-file` arguments,
+so output is written to log files with size rotation (1MB per file, 2 backups):
 
-To see output, run the scripts manually from a terminal:
+- `state/weather_sync.log` — weather sync log
+- `state/game_sync.log` — game sync log
+
+Both scripts use Python's `logging` module. `weather_sync.py` logs weather
+fetches, colour changes, and errors. `game_sync.py` logs profile switches,
+signal priority events, and errors.
+
+To see output in real time, run the scripts manually from a terminal:
 
 ```powershell
 python weather_sync.py
