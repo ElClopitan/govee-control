@@ -111,6 +111,16 @@ STOP_FLAG_FILE = STATE_DIR / "music_stop"
 LOG_FILE = STATE_DIR / "music_sync.log"
 
 
+def _turn_all(devices, on):
+    """Turn all devices on or off, swallowing OSError."""
+    for dev in devices:
+        ip = dev["ip"]
+        try:
+            govee.turn(ip, on)
+        except OSError:
+            pass
+
+
 def analyze(samples, rate):
     """Analyze audio samples and return frequency band levels.
 
@@ -699,6 +709,13 @@ def run(config, fps=None, verbose=False, log_file=None, time_fn=None):
         # Clear any leftover stop flag from a previous run
         _remove_stop_flag()
 
+        # Check mode before touching the strips: if not "music", exit immediately
+        # without sending status/brightness queries or marking ourselves active.
+        current_mode = arbiter.get_mode()
+        if current_mode != "music":
+            logger.info("mode is %s, not music; not starting", current_mode)
+            return
+
         # Mark music sync as active BEFORE reading initial state, so weather/game
         # don't send during the status/brightness queries
         arbiter.set_music_active()
@@ -774,12 +791,7 @@ def run(config, fps=None, verbose=False, log_file=None, time_fn=None):
                 # Signal just cleared: if we were in silence before signal became active, send off now
                 if signal_was_active and was_silent_before_signal:
                     logger.info("signal cleared during silence; turning lights off")
-                    for dev in devices:
-                        ip = dev["ip"]
-                        try:
-                            govee.turn(ip, False)
-                        except OSError:
-                            pass
+                    _turn_all(devices, False)
                     lights_on = False
                     # Reset silence tracking since we just sent off
                     silence_start_time = None
@@ -821,13 +833,9 @@ def run(config, fps=None, verbose=False, log_file=None, time_fn=None):
                             # No device: turn off once, keep running
                             if not no_device_off_sent:
                                 logger.info("no audio device; turning lights off")
-                                for dev in devices:
-                                    ip = dev["ip"]
-                                    try:
-                                        govee.turn(ip, False)
-                                    except OSError:
-                                        pass
+                                _turn_all(devices, False)
                                 no_device_off_sent = True
+                                lights_on = False
                             time.sleep(1.0)
                             continue
                     else:
@@ -837,13 +845,9 @@ def run(config, fps=None, verbose=False, log_file=None, time_fn=None):
                         # No device: turn off once, keep running
                         if not no_device_off_sent:
                             logger.info("no audio device; turning lights off")
-                            for dev in devices:
-                                ip = dev["ip"]
-                                try:
-                                    govee.turn(ip, False)
-                                except OSError:
-                                    pass
+                            _turn_all(devices, False)
                             no_device_off_sent = True
+                            lights_on = False
                         time.sleep(1.0)
                         continue
 
@@ -882,53 +886,50 @@ def run(config, fps=None, verbose=False, log_file=None, time_fn=None):
                 features = smooth_features(prev_features, features, smoothing)
                 prev_features = features
 
-                # Silence detection
+                # Silence detection - timer update only (no sends yet)
                 if features["level"] < SILENCE_LEVEL_THRESHOLD:
                     if silence_start_time is None:
                         silence_start_time = frame_start
-                    elif frame_start - silence_start_time >= silence_seconds:
-                        # Silent long enough: turn off
-                        if lights_on:
-                            logger.info("silence detected; turning lights off")
-                            for dev in devices:
-                                ip = dev["ip"]
-                                try:
-                                    govee.turn(ip, False)
-                                except OSError:
-                                    pass
-                            lights_on = False
                 else:
                     # Sound detected
                     if silence_start_time is not None:
                         logger.info("sound detected after %.1fs of silence",
                                     frame_start - silence_start_time)
                     silence_start_time = None
-                    # If lights were off, turn them back on
-                    if not lights_on:
-                        logger.info("turning lights back on")
-                        for dev in devices:
-                            ip = dev["ip"]
-                            try:
-                                govee.turn(ip, True)
-                            except OSError:
-                                pass
-                        lights_on = True
-
-                # Map to colour
-                rgb = features_to_rgb(features, config)
 
                 # Re-check signal before sending (signal may have become active
-                # during audio capture/analysis)
+                # during audio capture/analysis). If active, skip all sends
+                # (silence off/on and colour) for this loop iteration.
                 if arbiter.signal_active():
-                    if not signal_was_active:
-                        logger.info("signal active; pausing music sync")
-                    signal_was_active = True
+                    # Don't set signal_was_active here; that's only for the
+                    # top-of-loop check. Setting it here would cause the
+                    # "signal cleared during silence" code to run in the next
+                    # iteration even though the signal was never active at the
+                    # top of the loop.
                     # Don't send this frame; sleep to maintain frame rate
                     elapsed = time_fn() - frame_start
                     sleep_time = frame_duration - elapsed
                     if sleep_time > 0:
                         time.sleep(sleep_time)
                     continue
+
+                # Silence detection - sends (only if signal is not active)
+                if features["level"] < SILENCE_LEVEL_THRESHOLD:
+                    if frame_start - silence_start_time >= silence_seconds:
+                        # Silent long enough: turn off
+                        if lights_on:
+                            logger.info("silence detected; turning lights off")
+                            _turn_all(devices, False)
+                            lights_on = False
+                else:
+                    # If lights were off, turn them back on
+                    if not lights_on:
+                        logger.info("turning lights back on")
+                        _turn_all(devices, True)
+                        lights_on = True
+
+                # Map to colour
+                rgb = features_to_rgb(features, config)
 
                 # Only send colour if lights are on (not in silence)
                 if lights_on and silence_start_time is None:
