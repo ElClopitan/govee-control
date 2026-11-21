@@ -12,6 +12,9 @@ direct Popen calls from Popen calls made by subprocess.run.
 Also installs a socket guard that raises AssertionError if any test tries to
 send to or connect to a non-loopback address. Tests that need real network
 should mock govee functions instead.
+
+The suite-wide state dir guard is in tests/__init__.py and applies to all
+tests automatically.
 """
 
 import inspect
@@ -108,9 +111,11 @@ def bounded_clock(step=0.1, limit=1000.0):
 class StateDirMixin:
     """Mixin that provides a temporary state directory for tests.
 
-    Patches arbiter.STATE_DIR, agent_signal.STATE_DIR, and agent_signal.LOCK_FILE
-    to point to a temporary directory. agent_signal now uses arbiter.signal_file()
-    for the signal path, so only arbiter.STATE_DIR needs patching for that.
+    Patches all module-level state path constants (arbiter.STATE_DIR,
+    agent_signal.STATE_DIR, agent_signal.LOCK_FILE, music_sync.STATE_DIR,
+    music_sync.PID_FILE, music_sync.STOP_FLAG_FILE, music_sync.LOG_FILE)
+    to point to a temporary directory. This ensures tests don't write to
+    the repo's real state/ dir.
 
     Also patches sys.stdin with a default that returns {} (isatty=True) so tests
     that call cmd_needs_input or cmd_clear don't block on real stdin. Tests that
@@ -125,11 +130,14 @@ class StateDirMixin:
 
         import arbiter
         import agent_signal
+        import music_sync
 
+        # arbiter
         self._arbiter_patch = mock.patch.object(arbiter, "STATE_DIR", self.state_dir)
         self._arbiter_patch.start()
         self.addCleanup(self._arbiter_patch.stop)
 
+        # agent_signal
         self._signal_state_patch = mock.patch.object(agent_signal, "STATE_DIR", self.state_dir)
         self._signal_state_patch.start()
         self.addCleanup(self._signal_state_patch.stop)
@@ -139,6 +147,29 @@ class StateDirMixin:
         )
         self._signal_lock_patch.start()
         self.addCleanup(self._signal_lock_patch.stop)
+
+        # music_sync
+        self._music_state_patch = mock.patch.object(music_sync, "STATE_DIR", self.state_dir)
+        self._music_state_patch.start()
+        self.addCleanup(self._music_state_patch.stop)
+
+        self._music_pid_patch = mock.patch.object(
+            music_sync, "PID_FILE", self.state_dir / "music_sync.pid"
+        )
+        self._music_pid_patch.start()
+        self.addCleanup(self._music_pid_patch.stop)
+
+        self._music_stop_patch = mock.patch.object(
+            music_sync, "STOP_FLAG_FILE", self.state_dir / "music_stop"
+        )
+        self._music_stop_patch.start()
+        self.addCleanup(self._music_stop_patch.stop)
+
+        self._music_log_patch = mock.patch.object(
+            music_sync, "LOG_FILE", self.state_dir / "music_sync.log"
+        )
+        self._music_log_patch.start()
+        self.addCleanup(self._music_log_patch.stop)
 
         # Default stdin: isatty=True so read_hook_input() returns {} immediately
         # without blocking. Tests that need stdin data override this.
