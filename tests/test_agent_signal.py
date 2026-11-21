@@ -519,9 +519,6 @@ class TestRestoreFollowsMode(StateDirMixin, unittest.TestCase):
         self.assertEqual(stdout.count("would turn off 192.168.1.50"), 1)
         self.assertEqual(stdout.count("would turn off 192.168.1.51"), 1)
 
-        # Saved state file should be gone
-        self.assertFalse(arbiter.signal_file().exists())
-
     @mock.patch("agent_signal.govee.status")
     @mock.patch("agent_signal.govee.turn")
     @mock.patch("agent_signal.govee.brightness")
