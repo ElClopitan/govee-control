@@ -470,6 +470,56 @@ class TestRestoreFollowsMode(StateDirMixin, unittest.TestCase):
     @mock.patch("agent_signal.govee.turn")
     @mock.patch("agent_signal.govee.brightness")
     @mock.patch("agent_signal.govee.color")
+    def test_clear_in_off_mode_dry_run_prints_once(
+        self, mock_color, mock_brightness, mock_turn, mock_status, mock_sleep
+    ):
+        """clear in off mode with dry_run prints 'would turn off' once per device, no sleep."""
+        import io
+        from contextlib import redirect_stdout
+
+        mock_status.return_value = {
+            "msg": {"data": {"on": True, "brightness": 50, "color": {"r": 255, "g": 255, "b": 255}}}
+        }
+
+        # Set up needs-input signal in weather mode
+        args = mock.Mock()
+        args.command = "needs-input"
+        args.config = str(self.config_path)
+        args.dry_run = False
+        args.force = False
+        with mock.patch.dict(os.environ, {"CLAUDE_CODE_SESSION_ATTENDED": "1"}):
+            agent_signal.cmd_needs_input(args)
+
+        # Now switch to off mode
+        arbiter.set_mode("off")
+
+        # Clear the signal with dry_run
+        args.command = "clear"
+        args.dry_run = True
+        args.stale = False
+
+        stdout_capture = io.StringIO()
+        with redirect_stdout(stdout_capture):
+            agent_signal.cmd_clear(args)
+
+        stdout = stdout_capture.getvalue()
+
+        # Should NOT have called govee.turn
+        mock_turn.assert_not_called()
+        # Should NOT have slept
+        mock_sleep.assert_not_called()
+
+        # Should print "would turn off" exactly once per device
+        self.assertEqual(stdout.count("would turn off 192.168.1.50"), 1)
+        self.assertEqual(stdout.count("would turn off 192.168.1.51"), 1)
+
+        # Saved state file should be gone
+        self.assertFalse(arbiter.signal_file().exists())
+
+    @mock.patch("agent_signal.govee.status")
+    @mock.patch("agent_signal.govee.turn")
+    @mock.patch("agent_signal.govee.brightness")
+    @mock.patch("agent_signal.govee.color")
     def test_clear_in_game_mode_restores(
         self, mock_color, mock_brightness, mock_turn, mock_status, mock_sleep
     ):

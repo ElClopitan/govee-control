@@ -796,18 +796,19 @@ def restore_state(devices, signal_cfg, cfg, default_cfg=None, dry_run=False, sav
         # Check current mode: if "off", turn all devices off instead of restoring
         mode = arbiter.get_mode()
         if mode == "off":
-            for attempt in range(3):
+            if dry_run:
                 for dev in devices:
-                    ip = dev["ip"]
-                    if not dry_run:
+                    print(f"[dry-run] would turn off {dev['ip']}")
+            else:
+                for attempt in range(3):
+                    for dev in devices:
+                        ip = dev["ip"]
                         try:
                             govee.turn(ip, False)
                         except OSError as e:
                             print(f"warning: failed to turn off {ip}: {e}", file=sys.stderr)
-                    else:
-                        print(f"[dry-run] would turn off {ip}")
-                if attempt < 2:
-                    time.sleep(0.2)
+                    if attempt < 2:
+                        time.sleep(0.2)
             print("mode is off; strips turned off")
             return True
 
