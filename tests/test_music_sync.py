@@ -3348,25 +3348,25 @@ class TestMusicSyncModeRace(StateDirMixin, unittest.TestCase):
         fake_sc.get_microphone = mock.Mock(return_value=fake_mic)
         fake_sc.all_microphones = mock.Mock(return_value=[fake_mic])
 
-        # Signal is active only during start-up (first call), then inactive
-        signal_calls = [0]
-        def signal_active_side_effect():
-            signal_calls[0] += 1
-            return signal_calls[0] == 1
+        # Use mutable dict for mode so signal_active can change it
+        mode = {"value": "music"}
 
-        # Mode changes to "off" on the second call (at the top of the loop)
-        mode_calls = [0]
-        def get_mode_side_effect():
-            mode_calls[0] += 1
-            if mode_calls[0] == 1:
-                return "music"  # First call: during start-up
-            return "off"  # Second call: at the top of the loop
+        # Signal is active only during start-up (first call), then inactive.
+        # On the first call, set mode to "off" so the loop exits on its next
+        # mode check.
+        signal_called = [False]
+        def signal_active_side_effect():
+            if not signal_called[0]:
+                signal_called[0] = True
+                mode["value"] = "off"
+                return True
+            return False
 
         with mock.patch.dict(sys.modules, {
             "soundcard": fake_sc,
             "numpy": mock.Mock(),
         }):
-            with mock.patch.object(arbiter, "get_mode", side_effect=get_mode_side_effect):
+            with mock.patch.object(arbiter, "get_mode", side_effect=lambda: mode["value"]):
                 with mock.patch.object(arbiter, "signal_active", side_effect=signal_active_side_effect):
                     with mock.patch.object(music_sync, "govee") as mock_govee:
                         mock_govee.color = fake_color
@@ -3382,6 +3382,10 @@ class TestMusicSyncModeRace(StateDirMixin, unittest.TestCase):
                                             fps=10,
                                             time_fn=fake_time_fn,
                                         )
+
+        # signal_active must have been called at least once (the guard reached it)
+        self.assertTrue(signal_called[0],
+                        "signal_active() was never called; guard short-circuited on mode")
 
         # No brightness or turn-on calls when signal was active during start-up
         brightness_calls = [c for c in govee_calls if c[0] == "brightness"]
