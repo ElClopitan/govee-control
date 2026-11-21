@@ -2,11 +2,13 @@
 
 import base64
 import json
+import sys
 import unittest
+from pathlib import Path
 from unittest import mock
 
-import sys
-from pathlib import Path
+sys.path.insert(0, str(Path(__file__).parent))
+import helpers  # noqa: F401
 
 sys.path.insert(0, str(Path(__file__).parent.parent / "tools"))
 import segment_probe
@@ -93,8 +95,9 @@ class TestDryRun(unittest.TestCase):
         )
         mock_send.assert_not_called()
 
+    @mock.patch("segment_probe.time.sleep")
     @mock.patch("segment_probe.govee.send")
-    def test_live_run_sends(self, mock_send):
+    def test_live_run_sends(self, mock_send, mock_sleep):
         """Live run should call govee.send()."""
         segment_probe.run_probe(
             ip="192.168.1.1",
@@ -104,8 +107,123 @@ class TestDryRun(unittest.TestCase):
             fps=2,
             dry_run=False,
         )
-        # Should send: enable + 2 frames + disable + color + brightness = 6 calls
+        # Should send: enable + 2 frames + disable = 4 calls
         self.assertGreater(mock_send.call_count, 0)
+
+    @mock.patch("segment_probe.govee.turn")
+    @mock.patch("segment_probe.govee.send")
+    def test_error_during_frames_still_disables(self, mock_send, mock_turn):
+        """If govee.send raises during frames, disable is still sent and strip is turned off."""
+        call_count = [0]
+
+        def raise_on_second(*args, **kwargs):
+            call_count[0] += 1
+            if call_count[0] == 2:
+                raise OSError("network error")
+
+        mock_send.side_effect = raise_on_second
+
+        with self.assertRaises(OSError):
+            segment_probe.run_probe(
+                ip="192.168.1.1",
+                leds=5,
+                pattern="walk",
+                duration=1,
+                fps=2,
+                dry_run=False,
+            )
+
+        # Should have sent: enable (1), then raised on frame (2), then disable (3)
+        self.assertEqual(call_count[0], 3)
+        # Last send_razer call should be the disable packet
+        last_call = mock_send.call_args_list[-1]
+        msg = last_call[0][1]
+        self.assertEqual(msg["msg"]["cmd"], "razer")
+        self.assertEqual(msg["msg"]["data"]["pt"], "uwABsQAL")
+        # Strip should be turned off
+        mock_turn.assert_called_once_with("192.168.1.1", False)
+
+
+
+class TestModeGate(unittest.TestCase):
+    """Test that main() checks mode/signal before running."""
+
+    @mock.patch("segment_probe.arbiter.get_mode", return_value="music")
+    @mock.patch("segment_probe.arbiter.signal_active", return_value=False)
+    @mock.patch("segment_probe.run_probe")
+    def test_music_mode_exits_1(self, mock_run, mock_signal, mock_mode):
+        """main() with mode 'music' exits 1 and sends nothing."""
+        with mock.patch.object(sys, "argv", ["segment_probe.py", "192.168.1.50"]):
+            with self.assertRaises(SystemExit) as ctx:
+                segment_probe.main()
+        self.assertEqual(ctx.exception.code, 1)
+        mock_run.assert_not_called()
+
+    @mock.patch("segment_probe.arbiter.get_mode", return_value="off")
+    @mock.patch("segment_probe.arbiter.signal_active", return_value=True)
+    @mock.patch("segment_probe.run_probe")
+    def test_signal_active_exits_1(self, mock_run, mock_signal, mock_mode):
+        """main() with active signal exits 1 and sends nothing."""
+        with mock.patch.object(sys, "argv", ["segment_probe.py", "192.168.1.50"]):
+            with self.assertRaises(SystemExit) as ctx:
+                segment_probe.main()
+        self.assertEqual(ctx.exception.code, 1)
+        mock_run.assert_not_called()
+
+    @mock.patch("segment_probe.arbiter.get_mode", return_value="off")
+    @mock.patch("segment_probe.arbiter.signal_active", return_value=False)
+    @mock.patch("segment_probe.run_probe")
+    def test_off_mode_runs(self, mock_run, mock_signal, mock_mode):
+        """main() with mode 'off' and no signal runs the probe."""
+        with mock.patch.object(sys, "argv", ["segment_probe.py", "192.168.1.50"]):
+            segment_probe.main()
+        mock_run.assert_called_once()
+
+
+class TestArgValidation(unittest.TestCase):
+    """Test argument validation."""
+
+    def test_leds_0_exits_2(self):
+        """--leds 0 exits with code 2."""
+        with mock.patch.object(sys, "argv", ["segment_probe.py", "192.168.1.50", "--leds", "0"]):
+            with self.assertRaises(SystemExit) as ctx:
+                segment_probe.main()
+        self.assertEqual(ctx.exception.code, 2)
+
+    def test_leds_85_exits_2(self):
+        """--leds 85 exits with code 2."""
+        with mock.patch.object(sys, "argv", ["segment_probe.py", "192.168.1.50", "--leds", "85"]):
+            with self.assertRaises(SystemExit) as ctx:
+                segment_probe.main()
+        self.assertEqual(ctx.exception.code, 2)
+
+    def test_fps_0_exits_2(self):
+        """--fps 0 exits with code 2."""
+        with mock.patch.object(sys, "argv", ["segment_probe.py", "192.168.1.50", "--fps", "0"]):
+            with self.assertRaises(SystemExit) as ctx:
+                segment_probe.main()
+        self.assertEqual(ctx.exception.code, 2)
+
+    def test_fps_21_exits_2(self):
+        """--fps 21 exits with code 2."""
+        with mock.patch.object(sys, "argv", ["segment_probe.py", "192.168.1.50", "--fps", "21"]):
+            with self.assertRaises(SystemExit) as ctx:
+                segment_probe.main()
+        self.assertEqual(ctx.exception.code, 2)
+
+    def test_duration_negative_exits_2(self):
+        """--duration -1 exits with code 2."""
+        with mock.patch.object(sys, "argv", ["segment_probe.py", "192.168.1.50", "--duration", "-1"]):
+            with self.assertRaises(SystemExit) as ctx:
+                segment_probe.main()
+        self.assertEqual(ctx.exception.code, 2)
+
+    def test_duration_61_exits_2(self):
+        """--duration 61 exits with code 2."""
+        with mock.patch.object(sys, "argv", ["segment_probe.py", "192.168.1.50", "--duration", "61"]):
+            with self.assertRaises(SystemExit) as ctx:
+                segment_probe.main()
+        self.assertEqual(ctx.exception.code, 2)
 
 
 class TestPatterns(unittest.TestCase):

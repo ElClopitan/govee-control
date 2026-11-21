@@ -26,6 +26,7 @@ from pathlib import Path
 # Add parent dir so we can import govee.py
 sys.path.insert(0, str(Path(__file__).parent.parent))
 import govee
+import arbiter
 
 CONTROL_PORT = 4003
 
@@ -134,51 +135,53 @@ def run_probe(ip, leds=20, pattern="walk", duration=10, fps=10, dry_run=False):
 
     # Send pattern frames
     frames = duration * fps
-    for frame in range(frames):
-        if pattern == "halves":
-            colors = pattern_halves(leds)
-        elif pattern == "rainbow":
-            colors = pattern_rainbow(leds)
-        elif pattern == "walk":
-            colors = pattern_walk(leds, frame)
-        else:
-            raise ValueError(f"unknown pattern: {pattern}")
+    try:
+        for frame in range(frames):
+            if pattern == "halves":
+                colors = pattern_halves(leds)
+            elif pattern == "rainbow":
+                colors = pattern_rainbow(leds)
+            elif pattern == "walk":
+                colors = pattern_walk(leds, frame)
+            else:
+                raise ValueError(f"unknown pattern: {pattern}")
 
-        pt = razer_frame(colors)
-        if dry_run:
-            if frame < 3:
-                print(f"FRAME {frame}: {json.dumps({'msg': {'cmd': 'razer', 'data': {'pt': pt}}})}")
-            elif frame == 3:
-                print(f"... (skipping frames 3-{frames-1})")
-        else:
-            send_razer(ip, pt)
+            pt = razer_frame(colors)
+            if dry_run:
+                if frame < 3:
+                    print(f"FRAME {frame}: {json.dumps({'msg': {'cmd': 'razer', 'data': {'pt': pt}}})}")
+                elif frame == 3:
+                    print(f"... (skipping frames 3-{frames-1})")
+            else:
+                send_razer(ip, pt)
+
+            if not dry_run:
+                time.sleep(1.0 / fps)
 
         if not dry_run:
-            time.sleep(1.0 / fps)
+            print(f"Sent {frames} frames")
+    finally:
+        # Disable Razer mode
+        disable_pt = razer_disable()
+        if dry_run:
+            print(f"DISABLE: {json.dumps({'msg': {'cmd': 'razer', 'data': {'pt': disable_pt}}})}")
+        else:
+            send_razer(ip, disable_pt)
+            print("Sent disable")
 
-    if not dry_run:
-        print(f"Sent {frames} frames")
-
-    # Disable Razer mode
-    disable_pt = razer_disable()
-    if dry_run:
-        print(f"DISABLE: {json.dumps({'msg': {'cmd': 'razer', 'data': {'pt': disable_pt}}})}")
-    else:
-        send_razer(ip, disable_pt)
-        print("Sent disable")
-
-    # Restore to normal white
-    if not dry_run:
-        govee.color(ip, 255, 255, 255)
-        govee.brightness(ip, 80)
-        print("Restored to white at 80% brightness")
+        # Turn off the strip (replaces the old white/80% restore)
+        if not dry_run:
+            govee.turn(ip, False)
+            print("Sent disable; strip turned off")
 
 
 def main():
     parser = argparse.ArgumentParser(
         description="Govee Razer Chroma segment probe",
         formatter_class=argparse.RawDescriptionHelpFormatter,
-        epilog="""Examples:
+        epilog="""Pick Off in the tray first; the strip is turned off at the end.
+
+Examples:
   python tools/segment_probe.py 192.168.1.50 --leds 20 --pattern walk
   python tools/segment_probe.py 192.168.1.50 --leds 30 --pattern rainbow --dry-run
 """,
@@ -196,6 +199,25 @@ def main():
     parser.add_argument("--dry-run", action="store_true", help="print JSON instead of sending")
 
     args = parser.parse_args()
+
+    # Validate arguments
+    if args.leds < 1 or args.leds > 84:
+        parser.error("--leds must be between 1 and 84")
+    if args.fps < 1 or args.fps > 20:
+        parser.error("--fps must be between 1 and 20")
+    if args.duration < 0 or args.duration > 60:
+        parser.error("--duration must be between 0 and 60")
+
+    # Check mode/signal gate (skip for dry-run)
+    if not args.dry_run:
+        mode = arbiter.get_mode()
+        if mode != "off":
+            print(f"pick Off in the tray first (mode is {mode})", file=sys.stderr)
+            sys.exit(1)
+        if arbiter.signal_active():
+            print("agent signal is active; try again later", file=sys.stderr)
+            sys.exit(1)
+
     run_probe(
         ip=args.ip,
         leds=args.leds,
