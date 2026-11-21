@@ -482,6 +482,48 @@ class TestCapBrightness(unittest.TestCase):
         cfg = {"max_brightness": 80}
         self.assertEqual(arbiter.cap_brightness(100, cfg, allow_flash=True), 100)
 
+    def test_value_nan_falls_back(self):
+        """value: float('nan') falls back to cap, no exception."""
+        cfg = {"max_brightness": 80}
+        result = arbiter.cap_brightness(float("nan"), cfg)
+        self.assertEqual(result, 80)
+
+    def test_value_inf_falls_back(self):
+        """value: float('inf') falls back to cap, no exception."""
+        cfg = {"max_brightness": 80}
+        result = arbiter.cap_brightness(float("inf"), cfg)
+        self.assertEqual(result, 80)
+
+    def test_max_brightness_nan_uses_default(self):
+        """max_brightness: float('nan') uses MAX_BRIGHTNESS_DEFAULT."""
+        cfg = {"max_brightness": float("nan")}
+        result = arbiter.cap_brightness(90, cfg)
+        self.assertEqual(result, arbiter.MAX_BRIGHTNESS_DEFAULT)
+
+    def test_max_brightness_500_clamped(self):
+        """max_brightness: 500 is clamped to 100."""
+        cfg = {"max_brightness": 500}
+        result = arbiter.cap_brightness(90, cfg)
+        self.assertEqual(result, 90)
+
+    def test_max_brightness_0_clamped(self):
+        """max_brightness: 0 is clamped to 1."""
+        cfg = {"max_brightness": 0}
+        result = arbiter.cap_brightness(50, cfg)
+        self.assertEqual(result, 1)
+
+    def test_max_brightness_500_non_numeric_value(self):
+        """max_brightness: 500 with non-numeric value returns 100."""
+        cfg = {"max_brightness": 500}
+        result = arbiter.cap_brightness("x", cfg)
+        self.assertEqual(result, 100)
+
+    def test_allow_flash_value_nan(self):
+        """allow_flash=True with value nan returns max_b, no exception."""
+        cfg = {"max_brightness": 80}
+        result = arbiter.cap_brightness(float("nan"), cfg, allow_flash=True)
+        self.assertEqual(result, 80)
+
 
 if __name__ == "__main__":
     unittest.main()

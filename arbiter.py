@@ -19,6 +19,7 @@ State files:
 """
 
 import json
+import math
 import os
 import threading
 import time
@@ -62,17 +63,19 @@ def cap_brightness(value, cfg, allow_flash=False):
     """
     max_b = cfg.get("max_brightness", MAX_BRIGHTNESS_DEFAULT)
     # bool is a subclass of int; reject it explicitly
-    if isinstance(max_b, bool) or not isinstance(max_b, (int, float)):
+    if isinstance(max_b, bool) or not isinstance(max_b, (int, float)) or not math.isfinite(max_b):
         max_b = MAX_BRIGHTNESS_DEFAULT
     else:
         max_b = int(round(max_b))
+    # Clamp max_b to 1..100
+    max_b = max(1, min(100, max_b))
 
     if allow_flash:
-        if isinstance(value, bool) or not isinstance(value, (int, float)):
+        if isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(value):
             return max_b
         return max(1, min(100, int(round(value))))
 
-    if isinstance(value, bool) or not isinstance(value, (int, float)):
+    if isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(value):
         import sys
         print(f"warning: invalid brightness {value!r}; using {max_b}", file=sys.stderr)
         return max_b
