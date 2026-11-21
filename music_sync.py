@@ -58,7 +58,7 @@ SILENCE_LEVEL_THRESHOLD = 0.05
 logger = logging.getLogger(__name__)
 
 
-def pick_loopback(sc):
+def pick_loopback(sc, log=True):
     """Pick the loopback microphone for the default speaker.
 
     Tries to get the loopback device for the default speaker by id.
@@ -66,19 +66,22 @@ def pick_loopback(sc):
 
     Args:
         sc: The soundcard module.
+        log: If True (default), log warnings when device lookup fails.
+             If False, log at DEBUG level instead (for rate-limited retry loops).
 
     Returns:
         A soundcard Microphone object, or None if no loopback found.
     """
+    warn = logger.warning if log else logger.debug
     try:
         speaker = sc.default_speaker()
         mic = sc.get_microphone(speaker.id, include_loopback=True)
         if not getattr(mic, "isloopback", False):
-            logger.warning("get_microphone returned non-loopback for speaker id %s", speaker.id)
+            warn("get_microphone returned non-loopback for speaker id %s", speaker.id)
         else:
             return mic
     except Exception as e:
-        logger.warning("Could not get loopback for default speaker: %s", e)
+        warn("Could not get loopback for default speaker: %s", e)
 
     # Fallback: first mic with isloopback=True
     try:
@@ -87,7 +90,7 @@ def pick_loopback(sc):
             if getattr(mic, "isloopback", False):
                 return mic
     except Exception as e:
-        logger.warning("Could not list microphones: %s", e)
+        warn("Could not list microphones: %s", e)
 
     return None
 
@@ -106,6 +109,28 @@ COLOR_CHANGE_THRESHOLD = 15
 
 # Rate-limit interval for error logs (seconds)
 ERROR_LOG_INTERVAL = 60
+
+
+def _should_log(last_times, key, now, interval=ERROR_LOG_INTERVAL):
+    """Rate-limit log messages by key.
+
+    Returns True if the message should be logged (first time or interval elapsed),
+    and updates last_times[key] to now. Returns False otherwise.
+
+    Args:
+        last_times: Dict mapping log keys to last log times.
+        key: Unique key for this log message type.
+        now: Current time (from time_fn).
+        interval: Minimum seconds between logs for this key.
+
+    Returns:
+        True if the message should be logged, False otherwise.
+    """
+    if key not in last_times or (now - last_times[key]) >= interval:
+        last_times[key] = now
+        return True
+    return False
+
 
 # State files for background process management
 STATE_DIR = Path(__file__).parent / "state"
@@ -722,7 +747,7 @@ def run(config, fps=None, verbose=False, log_file=None, time_fn=None):
         prev_features = None
         last_color = None
         last_frame_time = {}
-        last_error_time = None
+        last_log_times = {}
         last_heartbeat_time = 0.0
         signal_was_active = False
 
@@ -861,9 +886,10 @@ def run(config, fps=None, verbose=False, log_file=None, time_fn=None):
 
                 # If no recorder is open, try to open one
                 if rec is None:
-                    new_loopback = pick_loopback(sc)
+                    # Rate-limit pick_loopback's warnings during retry loops
+                    should_log_pick = _should_log(last_log_times, "pick", frame_start)
+                    new_loopback = pick_loopback(sc, log=should_log_pick)
                     if new_loopback is not None:
-                        logger.info("Opening recorder on %s", new_loopback.name)
                         try:
                             rec = new_loopback.recorder(
                                 samplerate=sample_rate, channels=1
@@ -871,10 +897,10 @@ def run(config, fps=None, verbose=False, log_file=None, time_fn=None):
                             rec_device_id = new_loopback.id
                             # Device found again; reset no-device state
                             no_device_off_sent = False
+                            logger.info("Recorder opened on %s", new_loopback.name)
                         except Exception as enter_err:
-                            if last_error_time is None or (frame_start - last_error_time) >= ERROR_LOG_INTERVAL:
+                            if _should_log(last_log_times, "enter", frame_start):
                                 logger.error("Failed to enter recorder: %s", enter_err)
-                                last_error_time = frame_start
                             # No device: turn off once, keep running
                             if not no_device_off_sent:
                                 logger.info("no audio device; turning lights off")
@@ -884,9 +910,8 @@ def run(config, fps=None, verbose=False, log_file=None, time_fn=None):
                             time.sleep(1.0)
                             continue
                     else:
-                        if last_error_time is None or (frame_start - last_error_time) >= ERROR_LOG_INTERVAL:
+                        if _should_log(last_log_times, "no_device", frame_start):
                             logger.error("No loopback device found")
-                            last_error_time = frame_start
                         # No device: turn off once, keep running
                         if not no_device_off_sent:
                             logger.info("no audio device; turning lights off")
@@ -900,9 +925,8 @@ def run(config, fps=None, verbose=False, log_file=None, time_fn=None):
                 try:
                     raw = rec.record(numframes=samples_per_frame)
                 except Exception as e:
-                    if last_error_time is None or (frame_start - last_error_time) >= ERROR_LOG_INTERVAL:
+                    if _should_log(last_log_times, "capture", frame_start):
                         logger.error("Audio capture error: %s", e)
-                        last_error_time = frame_start
                     time.sleep(1.0)
                     # Exit the old recorder and forget it
                     try:
@@ -1006,9 +1030,8 @@ def run(config, fps=None, verbose=False, log_file=None, time_fn=None):
                                              features["level"], features["bass"],
                                              features["mid"], features["treble"])
                             except OSError as e:
-                                if last_error_time is None or (frame_start - last_error_time) >= ERROR_LOG_INTERVAL:
+                                if _should_log(last_log_times, "send", frame_start):
                                     logger.error("Failed to send to %s: %s", ip, e)
-                                    last_error_time = frame_start
 
                         last_color = rgb
 

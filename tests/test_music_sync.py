@@ -5,6 +5,7 @@ All tests run without soundcard/numpy and without the network.
 
 import contextlib
 import json
+import logging
 import math
 import os
 import sys
@@ -1894,7 +1895,7 @@ class TestRecorderReopenWithStrictFake(StateDirMixin, unittest.TestCase):
         fake_mic.isloopback = True
         fake_mic.recorder = make_recorder
 
-        def fake_pick_loopback(sc):
+        def fake_pick_loopback(sc, log=True):
             pick_call_count[0] += 1
             # First call (initial): return mic
             # Second call (after error): return None
@@ -2037,7 +2038,7 @@ class TestRecorderReopenWithStrictFake(StateDirMixin, unittest.TestCase):
         pick_call_count = [0]
         record_call_count = [0]
 
-        def fake_pick_loopback(sc):
+        def fake_pick_loopback(sc, log=True):
             pick_call_count[0] += 1
             # First call (startup check): return mic
             # Second call (first in-loop open): return mic, recorder opens
@@ -2731,7 +2732,7 @@ class TestModeSwitchStep3(StateDirMixin, unittest.TestCase):
         fake_mic.name = "Stereo Mix (loopback)"
         fake_mic.isloopback = True
 
-        def fake_pick_loopback(sc):
+        def fake_pick_loopback(sc, log=True):
             pick_call_count[0] += 1
             if pick_call_count[0] <= 3:
                 return None
@@ -3878,6 +3879,221 @@ class TestMainLevelForwarding(StateDirMixin, unittest.TestCase):
         cmd = call_args[0][0]
         self.assertIn("--verbose", cmd)
         self.assertFalse((helpers._SESSION_STATE_DIR / "mode.json").exists())
+
+
+class TestShouldLog(unittest.TestCase):
+    """Test the _should_log rate-limiting helper."""
+
+    def test_first_call_returns_true(self):
+        """First call for a key should return True."""
+        last_times = {}
+        result = music_sync._should_log(last_times, "test", 0.0)
+        self.assertTrue(result)
+        self.assertEqual(last_times["test"], 0.0)
+
+    def test_second_call_within_interval_returns_false(self):
+        """Second call within interval should return False."""
+        last_times = {}
+        music_sync._should_log(last_times, "test", 0.0)
+        result = music_sync._should_log(last_times, "test", 10.0)
+        self.assertFalse(result)
+
+    def test_call_after_interval_returns_true(self):
+        """Call after interval should return True."""
+        last_times = {}
+        music_sync._should_log(last_times, "test", 0.0)
+        result = music_sync._should_log(last_times, "test", 60.0)
+        self.assertTrue(result)
+        self.assertEqual(last_times["test"], 60.0)
+
+    def test_different_keys_are_independent(self):
+        """Different keys should be rate-limited independently."""
+        last_times = {}
+        result_a = music_sync._should_log(last_times, "a", 0.0)
+        result_b = music_sync._should_log(last_times, "b", 0.0)
+        self.assertTrue(result_a)
+        self.assertTrue(result_b)
+        # Second call for "a" within interval should be False
+        result_a2 = music_sync._should_log(last_times, "a", 10.0)
+        self.assertFalse(result_a2)
+        # But "b" after interval should be True
+        result_b2 = music_sync._should_log(last_times, "b", 60.0)
+        self.assertTrue(result_b2)
+
+
+class TestPickLoopbackLogParam(unittest.TestCase):
+    """Test pick_loopback's log parameter."""
+
+    def test_log_false_uses_debug(self):
+        """When log=False, warnings should be logged at DEBUG level."""
+        fake_speaker = mock.Mock()
+        fake_speaker.name = "Speakers X"
+        fake_speaker.id = "{0.0.0.00000000}.{spk}"
+
+        fake_sc = mock.Mock()
+        fake_sc.default_speaker = mock.Mock(return_value=fake_speaker)
+        fake_sc.get_microphone = mock.Mock(side_effect=Exception("not found"))
+        fake_sc.all_microphones = mock.Mock(return_value=[])
+
+        with self.assertLogs(music_sync.logger, level="DEBUG") as cm:
+            result = music_sync.pick_loopback(fake_sc, log=False)
+        self.assertIsNone(result)
+        # Should have DEBUG logs, not WARNING
+        debug_logs = [r for r in cm.records if r.levelno == logging.DEBUG]
+        warning_logs = [r for r in cm.records if r.levelno == logging.WARNING]
+        self.assertGreater(len(debug_logs), 0)
+        self.assertEqual(len(warning_logs), 0)
+
+    def test_log_true_uses_warning(self):
+        """When log=True (default), warnings should be logged at WARNING level."""
+        fake_speaker = mock.Mock()
+        fake_speaker.name = "Speakers X"
+        fake_speaker.id = "{0.0.0.00000000}.{spk}"
+
+        fake_sc = mock.Mock()
+        fake_sc.default_speaker = mock.Mock(return_value=fake_speaker)
+        fake_sc.get_microphone = mock.Mock(side_effect=Exception("not found"))
+        fake_sc.all_microphones = mock.Mock(return_value=[])
+
+        with self.assertLogs(music_sync.logger, level="WARNING") as cm:
+            result = music_sync.pick_loopback(fake_sc, log=True)
+        self.assertIsNone(result)
+        warning_logs = [r for r in cm.records if r.levelno == logging.WARNING]
+        self.assertGreater(len(warning_logs), 0)
+
+
+class TestLogRateLimitingInLoop(StateDirMixin, unittest.TestCase):
+    """Test that log spam is rate-limited in the retry loop."""
+
+    def test_pick_loopback_warnings_rate_limited(self):
+        """pick_loopback warnings should be rate-limited during retry loop."""
+        self.set_mode("music")
+
+        fake_speaker = mock.Mock()
+        fake_speaker.name = "Speakers X"
+        fake_speaker.id = "{0.0.0.00000000}.{spk}"
+
+        fake_sc = mock.Mock()
+        fake_sc.default_speaker = mock.Mock(return_value=fake_speaker)
+        fake_sc.get_microphone = mock.Mock(side_effect=Exception("not found"))
+        fake_sc.all_microphones = mock.Mock(return_value=[])
+
+        fake_time_fn = bounded_clock(step=1.0, limit=1000.0)
+
+        with mock.patch.dict(sys.modules, {"soundcard": fake_sc, "numpy": mock.Mock()}):
+            with mock.patch.object(music_sync, "govee") as mock_govee:
+                mock_govee.turn = mock.Mock(return_value=True)
+                mock_govee.status = mock.Mock(return_value={"msg": {"data": {"brightness": 50}}})
+                mock_govee.brightness = mock.Mock()
+                with mock.patch("time.sleep"):
+                    with mock.patch.object(music_sync, "STOP_FLAG_FILE", self.state_dir / "music_stop"):
+                        with mock.patch.object(music_sync, "PID_FILE", self.state_dir / "music_sync.pid"):
+                            # Run for 30 frames (30 seconds), then stop via flag
+                            stop_after = [0]
+                            def fake_stop_flag_exists():
+                                stop_after[0] += 1
+                                return stop_after[0] > 30
+                            with mock.patch.object(music_sync, "STOP_FLAG_FILE") as mock_stop_flag:
+                                mock_stop_flag.exists = fake_stop_flag_exists
+                                with self.assertLogs(music_sync.logger, level="DEBUG") as cm:
+                                    music_sync.run(
+                                        {"devices": [{"ip": "1.2.3.4"}]},
+                                        fps=10,
+                                        time_fn=fake_time_fn,
+                                    )
+
+        # Count WARNING logs for "Could not get loopback"
+        loopback_warnings = [
+            r for r in cm.records
+            if r.levelno == logging.WARNING and "Could not get loopback" in r.getMessage()
+        ]
+        # Should be at most 1 (rate-limited to once per 60s)
+        self.assertLessEqual(len(loopback_warnings), 1,
+                            f"Expected at most 1 loopback warning, got {len(loopback_warnings)}")
+
+        # Count ERROR logs for "No loopback device found"
+        no_device_errors = [
+            r for r in cm.records
+            if r.levelno == logging.ERROR and "No loopback device found" in r.getMessage()
+        ]
+        # Should be at most 1 (rate-limited to once per 60s)
+        self.assertLessEqual(len(no_device_errors), 1,
+                            f"Expected at most 1 no-device error, got {len(no_device_errors)}")
+
+    def test_separate_error_keys_logged_independently(self):
+        """Different error types should be logged independently."""
+        self.set_mode("music")
+
+        # Create a fake recorder that fails on first record, then succeeds
+        fake_rec = mock.Mock()
+        fake_rec.__enter__ = mock.Mock(return_value=fake_rec)
+        fake_rec.__exit__ = mock.Mock(return_value=False)
+
+        record_count = [0]
+        def fake_record(numframes):
+            record_count[0] += 1
+            if record_count[0] == 1:
+                raise RuntimeError("capture error")
+            if record_count[0] >= 3:
+                raise KeyboardInterrupt()
+            return mock.Mock(ndim=1, shape=(1024,), dtype="float64")
+
+        fake_rec.record = mock.Mock(side_effect=fake_record)
+
+        fake_mic = mock.Mock()
+        fake_mic.name = "Stereo Mix (loopback)"
+        fake_mic.isloopback = True
+        fake_mic.recorder = mock.Mock(return_value=fake_rec)
+
+        fake_speaker = mock.Mock()
+        fake_speaker.name = "Stereo Mix (loopback)"
+
+        fake_sc = mock.Mock()
+        fake_sc.default_speaker = mock.Mock(return_value=fake_speaker)
+        fake_sc.get_microphone = mock.Mock(return_value=fake_mic)
+        fake_sc.all_microphones = mock.Mock(return_value=[fake_mic])
+
+        # Track send errors
+        send_error_count = [0]
+        def fake_color(ip, r, g, b):
+            send_error_count[0] += 1
+            if send_error_count[0] == 1:
+                raise OSError("send error")
+
+        fake_time_fn = bounded_clock(step=1.0, limit=1000.0)
+
+        with mock.patch.dict(sys.modules, {"soundcard": fake_sc, "numpy": mock.Mock()}):
+            with mock.patch.object(music_sync, "govee") as mock_govee:
+                mock_govee.color = fake_color
+                mock_govee.status = mock.Mock(return_value={"msg": {"data": {"brightness": 50}}})
+                mock_govee.brightness = mock.Mock()
+                with mock.patch("time.sleep"):
+                    with mock.patch.object(music_sync, "STOP_FLAG_FILE", self.state_dir / "music_stop"):
+                        with mock.patch.object(music_sync, "PID_FILE", self.state_dir / "music_sync.pid"):
+                            with mock.patch.object(music_sync, "analyze", return_value={"level": 0.5, "bass": 0.5, "mid": 0.5, "treble": 0.5}):
+                                with self.assertLogs(music_sync.logger, level="ERROR") as cm:
+                                    try:
+                                        music_sync.run(
+                                            {"devices": [{"ip": "1.2.3.4"}]},
+                                            fps=10,
+                                            time_fn=fake_time_fn,
+                                        )
+                                    except KeyboardInterrupt:
+                                        pass
+
+        # Both errors should be logged (different keys)
+        capture_errors = [
+            r for r in cm.records
+            if "Audio capture error" in r.getMessage()
+        ]
+        send_errors = [
+            r for r in cm.records
+            if "Failed to send" in r.getMessage()
+        ]
+        self.assertGreater(len(capture_errors), 0,
+                          "Expected capture error to be logged")
+        self.assertGreater(len(send_errors), 0,
+                          "Expected send error to be logged")
 
 
 if __name__ == "__main__":
