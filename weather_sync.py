@@ -67,6 +67,9 @@ BLOCKED_POLL_SECONDS = 10
 DEFAULT_FRAME_INTERVAL = 1.0
 MIN_FRAME_INTERVAL = 0.5
 
+# Retry interval for failed weather fetches in pattern mode (seconds)
+FETCH_RETRY_SECONDS = 60
+
 
 def hex_to_rgb(hex_color):
     """Convert hex color string to (r, g, b) tuple."""
@@ -491,66 +494,75 @@ def run(config, once=False, interval=900, dry_run=False, rng=None, time_fn=None)
             need_fetch = (last_fetch is None or (now - last_fetch) >= interval)
 
         if need_fetch:
+            weather = None
             try:
                 weather = fetch_weather(lat, lon)
             except (OSError, ValueError, KeyError) as e:
                 logger.error("Failed to fetch weather: %s", e)
                 if once:
                     sys.exit(1)
-                time.sleep(interval)
-                continue
 
-            code = weather["weather_code"]
-            if code is None:
-                logger.warning("weather_code is null; skipping this iteration")
-                if once:
-                    sys.exit(1)
-                time.sleep(interval)
-                continue
-
-            temp = weather["temperature_2m"]
-            if temp is None:
-                logger.warning("temperature_2m is null; skipping this iteration")
-                if once:
-                    sys.exit(1)
-                time.sleep(interval)
-                continue
-
-            is_day = weather["is_day"]
-
-            color_hex = weather_to_color(code, temp, is_day)
-            logger.info("Weather: code=%d temp=%.1f°C day=%d -> color=%s",
-                        code, temp, is_day, color_hex)
-
-            # Determine if we should use a pattern
-            if patterns_enabled:
-                new_pattern = get_pattern_for_code(code, patterns_cfg, is_day)
-            else:
-                new_pattern = None
-
-            # If pattern changed (code or day/night), reset the pattern timer
-            if new_pattern != current_pattern or is_day != current_is_day:
-                current_pattern = new_pattern
-                current_is_day = is_day
-                pattern_start_time = now
-                if current_pattern is not None:
-                    logger.info("Starting pattern: %s (day=%d)",
-                                current_pattern.get("type", "unknown"), is_day)
-                    # Schedule first flash for thunderstorm patterns
-                    if current_pattern.get("type") == "thunderstorm":
-                        flash_every = current_pattern.get("flash_every", [6, 20])
-                        next_flash_time = schedule_next_flash(rng, flash_every, now)
+            if weather is not None:
+                code = weather["weather_code"]
+                if code is None:
+                    logger.warning("weather_code is null; skipping this iteration")
+                    if once:
+                        sys.exit(1)
+                    weather = None
                 else:
-                    next_flash_time = None
+                    temp = weather["temperature_2m"]
+                    if temp is None:
+                        logger.warning("temperature_2m is null; skipping this iteration")
+                        if once:
+                            sys.exit(1)
+                        weather = None
 
-            last_fetch = now
+            if weather is None:
+                # Fetch failed or returned null fields
+                if current_pattern is not None:
+                    # Pattern mode: retry in ~60s, keep animating with last pattern
+                    last_fetch = now - interval + FETCH_RETRY_SECONDS
+                else:
+                    time.sleep(interval)
+                    continue
+            else:
+                code = weather["weather_code"]
+                temp = weather["temperature_2m"]
+                is_day = weather["is_day"]
 
-            # Schedule next fetch
-            if fetch_on_the_hour:
-                next_fetch_at = next_hour_boundary(now)
-                next_local = time.localtime(next_fetch_at)
-                logger.info("Next weather fetch at %02d:%02d", next_local.tm_hour, next_local.tm_min)
-            # When not fetch_on_the_hour, next fetch is determined by interval check
+                color_hex = weather_to_color(code, temp, is_day)
+                logger.info("Weather: code=%d temp=%.1f°C day=%d -> color=%s",
+                            code, temp, is_day, color_hex)
+
+                # Determine if we should use a pattern
+                if patterns_enabled:
+                    new_pattern = get_pattern_for_code(code, patterns_cfg, is_day)
+                else:
+                    new_pattern = None
+
+                # If pattern changed (code or day/night), reset the pattern timer
+                if new_pattern != current_pattern or is_day != current_is_day:
+                    current_pattern = new_pattern
+                    current_is_day = is_day
+                    pattern_start_time = now
+                    if current_pattern is not None:
+                        logger.info("Starting pattern: %s (day=%d)",
+                                    current_pattern.get("type", "unknown"), is_day)
+                        # Schedule first flash for thunderstorm patterns
+                        if current_pattern.get("type") == "thunderstorm":
+                            flash_every = current_pattern.get("flash_every", [6, 20])
+                            next_flash_time = schedule_next_flash(rng, flash_every, now)
+                    else:
+                        next_flash_time = None
+
+                last_fetch = now
+
+                # Schedule next fetch
+                if fetch_on_the_hour:
+                    next_fetch_at = next_hour_boundary(now)
+                    next_local = time.localtime(next_fetch_at)
+                    logger.info("Next weather fetch at %02d:%02d", next_local.tm_hour, next_local.tm_min)
+                # When not fetch_on_the_hour, next fetch is determined by interval check
 
         else:
             # Reuse last weather data; color_hex is from previous fetch

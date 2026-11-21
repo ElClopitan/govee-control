@@ -2910,5 +2910,161 @@ class TestModeControl(StateDirMixin, unittest.TestCase):
         mock_brightness.assert_not_called()
 
 
+class TestFetchErrorRetry(StateDirMixin, unittest.TestCase):
+    """Test that failed weather fetches retry quickly in pattern mode."""
+
+    def setUp(self):
+        super().setUp()
+        self.set_mode("weather")
+        p = mock.patch("agent_signal.sweep_and_restore")
+        p.start()
+        self.addCleanup(p.stop)
+
+    def _make_config(self, patterns_enabled=True, frame_interval=1.0):
+        return {
+            "devices": [
+                {"name": "left", "ip": "192.168.1.50"},
+                {"name": "right", "ip": "192.168.1.51"},
+            ],
+            "weather": {
+                "latitude": 51.5,
+                "longitude": -0.1,
+                "brightness": 80,
+                "patterns_enabled": patterns_enabled,
+                "frame_interval": frame_interval,
+            },
+        }
+
+    @mock.patch("weather_sync.fetch_weather")
+    @mock.patch("govee.turn")
+    @mock.patch("govee.color")
+    @mock.patch("govee.brightness")
+    @mock.patch("time.sleep")
+    @mock.patch("time.time")
+    def test_pattern_mode_fetch_error_retries_quickly(self, mock_time, mock_sleep, mock_brightness, mock_color, mock_turn, mock_fetch):
+        """Pattern mode: fetch error retries in ~60s, not 900s. Animation continues."""
+        import urllib.error
+
+        mock_time.return_value = 1000.0
+
+        # First fetch succeeds (rain pattern), second fails
+        fetch_count = [0]
+        def fetch_side_effect(*args, **kwargs):
+            fetch_count[0] += 1
+            if fetch_count[0] == 1:
+                return {"temperature_2m": 15.0, "weather_code": 61, "is_day": 1}
+            else:
+                raise urllib.error.URLError("network blip")
+
+        mock_fetch.side_effect = fetch_side_effect
+
+        config = self._make_config(frame_interval=1.0)
+
+        # Track sleep calls to detect the 900s sleep
+        sleep_calls = []
+        def sleep_side_effect(seconds):
+            sleep_calls.append(seconds)
+            mock_time.return_value += seconds
+            # Exit after we've seen the retry attempt
+            if fetch_count[0] >= 2 and len(sleep_calls) >= 3:
+                raise KeyboardInterrupt()
+
+        mock_sleep.side_effect = sleep_side_effect
+
+        try:
+            weather_sync.run(config, once=False, interval=900)
+        except KeyboardInterrupt:
+            pass
+
+        # Should have attempted 2 fetches (first OK, second failed)
+        self.assertEqual(fetch_count[0], 2)
+
+        # No 900s sleep should have happened (that would freeze animation)
+        for s in sleep_calls:
+            self.assertNotEqual(s, 900, f"Found 900s sleep: {sleep_calls}")
+
+        # govee.color should have been called multiple times (animation continued)
+        self.assertGreater(mock_color.call_count, 1)
+
+    @mock.patch("weather_sync.fetch_weather")
+    @mock.patch("govee.turn")
+    @mock.patch("govee.color")
+    @mock.patch("govee.brightness")
+    @mock.patch("time.sleep")
+    @mock.patch("time.time")
+    def test_static_mode_fetch_error_sleeps_interval(self, mock_time, mock_sleep, mock_brightness, mock_color, mock_turn, mock_fetch):
+        """Static mode: fetch error still sleeps full interval (existing behavior)."""
+        import urllib.error
+
+        mock_time.return_value = 1000.0
+
+        mock_fetch.side_effect = urllib.error.URLError("network down")
+
+        config = self._make_config(patterns_enabled=False)
+
+        sleep_calls = []
+        def sleep_side_effect(seconds):
+            sleep_calls.append(seconds)
+            raise KeyboardInterrupt()
+
+        mock_sleep.side_effect = sleep_side_effect
+
+        try:
+            weather_sync.run(config, once=False, interval=900)
+        except KeyboardInterrupt:
+            pass
+
+        # Should have slept the full interval
+        self.assertEqual(len(sleep_calls), 1)
+        self.assertEqual(sleep_calls[0], 900)
+
+    @mock.patch("weather_sync.fetch_weather")
+    @mock.patch("govee.turn")
+    @mock.patch("govee.color")
+    @mock.patch("govee.brightness")
+    @mock.patch("time.sleep")
+    @mock.patch("time.time")
+    def test_pattern_mode_null_code_retries_quickly(self, mock_time, mock_sleep, mock_brightness, mock_color, mock_turn, mock_fetch):
+        """Pattern mode: null weather_code retries in ~60s."""
+        mock_time.return_value = 1000.0
+
+        # First fetch OK, second returns null code
+        fetch_count = [0]
+        def fetch_side_effect(*args, **kwargs):
+            fetch_count[0] += 1
+            if fetch_count[0] == 1:
+                return {"temperature_2m": 15.0, "weather_code": 61, "is_day": 1}
+            else:
+                return {"temperature_2m": 15.0, "weather_code": None, "is_day": 1}
+
+        mock_fetch.side_effect = fetch_side_effect
+
+        config = self._make_config(frame_interval=1.0)
+
+        sleep_calls = []
+        def sleep_side_effect(seconds):
+            sleep_calls.append(seconds)
+            mock_time.return_value += seconds
+            if fetch_count[0] >= 2 and len(sleep_calls) >= 3:
+                raise KeyboardInterrupt()
+
+        mock_sleep.side_effect = sleep_side_effect
+
+        try:
+            weather_sync.run(config, once=False, interval=900)
+        except KeyboardInterrupt:
+            pass
+
+        # Should have attempted 2 fetches
+        self.assertEqual(fetch_count[0], 2)
+
+        # No 900s sleep
+        for s in sleep_calls:
+            self.assertNotEqual(s, 900)
+
+        # Animation continued
+        self.assertGreater(mock_color.call_count, 1)
+
+
 if __name__ == "__main__":
     unittest.main()
