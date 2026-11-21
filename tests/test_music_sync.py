@@ -2290,6 +2290,66 @@ class TestRecorderReopenWithStrictFake(StateDirMixin, unittest.TestCase):
         self.assertEqual(recorders_created[0].exit_count, 1,
                         "Recorder should have been exited exactly once")
 
+    def test_fallback_mic_no_reopen_on_speaker_check(self):
+        """When pick_loopback falls back to a different mic, the speaker-change
+        check should not reopen the recorder every 5s."""
+        self.set_mode("music")
+        recorders_created = []
+        record_call_count = [0]
+
+        def record_side_effect():
+            record_call_count[0] += 1
+            if record_call_count[0] >= 100:
+                raise KeyboardInterrupt()
+
+        def make_recorder(samplerate, channels):
+            rec = self._make_strict_recorder(record_side_effect)
+            recorders_created.append(rec)
+            return rec
+
+        fake_speaker = mock.Mock()
+        fake_speaker.name = "Speakers A"
+        fake_speaker.id = "A"
+
+        # Fallback mic has a different id than the speaker
+        fake_mic = mock.Mock()
+        fake_mic.name = "Loopback Mic"
+        fake_mic.id = "MIC-1"
+        fake_mic.isloopback = True
+        fake_mic.recorder = make_recorder
+
+        # get_microphone raises, forcing pick_loopback to fall back
+        fake_sc = mock.Mock()
+        fake_sc.default_speaker = mock.Mock(return_value=fake_speaker)
+        fake_sc.get_microphone = mock.Mock(side_effect=Exception("no loopback for speaker"))
+        fake_sc.all_microphones = mock.Mock(return_value=[fake_mic])
+
+        fake_time_fn = bounded_clock()
+
+        with mock.patch.dict(sys.modules, {"soundcard": fake_sc, "numpy": mock.Mock()}):
+            with mock.patch.object(music_sync, "govee") as mock_govee:
+                mock_govee.status = mock.Mock(return_value={"msg": {"data": {"brightness": 50}}})
+                mock_govee.brightness = mock.Mock()
+                with mock.patch("time.sleep"):
+                    with mock.patch.object(music_sync, "STOP_FLAG_FILE", self.state_dir / "music_stop"):
+                        with mock.patch.object(music_sync, "PID_FILE", self.state_dir / "music_sync.pid"):
+                            with mock.patch.object(music_sync, "analyze", return_value={"level": 0.5, "bass": 0.5, "mid": 0.5, "treble": 0.5}):
+                                try:
+                                    music_sync.run(
+                                        {"devices": [{"ip": "1.2.3.4"}]},
+                                        fps=10,
+                                        time_fn=fake_time_fn,
+                                    )
+                                except KeyboardInterrupt:
+                                    pass
+
+        # Only one recorder should have been created (no reopen on speaker check)
+        self.assertEqual(len(recorders_created), 1,
+                        f"Expected 1 recorder, got {len(recorders_created)}")
+        # It should have been exited exactly once (by finally)
+        self.assertEqual(recorders_created[0].exit_count, 1,
+                        "Recorder should have been exited exactly once")
+
 
 class TestModeSwitchStep3(StateDirMixin, unittest.TestCase):
     """Tests for mode switch step 3: music_sync runs only in music mode."""

@@ -794,7 +794,7 @@ def run(config, fps=None, verbose=False, log_file=None, time_fn=None):
 
         # Recorder is opened lazily; None means "not currently open"
         rec = None
-        rec_device_id = None
+        rec_speaker_id = None
         last_device_check = 0.0
 
         try:
@@ -884,7 +884,7 @@ def run(config, fps=None, verbose=False, log_file=None, time_fn=None):
                         current_id = sc.default_speaker().id
                     except Exception:
                         current_id = None
-                    if current_id is not None and current_id != rec_device_id:
+                    if rec_speaker_id is not None and current_id is not None and current_id != rec_speaker_id:
                         logger.info("default speaker changed; reopening recorder")
                         try:
                             rec.__exit__(None, None, None)
@@ -903,7 +903,13 @@ def run(config, fps=None, verbose=False, log_file=None, time_fn=None):
                             rec = new_loopback.recorder(
                                 samplerate=sample_rate, channels=1
                             ).__enter__()
-                            rec_device_id = new_loopback.id
+                            # Store the default speaker id, not the mic id, so the
+                            # speaker-change check works even when pick_loopback
+                            # fell back to a different loopback mic.
+                            try:
+                                rec_speaker_id = sc.default_speaker().id
+                            except Exception:
+                                rec_speaker_id = None
                             # Device found again; reset no-device state
                             no_device_off_sent = False
                             logger.info("Recorder opened on %s", new_loopback.name)
