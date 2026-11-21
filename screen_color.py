@@ -129,12 +129,14 @@ def grab_small():
     TARGET_H = 36
 
     with mss.mss() as sct:
-        monitor = sct.monitors[0]  # primary
+        # monitors[0] is all monitors combined; [1] is the primary
+        monitor = sct.monitors[1] if len(sct.monitors) > 1 else sct.monitors[0]
         img = sct.grab(monitor)
 
     src_w = img.width
     src_h = img.height
-    src_bytes = img.bgra  # BGRA order, 4 bytes per pixel
+    # img.raw is the BGRA buffer directly; img.bgra makes a copy
+    src_bytes = img.raw
 
     # Calculate stride
     x_stride = src_w / TARGET_W

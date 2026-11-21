@@ -116,7 +116,7 @@ class TestGrabSmall(unittest.TestCase):
         fake_img.width = 1920
         fake_img.height = 1080
         # BGRA buffer: 1920*1080*4 bytes, all red (B=0, G=0, R=255, A=255)
-        fake_img.bgra = bytes([0, 0, 255, 255]) * (1920 * 1080)
+        fake_img.raw = bytearray([0, 0, 255, 255]) * (1920 * 1080)
 
         fake_sct = mock.Mock()
         fake_sct.monitors = [
@@ -147,7 +147,7 @@ class TestGrabSmall(unittest.TestCase):
         buf[0] = 10  # B
         buf[1] = 20  # G
         buf[2] = 30  # R
-        fake_img.bgra = bytes(buf)
+        fake_img.raw = buf
 
         fake_sct = mock.Mock()
         fake_sct.monitors = [
@@ -164,6 +164,32 @@ class TestGrabSmall(unittest.TestCase):
 
         # First pixel should be (R=30, G=20, B=10)
         self.assertEqual(pixels[0], (30, 20, 10))
+
+    def test_grab_small_uses_primary_monitor(self):
+        """grab_small should use monitors[1] (primary), not monitors[0] (all)."""
+        # mss layout: monitors[0] = all monitors combined, [1] = primary, [2] = secondary
+        all_monitors = {"left": -1920, "top": 0, "width": 3840, "height": 1080}
+        primary = {"left": 0, "top": 0, "width": 1920, "height": 1080}
+        secondary = {"left": -1920, "top": 0, "width": 1920, "height": 1080}
+
+        fake_img = mock.Mock()
+        fake_img.width = 1920
+        fake_img.height = 1080
+        fake_img.raw = bytearray([0, 0, 255, 255]) * (1920 * 1080)
+
+        fake_sct = mock.Mock()
+        fake_sct.monitors = [all_monitors, primary, secondary]
+        fake_sct.grab.return_value = fake_img
+
+        fake_mss = mock.MagicMock()
+        fake_mss.mss.return_value.__enter__.return_value = fake_sct
+        fake_mss.mss.return_value.__exit__.return_value = None
+
+        with mock.patch.dict("sys.modules", {"mss": fake_mss}):
+            screen_color.grab_small()
+
+        # Should have grabbed the primary monitor (index 1), not all (index 0)
+        fake_sct.grab.assert_called_once_with(primary)
 
 
 if __name__ == "__main__":
