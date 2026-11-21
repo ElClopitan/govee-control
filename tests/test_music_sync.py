@@ -3853,11 +3853,10 @@ class TestMainLevelForwarding(StateDirMixin, unittest.TestCase):
 
     def test_main_start_fps_verbose(self):
         """main() with 'start --fps 30 --verbose' should forward to child."""
-        with mock.patch("sys.argv", ["music_sync.py", "start", "--fps", "30", "--verbose"]):
-            with mock_start_env() as mock_popen:
-                with self.assertRaises(SystemExit) as cm:
-                    music_sync.main()
-                self.assertEqual(cm.exception.code, 0)
+        with mock.patch("sys.argv", ["music_sync.py", "start", "--fps", "30", "--verbose"]), mock_start_env() as mock_popen:
+            with self.assertRaises(SystemExit) as cm:
+                music_sync.main()
+            self.assertEqual(cm.exception.code, 0)
         call_args = mock_popen.call_args
         cmd = call_args[0][0]
         self.assertIn("--fps", cmd)
@@ -3868,11 +3867,10 @@ class TestMainLevelForwarding(StateDirMixin, unittest.TestCase):
 
     def test_main_verbose_before_start(self):
         """main() with '--verbose start' should forward --verbose to child."""
-        with mock.patch("sys.argv", ["music_sync.py", "--verbose", "start"]):
-            with mock_start_env() as mock_popen:
-                with self.assertRaises(SystemExit) as cm:
-                    music_sync.main()
-                self.assertEqual(cm.exception.code, 0)
+        with mock.patch("sys.argv", ["music_sync.py", "--verbose", "start"]), mock_start_env() as mock_popen:
+            with self.assertRaises(SystemExit) as cm:
+                music_sync.main()
+            self.assertEqual(cm.exception.code, 0)
         call_args = mock_popen.call_args
         cmd = call_args[0][0]
         self.assertIn("--verbose", cmd)

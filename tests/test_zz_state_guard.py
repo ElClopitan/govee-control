@@ -15,7 +15,7 @@ import unittest
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent))
-import helpers  # noqa: F401  installs the socket guard when run on its own
+import helpers
 
 
 class TestStateDirGuard(unittest.TestCase):
