@@ -364,7 +364,7 @@ class TestRunOnce(StateDirMixin, unittest.TestCase):
         mock_sleep.side_effect = sleep_side_effect
 
         try:
-            weather_sync.run(config, once=False, interval=900)
+            weather_sync.run(config, once=False, interval=900, time_fn=mock_time)
         except KeyboardInterrupt:
             pass
 
@@ -1712,7 +1712,7 @@ class TestPatternFetchInterval(StateDirMixin, unittest.TestCase):
         mock_sleep.side_effect = sleep_side_effect
 
         try:
-            weather_sync.run(config, once=False, interval=900)
+            weather_sync.run(config, once=False, interval=900, time_fn=mock_time)
         except KeyboardInterrupt:
             pass
 
@@ -1749,7 +1749,7 @@ class TestPatternFetchInterval(StateDirMixin, unittest.TestCase):
         mock_sleep.side_effect = sleep_side_effect
 
         try:
-            weather_sync.run(config, once=False, interval=900)
+            weather_sync.run(config, once=False, interval=900, time_fn=mock_time)
         except KeyboardInterrupt:
             pass
 
@@ -1809,7 +1809,7 @@ class TestPerStripBrightness(StateDirMixin, unittest.TestCase):
         mock_sleep.side_effect = sleep_side_effect
 
         try:
-            weather_sync.run(config, once=False, interval=900)
+            weather_sync.run(config, once=False, interval=900, time_fn=mock_time)
         except KeyboardInterrupt:
             pass
 
@@ -1909,7 +1909,7 @@ class TestFrameErrorRateLimit(StateDirMixin, unittest.TestCase):
 
         with self.assertLogs("weather_sync", "ERROR") as cm:
             try:
-                weather_sync.run(config, once=False, interval=900)
+                weather_sync.run(config, once=False, interval=900, time_fn=mock_time)
             except KeyboardInterrupt:
                 pass
 
@@ -2128,7 +2128,7 @@ class TestThunderstormPattern(StateDirMixin, unittest.TestCase):
         mock_sleep.side_effect = sleep_side_effect
 
         try:
-            weather_sync.run(config, once=False, interval=900, rng=rng)
+            weather_sync.run(config, once=False, interval=900, rng=rng, time_fn=mock_time)
         except KeyboardInterrupt:
             pass
 
@@ -2779,7 +2779,7 @@ class TestFetchOnTheHour(StateDirMixin, unittest.TestCase):
         mock_sleep.side_effect = sleep_side_effect
 
         try:
-            weather_sync.run(config, once=False, interval=900)
+            weather_sync.run(config, once=False, interval=900, time_fn=mock_time)
         except KeyboardInterrupt:
             pass
 
@@ -2822,7 +2822,7 @@ class TestFetchOnTheHour(StateDirMixin, unittest.TestCase):
         mock_sleep.side_effect = sleep_side_effect
 
         try:
-            weather_sync.run(config, once=False, interval=900)
+            weather_sync.run(config, once=False, interval=900, time_fn=mock_time)
         except KeyboardInterrupt:
             pass
 
@@ -2862,7 +2862,7 @@ class TestFetchOnTheHour(StateDirMixin, unittest.TestCase):
         mock_sleep.side_effect = sleep_side_effect
 
         try:
-            weather_sync.run(config, once=False, interval=900)
+            weather_sync.run(config, once=False, interval=900, time_fn=mock_time)
         except KeyboardInterrupt:
             pass
 
@@ -3070,7 +3070,7 @@ class TestFetchErrorRetry(StateDirMixin, unittest.TestCase):
         mock_sleep.side_effect = sleep_side_effect
 
         try:
-            weather_sync.run(config, once=False, interval=900)
+            weather_sync.run(config, once=False, interval=900, time_fn=mock_time)
         except KeyboardInterrupt:
             pass
 
@@ -3108,7 +3108,7 @@ class TestFetchErrorRetry(StateDirMixin, unittest.TestCase):
         mock_sleep.side_effect = sleep_side_effect
 
         try:
-            weather_sync.run(config, once=False, interval=900)
+            weather_sync.run(config, once=False, interval=900, time_fn=mock_time)
         except KeyboardInterrupt:
             pass
 
@@ -3149,7 +3149,7 @@ class TestFetchErrorRetry(StateDirMixin, unittest.TestCase):
         mock_sleep.side_effect = sleep_side_effect
 
         try:
-            weather_sync.run(config, once=False, interval=900)
+            weather_sync.run(config, once=False, interval=900, time_fn=mock_time)
         except KeyboardInterrupt:
             pass
 
@@ -3206,7 +3206,7 @@ class TestFetchErrorRetry(StateDirMixin, unittest.TestCase):
         mock_sleep.side_effect = sleep_side_effect
 
         try:
-            weather_sync.run(config, once=False, interval=900)
+            weather_sync.run(config, once=False, interval=900, time_fn=mock_time)
         except KeyboardInterrupt:
             pass
 
@@ -3289,7 +3289,7 @@ class TestNightBrightnessCeiling(StateDirMixin, unittest.TestCase):
         mock_sleep.side_effect = sleep_side_effect
 
         try:
-            weather_sync.run(config, once=False, interval=900)
+            weather_sync.run(config, once=False, interval=900, time_fn=mock_time)
         except KeyboardInterrupt:
             pass
 
@@ -3334,7 +3334,7 @@ class TestNightBrightnessCeiling(StateDirMixin, unittest.TestCase):
         mock_sleep.side_effect = sleep_side_effect
 
         try:
-            weather_sync.run(config, once=False, interval=900)
+            weather_sync.run(config, once=False, interval=900, time_fn=mock_time)
         except KeyboardInterrupt:
             pass
 
@@ -3401,7 +3401,7 @@ class TestStaticModeBrightnessChange(StateDirMixin, unittest.TestCase):
         mock_sleep.side_effect = sleep_side_effect
 
         try:
-            weather_sync.run(config, once=False, interval=900)
+            weather_sync.run(config, once=False, interval=900, time_fn=mock_time)
         except KeyboardInterrupt:
             pass
 
@@ -3614,7 +3614,7 @@ class TestFetchRetryBackoff(StateDirMixin, unittest.TestCase):
         mock_sleep.side_effect = sleep_side_effect
 
         try:
-            weather_sync.run(config, once=False, interval=900)
+            weather_sync.run(config, once=False, interval=900, time_fn=mock_time)
         except KeyboardInterrupt:
             pass
 
@@ -3663,7 +3663,7 @@ class TestFetchRetryBackoff(StateDirMixin, unittest.TestCase):
         mock_sleep.side_effect = sleep_side_effect
 
         try:
-            weather_sync.run(config, once=False, interval=900)
+            weather_sync.run(config, once=False, interval=900, time_fn=mock_time)
         except KeyboardInterrupt:
             pass
 
@@ -3711,7 +3711,7 @@ class TestFetchRetryBackoff(StateDirMixin, unittest.TestCase):
         mock_sleep.side_effect = sleep_side_effect
 
         try:
-            weather_sync.run(config, once=False, interval=900)
+            weather_sync.run(config, once=False, interval=900, time_fn=mock_time)
         except KeyboardInterrupt:
             pass
 
