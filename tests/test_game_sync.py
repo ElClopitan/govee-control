@@ -1,6 +1,7 @@
 """Tests for game_sync.py."""
 
 import json
+import logging
 import sys
 import tempfile
 import unittest
