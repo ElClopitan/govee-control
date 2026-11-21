@@ -454,8 +454,8 @@ class TestRestoreFollowsMode(StateDirMixin, unittest.TestCase):
         args.stale = False
         agent_signal.cmd_clear(args)
 
-        # Should have turned off both devices
-        self.assertEqual(mock_turn.call_count, 2)
+        # Should have turned off both devices 3 times each (6 total)
+        self.assertEqual(mock_turn.call_count, 6)
         for call in mock_turn.call_args_list:
             self.assertFalse(call[0][1])  # second arg is False (off)
 
@@ -537,8 +537,8 @@ class TestRestoreFollowsMode(StateDirMixin, unittest.TestCase):
         # Should have restored (turned off)
         self.assertTrue(result)
 
-        # Should have turned off both devices
-        self.assertEqual(mock_turn.call_count, 2)
+        # Should have turned off both devices 3 times each (6 total)
+        self.assertEqual(mock_turn.call_count, 6)
         for call in mock_turn.call_args_list:
             self.assertFalse(call[0][1])  # second arg is False (off)
 
@@ -650,6 +650,91 @@ class TestRestoreFollowsMode(StateDirMixin, unittest.TestCase):
 
         # Saved state should still exist (not deleted on error)
         self.assertTrue(signal_path.exists())
+
+    @mock.patch("agent_signal.govee.status")
+    @mock.patch("agent_signal.govee.turn")
+    @mock.patch("agent_signal.govee.brightness")
+    @mock.patch("agent_signal.govee.color")
+    def test_off_mode_sends_turn_off_three_times_per_device(
+        self, mock_color, mock_brightness, mock_turn, mock_status, mock_sleep
+    ):
+        """clear in off mode sends turn off 3 times per device with 0.2s sleep between attempts."""
+        mock_status.return_value = {
+            "msg": {"data": {"on": True, "brightness": 50, "color": {"r": 255, "g": 255, "b": 255}}}
+        }
+
+        # Set up needs-input signal
+        args = mock.Mock()
+        args.command = "needs-input"
+        args.config = str(self.config_path)
+        args.dry_run = False
+        args.force = False
+        with mock.patch.dict(os.environ, {"CLAUDE_CODE_SESSION_ATTENDED": "1"}):
+            agent_signal.cmd_needs_input(args)
+
+        # Switch to off mode
+        arbiter.set_mode("off")
+
+        # Reset mocks to only track calls after mode change
+        mock_color.reset_mock()
+        mock_brightness.reset_mock()
+        mock_turn.reset_mock()
+        mock_sleep.reset_mock()
+
+        # Clear the signal
+        args.command = "clear"
+        args.stale = False
+        agent_signal.cmd_clear(args)
+
+        # 2 devices × 3 attempts = 6 calls
+        self.assertEqual(mock_turn.call_count, 6)
+        # All calls should be turn off (False)
+        for call in mock_turn.call_args_list:
+            self.assertEqual(call[0][1], False)
+        # Sleep called twice (between attempts 1-2 and 2-3)
+        self.assertEqual(mock_sleep.call_count, 2)
+        for call in mock_sleep.call_args_list:
+            self.assertEqual(call[0][0], 0.2)
+
+    @mock.patch("agent_signal.govee.status")
+    @mock.patch("agent_signal.govee.turn")
+    @mock.patch("agent_signal.govee.brightness")
+    @mock.patch("agent_signal.govee.color")
+    def test_off_mode_oserror_first_call_still_sends_all(
+        self, mock_color, mock_brightness, mock_turn, mock_status, mock_sleep
+    ):
+        """clear in off mode with OSError on first call still sends all 6 attempts."""
+        mock_status.return_value = {
+            "msg": {"data": {"on": True, "brightness": 50, "color": {"r": 255, "g": 255, "b": 255}}}
+        }
+
+        # Set up needs-input signal
+        args = mock.Mock()
+        args.command = "needs-input"
+        args.config = str(self.config_path)
+        args.dry_run = False
+        args.force = False
+        with mock.patch.dict(os.environ, {"CLAUDE_CODE_SESSION_ATTENDED": "1"}):
+            agent_signal.cmd_needs_input(args)
+
+        # Switch to off mode
+        arbiter.set_mode("off")
+
+        # Reset mocks to only track calls after mode change
+        mock_color.reset_mock()
+        mock_brightness.reset_mock()
+        mock_turn.reset_mock()
+
+        # Make govee.turn raise OSError on the first call only
+        mock_turn.side_effect = [OSError("fail")] + [None] * 5
+
+        # Clear the signal
+        args.command = "clear"
+        args.stale = False
+        agent_signal.cmd_clear(args)
+
+        # Should still have attempted all 6 calls
+        self.assertEqual(mock_turn.call_count, 6)
 
 
 @mock.patch("agent_signal.time.sleep")
