@@ -522,6 +522,8 @@ def run(config, once=False, interval=900, dry_run=False, rng=None, time_fn=None)
                 if current_pattern is not None:
                     # Pattern mode: retry in ~60s, keep animating with last pattern
                     last_fetch = now - interval + FETCH_RETRY_SECONDS
+                    if fetch_on_the_hour:
+                        next_fetch_at = now + FETCH_RETRY_SECONDS
                 else:
                     time.sleep(interval)
                     continue

@@ -3065,6 +3065,69 @@ class TestFetchErrorRetry(StateDirMixin, unittest.TestCase):
         # Animation continued
         self.assertGreater(mock_color.call_count, 1)
 
+    @mock.patch("weather_sync.fetch_weather")
+    @mock.patch("govee.turn")
+    @mock.patch("govee.color")
+    @mock.patch("govee.brightness")
+    @mock.patch("time.sleep")
+    @mock.patch("time.time")
+    def test_pattern_mode_fetch_error_on_the_hour_retries_slowly(self, mock_time, mock_sleep, mock_brightness, mock_color, mock_turn, mock_fetch):
+        """Pattern mode with fetch_on_the_hour=True: failed fetch retries in ~60s, not every frame."""
+        import urllib.error
+
+        # Start 30s before the hour boundary (t=36000)
+        current_time = [36000.0 - 30.0]
+        mock_time.return_value = current_time[0]
+
+        # Track fetch times
+        fetch_times = []
+        fetch_count = [0]
+
+        def fetch_side_effect(*args, **kwargs):
+            fetch_count[0] += 1
+            fetch_times.append(current_time[0])
+            if fetch_count[0] == 1:
+                # First fetch succeeds (rain pattern)
+                return {"temperature_2m": 15.0, "weather_code": 61, "is_day": 1}
+            else:
+                # Later fetches fail
+                raise urllib.error.URLError("network blip")
+
+        mock_fetch.side_effect = fetch_side_effect
+
+        config = self._make_config(frame_interval=1.0)
+        config["weather"]["fetch_on_the_hour"] = True
+
+        def sleep_side_effect(seconds):
+            current_time[0] += seconds
+            mock_time.return_value = current_time[0]
+            # Stop after we've gone well past the hour boundary
+            if current_time[0] > 36000.0 + 200.0:
+                raise KeyboardInterrupt()
+
+        mock_sleep.side_effect = sleep_side_effect
+
+        try:
+            weather_sync.run(config, once=False, interval=900)
+        except KeyboardInterrupt:
+            pass
+
+        # First fetch at t=35970, then failures should retry ~60s apart
+        # In 230s of simulated time, we should see at most ~4-5 fetches
+        # (one at start, then ~60s, ~120s, ~180s after the first failure)
+        self.assertLessEqual(fetch_count[0], 6, f"Too many fetches: {fetch_count[0]}")
+
+        # Check that consecutive fetch times after the first failure are >= 55s apart
+        # (the gap from first success to first failure can be shorter)
+        if len(fetch_times) > 2:
+            for i in range(2, len(fetch_times)):
+                gap = fetch_times[i] - fetch_times[i - 1]
+                self.assertGreaterEqual(gap, 55.0,
+                    f"Fetches too close: {gap:.1f}s apart at index {i}")
+
+        # Animation should have continued (govee.color called after first failure)
+        self.assertGreater(mock_color.call_count, 1)
+
 
 if __name__ == "__main__":
     unittest.main()
