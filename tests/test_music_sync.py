@@ -3118,8 +3118,11 @@ class TestMusicSyncModeRace(StateDirMixin, unittest.TestCase):
         super().tearDown()
 
     def test_mode_changed_before_send_exits(self):
-        """If mode changes to 'off' between top check and send, no turn/color sent."""
+        """If mode changes to 'off' during capture, no color sent and log shows exit."""
         self.set_mode("music")
+
+        # Use a mutable dict so the recorder can change the mode during capture
+        mode = {"value": "music"}
 
         govee_calls = []
         def fake_color(ip, r, g, b):
@@ -3127,17 +3130,9 @@ class TestMusicSyncModeRace(StateDirMixin, unittest.TestCase):
         def fake_turn(ip, on):
             govee_calls.append(("turn", ip, on))
 
-        # Mode changes to "off" on the second get_mode call (the re-check before send)
-        get_mode_count = [0]
-        def fake_get_mode():
-            get_mode_count[0] += 1
-            if get_mode_count[0] == 1:
-                return "music"  # Top of loop check
-            return "off"  # Re-check before send
-
         fake_time_fn = bounded_clock()
 
-        # Create a fake recorder
+        # Create a fake recorder that changes mode to "off" during capture
         fake_rec = mock.Mock()
         fake_rec.__enter__ = mock.Mock(return_value=fake_rec)
         fake_rec.__exit__ = mock.Mock(return_value=False)
@@ -3145,8 +3140,9 @@ class TestMusicSyncModeRace(StateDirMixin, unittest.TestCase):
         frame_count = [0]
         def fake_record(numframes):
             frame_count[0] += 1
-            if frame_count[0] >= 2:
-                raise KeyboardInterrupt()
+            # Change mode to "off" during capture (simulates user switching mode)
+            mode["value"] = "off"
+            # Return a loud frame (level well above silence threshold)
             return mock.Mock(ndim=1, shape=(1024,), dtype="float64")
 
         fake_rec.record = mock.Mock(side_effect=fake_record)
@@ -3168,7 +3164,7 @@ class TestMusicSyncModeRace(StateDirMixin, unittest.TestCase):
             "soundcard": fake_sc,
             "numpy": mock.Mock(),
         }):
-            with mock.patch.object(arbiter, "get_mode", side_effect=fake_get_mode):
+            with mock.patch.object(arbiter, "get_mode", side_effect=lambda: mode["value"]):
                 with mock.patch.object(music_sync, "govee") as mock_govee:
                     mock_govee.color = fake_color
                     mock_govee.turn = fake_turn
@@ -3177,23 +3173,26 @@ class TestMusicSyncModeRace(StateDirMixin, unittest.TestCase):
                     with mock.patch("time.sleep"):
                         with mock.patch.object(music_sync, "STOP_FLAG_FILE", self.state_dir / "music_stop"):
                             with mock.patch.object(music_sync, "PID_FILE", self.state_dir / "music_sync.pid"):
+                                # Return a loud frame so silence detection doesn't interfere
                                 with mock.patch.object(music_sync, "analyze", return_value={"level": 0.5, "bass": 0.5, "mid": 0.5, "treble": 0.5}):
-                                    music_sync.run(
-                                        {"devices": [{"ip": "1.2.3.4"}]},
-                                        fps=10,
-                                        time_fn=fake_time_fn,
-                                    )
+                                    with self.assertLogs("music_sync", level="INFO") as cm:
+                                        music_sync.run(
+                                            {"devices": [{"ip": "1.2.3.4"}]},
+                                            fps=10,
+                                            time_fn=fake_time_fn,
+                                        )
 
-        # Only the initial turn-on should have happened, no color or turn-off
-        turn_calls = [c for c in govee_calls if c[0] == "turn"]
-        # One turn-on at start
-        self.assertEqual(len(turn_calls), 1,
-                        f"Expected 1 turn call (initial on), got {len(turn_calls)}")
-        self.assertTrue(turn_calls[0][2], "Initial turn should be on")
         # No color calls (mode changed before send)
         color_calls = [c for c in govee_calls if c[0] == "color"]
         self.assertEqual(len(color_calls), 0,
                         f"Expected no color calls, got {len(color_calls)}")
+        # No turn-on calls after the initial one (mode changed before any sends)
+        turn_on_calls = [c for c in govee_calls if c[0] == "turn" and c[2]]
+        self.assertEqual(len(turn_on_calls), 1,
+                        f"Expected 1 turn-on call (initial), got {len(turn_on_calls)}")
+        # Log should contain the mode change exit message
+        self.assertTrue(any("mode changed to off; exiting music sync" in log for log in cm.output),
+                       f"Expected 'mode changed to off; exiting music sync' in logs, got: {cm.output}")
 
 
 class TestSilenceOffRetry(StateDirMixin, unittest.TestCase):
