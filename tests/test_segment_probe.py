@@ -145,12 +145,14 @@ class TestDryRun(unittest.TestCase):
         self.assertEqual(last_call["msg"]["cmd"], "turn")
         self.assertEqual(last_call["msg"]["data"]["value"], 0)
 
+    @mock.patch("segment_probe.govee.status")
     @mock.patch("segment_probe.time.sleep")
     @mock.patch("segment_probe.govee.brightness")
     @mock.patch("segment_probe.govee.turn")
     @mock.patch("segment_probe.govee.send")
-    def test_turn_on_before_razer_enable(self, mock_send, mock_turn, mock_brightness, mock_sleep):
+    def test_turn_on_before_razer_enable(self, mock_send, mock_turn, mock_brightness, mock_sleep, mock_status):
         """Strip must be turned on at 80% before the first razer send."""
+        mock_status.return_value = {"msg": {"cmd": "devStatus", "data": {"onOff": 0}}}
         # Use a single mock manager to track call order
         manager = mock.Mock()
         manager.attach_mock(mock_turn, "turn")
@@ -187,6 +189,54 @@ class TestDryRun(unittest.TestCase):
         self.assertIsNotNone(first_send_idx, "send was never called")
         self.assertLess(turn_on_idx, first_send_idx, "turn on must come before first razer send")
         self.assertLess(brightness_idx, first_send_idx, "brightness must come before first razer send")
+
+    @mock.patch("segment_probe.govee.status")
+    @mock.patch("segment_probe.time.sleep")
+    @mock.patch("segment_probe.govee.send")
+    def test_status_query_error_is_swallowed(self, mock_send, mock_sleep, mock_status):
+        """OSError from govee.status is caught and logged to stderr, not raised."""
+        mock_status.side_effect = OSError("boom")
+        import io
+        stderr = io.StringIO()
+        with mock.patch("sys.stderr", stderr):
+            segment_probe.run_probe(
+                ip="192.168.1.1",
+                leds=5,
+                pattern="walk",
+                duration=1,
+                fps=2,
+                dry_run=False,
+            )
+        # Should not have raised; the error is swallowed
+        # Last 3 send calls should be turn off (value 0)
+        for i in range(3):
+            turn_call = mock_send.call_args_list[-(i + 1)][0][1]
+            self.assertEqual(turn_call["msg"]["cmd"], "turn")
+            self.assertEqual(turn_call["msg"]["data"]["value"], 0)
+        # Error message should be in stderr
+        self.assertIn("could not verify strip status", stderr.getvalue())
+
+    @mock.patch("segment_probe.govee.status")
+    @mock.patch("segment_probe.time.sleep")
+    @mock.patch("segment_probe.govee.send")
+    def test_status_none_sends_exactly_three_offs(self, mock_send, mock_sleep, mock_status):
+        """When status returns None, exactly 3 turn-off commands are sent (no extra)."""
+        mock_status.return_value = None
+        segment_probe.run_probe(
+            ip="192.168.1.1",
+            leds=5,
+            pattern="walk",
+            duration=1,
+            fps=2,
+            dry_run=False,
+        )
+        # Should send: turn on, brightness, enable, 2 frames, disable, 3 turn-offs = 9 calls
+        self.assertEqual(mock_send.call_count, 9)
+        # Last 3 should be turn off
+        for i in range(3):
+            turn_call = mock_send.call_args_list[-(i + 1)][0][1]
+            self.assertEqual(turn_call["msg"]["cmd"], "turn")
+            self.assertEqual(turn_call["msg"]["data"]["value"], 0)
 
     @mock.patch("segment_probe.govee.status")
     @mock.patch("segment_probe.time.sleep")
