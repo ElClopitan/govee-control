@@ -137,16 +137,14 @@ Two game profiles are included out of the box:
 To change a game's colour or brightness, edit its entry in `config.json`.
 To add more games, copy an existing entry and change the `name`, `exe`, `color`, and `brightness` fields.
 
-### Start at logon (Task Scheduler)
+### Start at logon
 
-To run game sync automatically when you log in, create a scheduled task:
+Use the autostart installer to register weather sync, game sync, and the tray
+icon as Windows scheduled tasks that run at logon (hidden, no console window).
+See [docs/autostart.md](docs/autostart.md) for install, uninstall, and
+troubleshooting instructions.
 
-```powershell
-schtasks /create /tn "Govee Game Sync" /tr "pythonw.exe C:\path\to\Govee\game_sync.py --interval 5" /sc onlogon
-```
-
-Use `pythonw.exe` (not `python.exe`) to avoid a console window. To remove the
-task later:
+If you created the older manual task, remove it:
 
 ```powershell
 schtasks /delete /tn "Govee Game Sync" /f

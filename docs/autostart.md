@@ -118,11 +118,11 @@ to `state/*.out.log` files.
 The scheduled tasks run `pythonw.exe` processes. To stop them:
 
 ```powershell
-# Find the processes
-Get-Process pythonw | Where-Object { $_.CommandLine -like "*weather_sync*" -or $_.CommandLine -like "*game_sync*" -or $_.CommandLine -like "*tray.py*" }
+# Find the processes (Get-CimInstance works on PowerShell 5.1)
+Get-CimInstance Win32_Process -Filter "Name='pythonw.exe'" | Where-Object { $_.CommandLine -like '*weather_sync*' -or $_.CommandLine -like '*game_sync*' -or $_.CommandLine -like '*tray.py*' } | Select-Object ProcessId, CommandLine
 
-# Kill them (replace PID with actual process ID)
-Stop-Process -Id <PID>
+# Kill them (replace <ProcessId> with the actual ID from the output above)
+Stop-Process -Id <ProcessId>
 ```
 
 Or disable the tasks temporarily:
