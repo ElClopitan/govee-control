@@ -160,6 +160,19 @@ def pattern_frame(pattern, t, strip_index):
     return (r, g, b, brightness)
 
 
+def night_cap(brightness, night_brightness, is_day):
+    """Cap brightness at night_brightness when it's night.
+
+    night_brightness is a ceiling: if the pattern's own brightness is lower,
+    that wins. This lets per-pattern night brightness settings (e.g.
+    cloudy_night.brightness: 15) work while still enforcing the global
+    night cap.
+    """
+    if is_day == 0:
+        return min(brightness, night_brightness)
+    return brightness
+
+
 def schedule_next_flash(rng, flash_every, now):
     """Schedule the next flash time.
 
@@ -428,6 +441,7 @@ def run(config, once=False, interval=900, dry_run=False, rng=None, time_fn=None)
 
     last_color = None
     last_brightness = {}  # ip -> brightness (per-strip tracking)
+    last_static_brightness = None  # for static mode day/night brightness changes
     priority_was_active = False
     need_power_on = True
     current_pattern = None
@@ -665,9 +679,8 @@ def run(config, once=False, interval=900, dry_run=False, rng=None, time_fn=None)
                     for i in flash_strips:
                         ip = devices[i]["ip"]
                         base_r, base_g, base_b, base_brightness = pattern_frame(current_pattern, elapsed, i)
-                        # At night, use night_brightness for base frames
-                        if current_is_day == 0:
-                            base_brightness = night_brightness
+                        # At night, cap at night_brightness (pattern's own brightness wins if lower)
+                        base_brightness = night_cap(base_brightness, night_brightness, current_is_day)
                         base_brightness = arbiter.cap_brightness(base_brightness, config)
                         if dry_run:
                             logger.debug("[dry-run] Would send base frame to %s during double-flash gap", ip)
@@ -720,9 +733,8 @@ def run(config, once=False, interval=900, dry_run=False, rng=None, time_fn=None)
                 for i, dev in enumerate(devices):
                     ip = dev["ip"]
                     base_r, base_g, base_b, base_brightness = pattern_frame(current_pattern, elapsed, i)
-                    # At night, use night_brightness for base frames
-                    if current_is_day == 0:
-                        base_brightness = night_brightness
+                    # At night, cap at night_brightness (pattern's own brightness wins if lower)
+                    base_brightness = night_cap(base_brightness, night_brightness, current_is_day)
                     base_brightness = arbiter.cap_brightness(base_brightness, config)
                     base_color = rgb_to_hex(base_r, base_g, base_b)
                     if dry_run:
@@ -757,9 +769,8 @@ def run(config, once=False, interval=900, dry_run=False, rng=None, time_fn=None)
                     continue
 
                 r, g, b, frame_brightness = pattern_frame(current_pattern, elapsed, i)
-                # At night, use night_brightness for base frames
-                if current_is_day == 0:
-                    frame_brightness = night_brightness
+                # At night, cap at night_brightness (pattern's own brightness wins if lower)
+                frame_brightness = night_cap(frame_brightness, night_brightness, current_is_day)
                 frame_brightness = arbiter.cap_brightness(frame_brightness, config)
 
                 color_str = rgb_to_hex(r, g, b)
@@ -783,10 +794,10 @@ def run(config, once=False, interval=900, dry_run=False, rng=None, time_fn=None)
                 last_frame_time[ip] = now
                 last_color = color_str
         else:
-            # Static mode: send only if color changed
+            # Static mode: send if color or effective brightness changed
             # At night, use night_brightness
             effective_brightness = night_brightness if current_is_day == 0 else brightness
-            if color_hex != last_color or dry_run:
+            if color_hex != last_color or effective_brightness != last_static_brightness or dry_run:
                 r, g, b = govee.parse_color(color_hex)
                 try:
                     for dev in devices:
@@ -805,6 +816,7 @@ def run(config, once=False, interval=900, dry_run=False, rng=None, time_fn=None)
                     # Don't update last_color so we retry next iteration
                 else:
                     last_color = color_hex
+                    last_static_brightness = effective_brightness
 
         if once:
             break

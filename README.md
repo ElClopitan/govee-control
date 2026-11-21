@@ -252,8 +252,12 @@ the flash interval while keeping the default colours and brightness.
 All other weather conditions use static colours.
 
 At night (is_day=0), different colours are used for a more atmospheric look,
-and brightness is reduced to `night_brightness` (default 30). Thunderstorm
-flashes keep their own flash_brightness (100).
+and base-frame brightness is capped at `night_brightness` (default 30).
+`night_brightness` is a ceiling: if a pattern's own brightness is lower, that
+wins (e.g. a `cloudy_night` pattern with `"brightness": 15` stays at 15).
+Thunderstorm has no night variant — it uses the same pattern day and night,
+with base frames capped at `night_brightness` and flashes keeping their own
+`flash_brightness` (100).
 
 Configuration options in the `weather` section:
 
@@ -302,7 +306,8 @@ Configuration options in the `weather` section:
 - `fetch_on_the_hour`: fetch weather at the top of every hour (default: true);
   set to false for interval-based fetching
 - `patterns`: override default pattern definitions for cloudy/rain/thunderstorm
-  (use `_night` suffix for night variants, e.g. `cloudy_night`)
+  (use `_night` suffix for night variants, e.g. `cloudy_night`; thunderstorm
+  has no night variant — it uses the same pattern day and night)
 
 Weather is fetched at the top of every hour by default (`fetch_on_the_hour: true`),
 not every frame. Between fetches, the last known weather data is used for animation.
