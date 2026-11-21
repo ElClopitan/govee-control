@@ -1160,6 +1160,9 @@ class TestOSErrorHandling(StateDirMixin, unittest.TestCase):
         self, mock_lock, mock_color, mock_brightness, mock_turn, mock_status, mock_sleep
     ):
         """needs-input with lock timeout: no signal colour set, no saved state, exit 0."""
+        import io
+        from contextlib import redirect_stderr
+
         # Lock times out
         mock_lock.return_value = False
 
@@ -1168,8 +1171,13 @@ class TestOSErrorHandling(StateDirMixin, unittest.TestCase):
         args.config = str(self.config_path)
         args.dry_run = False
 
-        # Should not raise
-        agent_signal.cmd_needs_input(args)
+        # Capture stderr to check for the "lock busy" warning
+        stderr_capture = io.StringIO()
+        with redirect_stderr(stderr_capture):
+            # Should not raise
+            agent_signal.cmd_needs_input(args)
+
+        stderr = stderr_capture.getvalue()
 
         # No govee calls should have been made
         mock_turn.assert_not_called()
@@ -1181,6 +1189,19 @@ class TestOSErrorHandling(StateDirMixin, unittest.TestCase):
 
         # Lock file should not exist (lock timed out, never acquired)
         self.assertFalse(agent_signal.LOCK_FILE.exists())
+
+        # User-visible outcome: stderr should contain the "lock busy" warning
+        self.assertIn("lock busy", stderr)
+
+        # signal.log should contain the lock-timeout-skipped event
+        log_path = agent_signal.signal_log_path()
+        self.assertTrue(log_path.exists())
+        log_content = log_path.read_text()
+        self.assertIn("lock-timeout-skipped", log_content)
+
+        # No session marker should have been written
+        sessions_dir = agent_signal.signal_sessions_dir()
+        self.assertFalse(sessions_dir.exists() and any(sessions_dir.iterdir()))
 
 
 @mock.patch("agent_signal.time.sleep")
@@ -1294,10 +1315,11 @@ class TestLocking(StateDirMixin, unittest.TestCase):
         # Saved state should still exist
         self.assertTrue(arbiter.signal_file().exists())
 
+    @mock.patch("agent_signal.time.sleep")
     @mock.patch("agent_signal.govee.turn")
     @mock.patch("agent_signal.govee.brightness")
     @mock.patch("agent_signal.govee.color")
-    def test_stale_lock_is_removed(self, mock_color, mock_brightness, mock_turn):
+    def test_stale_lock_is_removed(self, mock_color, mock_brightness, mock_turn, mock_sleep):
         """Stale lock file (older than 30s) is removed and clear proceeds."""
         # Create a saved state file
         arbiter.signal_file().parent.mkdir(parents=True, exist_ok=True)

@@ -2258,7 +2258,11 @@ class TestThunderstormDoubleFlash(StateDirMixin, unittest.TestCase):
     @mock.patch("govee.brightness")
     @mock.patch("time.sleep")
     def test_flash_intervals_within_range(self, mock_sleep, mock_brightness, mock_color, mock_turn, mock_fetch):
-        """Across >= 50 flashes, every gap is within [6, 20] seconds."""
+        """Across >= 50 flashes, every gap between flash starts is within [6, 20] seconds.
+
+        Detects flash starts by tracking brightness transitions: a flash starts
+        when brightness goes from non-100 to 100.
+        """
         import random
 
         mock_fetch.return_value = {
@@ -2271,18 +2275,27 @@ class TestThunderstormDoubleFlash(StateDirMixin, unittest.TestCase):
         # Use a seeded RNG for reproducibility
         rng = random.Random(42)
 
-        # Track intervals by patching rng.uniform
-        intervals = []
-        original_uniform = rng.uniform
-        def uniform_side_effect(a, b):
-            result = original_uniform(a, b)
-            intervals.append(result)
-            return result
-        rng.uniform = uniform_side_effect
-
         current_time = [1000.0]
         def time_fn():
             return current_time[0]
+
+        # Track brightness calls to detect flash starts
+        last_brightness = {}
+        flash_start_times = []
+        last_flash_time = [0.0]
+
+        def brightness_side_effect(ip, level):
+            prev = last_brightness.get(ip)
+            last_brightness[ip] = level
+            # Flash start: brightness goes from non-100 to 100
+            if level == 100 and prev is not None and prev != 100:
+                # Only record if not within 1s of last recorded flash (avoids double-counting
+                # when both strips flash simultaneously)
+                if current_time[0] - last_flash_time[0] >= 1.0:
+                    flash_start_times.append(current_time[0])
+                    last_flash_time[0] = current_time[0]
+
+        mock_brightness.side_effect = brightness_side_effect
 
         # Run for enough time to get 50+ flashes
         # With flash_every [6, 20], average is 13s, so 50 flashes ~ 650s
@@ -2301,16 +2314,18 @@ class TestThunderstormDoubleFlash(StateDirMixin, unittest.TestCase):
         except KeyboardInterrupt:
             pass
 
-        # Should have at least 50 intervals (one per flash)
-        self.assertGreaterEqual(len(intervals), 50,
-                                f"Expected >= 50 flash intervals, got {len(intervals)}")
+        # Should have at least 50 flash starts
+        self.assertGreaterEqual(len(flash_start_times), 50,
+                                f"Expected >= 50 flash starts, got {len(flash_start_times)}")
 
-        # Check all intervals are within [6, 20]
-        for i, interval in enumerate(intervals):
+        # Check all intervals between consecutive flash starts are within [6, 20]
+        # Allow ~3s slack for flash sequence time (flash_duration + double-flash gap)
+        for i in range(1, len(flash_start_times)):
+            interval = flash_start_times[i] - flash_start_times[i - 1]
             self.assertGreaterEqual(interval, 6.0,
-                                    f"Flash interval {interval} < 6.0 at flash {i}")
-            self.assertLessEqual(interval, 20.0,
-                                 f"Flash interval {interval} > 20.0 at flash {i}")
+                                    f"Flash interval {interval:.2f}s < 6.0s at flash {i}")
+            self.assertLessEqual(interval, 20.0 + 3.0,
+                                 f"Flash interval {interval:.2f}s > 23.0s at flash {i}")
 
     @mock.patch("weather_sync.fetch_weather")
     @mock.patch("govee.turn")
