@@ -268,8 +268,7 @@ class TestNeedsInputOffMode(StateDirMixin, unittest.TestCase):
 
         # No session marker
         marker_dir = self.state_dir / "signal_sessions"
-        if marker_dir.exists():
-            self.assertEqual(len(list(marker_dir.iterdir())), 0)
+        self.assertFalse(marker_dir.exists() and any(marker_dir.iterdir()))
 
         # Log should contain skipped-off
         log_path = agent_signal.signal_log_path()
@@ -341,8 +340,8 @@ class TestNeedsInputOffMode(StateDirMixin, unittest.TestCase):
         # No saved state file
         self.assertFalse(arbiter.signal_file().exists())
 
-        # Lock should have been released (no exception)
-        # If the lock were still held, the test would hang or fail
+        # Lock should have been released
+        self.assertFalse(agent_signal.LOCK_FILE.exists())
 
     @mock.patch("agent_signal.govee.status")
     @mock.patch("agent_signal.govee.turn")
@@ -590,8 +589,10 @@ class TestRestoreFollowsMode(StateDirMixin, unittest.TestCase):
         mock_brightness.assert_not_called()
         mock_color.assert_not_called()
 
+    @mock.patch("agent_signal.govee.color")
+    @mock.patch("agent_signal.govee.brightness")
     @mock.patch("agent_signal.govee.turn")
-    def test_clear_in_off_mode_oserror_keeps_saved_state(self, mock_turn, mock_sleep):
+    def test_clear_in_off_mode_oserror_keeps_saved_state(self, mock_turn, mock_brightness, mock_color, mock_sleep):
         """clear in off mode with OSError: saved state kept, lock released, no crash."""
         # Create a saved state file
         arbiter.signal_file().parent.mkdir(parents=True, exist_ok=True)
@@ -619,10 +620,9 @@ class TestRestoreFollowsMode(StateDirMixin, unittest.TestCase):
         self.assertTrue(arbiter.signal_file().exists())
         # Lock file should not exist (released)
         self.assertFalse(agent_signal.LOCK_FILE.exists())
-        # Should not have called color (off mode)
-        with mock.patch("agent_signal.govee.color") as mock_color:
-            pass
+        # Should not have called color or brightness (off mode)
         mock_color.assert_not_called()
+        mock_brightness.assert_not_called()
 
     @mock.patch("agent_signal.govee.turn")
     def test_sweep_in_off_mode_oserror_keeps_saved_state(self, mock_turn, mock_sleep):

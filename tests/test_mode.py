@@ -87,6 +87,7 @@ class TestSwitchOff(StateDirMixin, unittest.TestCase):
         mock_acquire.assert_not_called()
         # Mode should still be "off" (default) with no mode.json written
         self.assertEqual(arbiter.get_mode(), "off")
+        self.assertFalse(arbiter.mode_file().exists())
 
     def test_off_real_lock_released(self):
         """switch("off") releases the real lock file after turning off."""
@@ -105,6 +106,7 @@ class TestSwitchOff(StateDirMixin, unittest.TestCase):
             mode.switch("off", config, dry_run=True)
         mock_turn.assert_not_called()
         self.assertEqual(arbiter.get_mode(), "off")  # unchanged (default)
+        self.assertFalse(arbiter.mode_file().exists())
 
     def test_off_catches_oserror_per_device(self):
         """switch("off") catches OSError per device and continues."""
