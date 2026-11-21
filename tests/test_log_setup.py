@@ -31,7 +31,8 @@ class TestSetupLogging(unittest.TestCase):
         """After setup_logging with log_file, other module loggers write to file."""
         import log_setup
 
-        with tempfile.TemporaryDirectory() as tmpdir:
+        tmpdir = tempfile.mkdtemp()
+        try:
             log_path = Path(tmpdir) / "test.log"
             log_setup.setup_logging(str(log_path), logging.INFO)
 
@@ -47,13 +48,21 @@ class TestSetupLogging(unittest.TestCase):
             content = log_path.read_text(encoding="utf-8")
             self.assertIn("hello", content)
             self.assertIn("WARNING", content)
+        finally:
+            # Close file handlers before removing temp dir
+            for handler in logging.root.handlers[:]:
+                if hasattr(handler, "close"):
+                    handler.close()
+            import shutil
+            shutil.rmtree(tmpdir, ignore_errors=True)
 
     def test_excepthook_logs_to_file(self):
         """Uncaught exceptions are logged to the file."""
         import log_setup
         import traceback
 
-        with tempfile.TemporaryDirectory() as tmpdir:
+        tmpdir = tempfile.mkdtemp()
+        try:
             log_path = Path(tmpdir) / "test.log"
             log_setup.setup_logging(str(log_path), logging.INFO)
 
@@ -75,6 +84,13 @@ class TestSetupLogging(unittest.TestCase):
             self.assertIn("boom", content)
             self.assertIn("Traceback", content)
             self.assertIn("uncaught exception", content)
+        finally:
+            # Close file handlers before removing temp dir
+            for handler in logging.root.handlers[:]:
+                if hasattr(handler, "close"):
+                    handler.close()
+            import shutil
+            shutil.rmtree(tmpdir, ignore_errors=True)
 
     def test_no_log_file_uses_basicconfig(self):
         """Without log_file, basicConfig is used."""
@@ -92,7 +108,8 @@ class TestSetupLogging(unittest.TestCase):
         """Log file uses UTF-8 encoding (for °C etc.)."""
         import log_setup
 
-        with tempfile.TemporaryDirectory() as tmpdir:
+        tmpdir = tempfile.mkdtemp()
+        try:
             log_path = Path(tmpdir) / "test.log"
             log_setup.setup_logging(str(log_path), logging.INFO)
 
@@ -105,6 +122,13 @@ class TestSetupLogging(unittest.TestCase):
 
             content = log_path.read_text(encoding="utf-8")
             self.assertIn("20°C", content)
+        finally:
+            # Close file handlers before removing temp dir
+            for handler in logging.root.handlers[:]:
+                if hasattr(handler, "close"):
+                    handler.close()
+            import shutil
+            shutil.rmtree(tmpdir, ignore_errors=True)
 
 
 if __name__ == "__main__":
