@@ -3686,5 +3686,64 @@ class TestCmdStopConfigPath(unittest.TestCase):
         self.assertEqual(mock_switch.call_args[0][0], "off")
 
 
+class TestCmdStartConfigPath(unittest.TestCase):
+    """Test that cmd_start passes --config to the spawned process."""
+
+    def test_cmd_start_passes_config_to_child(self):
+        """cmd_start should append --config and the path to the child command."""
+        with mock.patch("music_sync._get_running_pid", return_value=None):
+            with mock.patch("importlib.util.find_spec", return_value=mock.Mock()):
+                with mock.patch("subprocess.Popen") as mock_popen:
+                    mock_proc = mock.Mock()
+                    mock_proc.pid = 12345
+                    mock_popen.return_value = mock_proc
+                    with mock.patch("builtins.print"):
+                        music_sync.cmd_start("x.json")
+        # Check that Popen was called with --config x.json
+        call_args = mock_popen.call_args
+        cmd = call_args[0][0]
+        self.assertIn("--config", cmd)
+        config_idx = cmd.index("--config")
+        self.assertEqual(cmd[config_idx + 1], "x.json")
+
+    def test_cmd_start_default_config_path(self):
+        """cmd_start with no argument should use DEFAULT_CONFIG_PATH."""
+        with mock.patch("music_sync._get_running_pid", return_value=None):
+            with mock.patch("importlib.util.find_spec", return_value=mock.Mock()):
+                with mock.patch("subprocess.Popen") as mock_popen:
+                    mock_proc = mock.Mock()
+                    mock_proc.pid = 12345
+                    mock_popen.return_value = mock_proc
+                    with mock.patch("builtins.print"):
+                        music_sync.cmd_start()
+        call_args = mock_popen.call_args
+        cmd = call_args[0][0]
+        self.assertIn("--config", cmd)
+        config_idx = cmd.index("--config")
+        self.assertEqual(cmd[config_idx + 1], str(music_sync.DEFAULT_CONFIG_PATH))
+
+
+class TestCmdToggleConfigPath(unittest.TestCase):
+    """Test that cmd_toggle passes --config to cmd_stop and cmd_start."""
+
+    def test_cmd_toggle_passes_config_to_stop(self):
+        """cmd_toggle with a running pid should pass config to cmd_stop."""
+        with mock.patch("music_sync._get_running_pid", return_value=12345):
+            with mock.patch.object(music_sync, "cmd_stop") as mock_stop:
+                mock_stop.return_value = 0
+                result = music_sync.cmd_toggle("x.json")
+        mock_stop.assert_called_once_with("x.json")
+        self.assertEqual(result, 0)
+
+    def test_cmd_toggle_passes_config_to_start(self):
+        """cmd_toggle with no running pid should pass config to cmd_start."""
+        with mock.patch("music_sync._get_running_pid", return_value=None):
+            with mock.patch.object(music_sync, "cmd_start") as mock_start:
+                mock_start.return_value = 0
+                result = music_sync.cmd_toggle("x.json")
+        mock_start.assert_called_once_with("x.json")
+        self.assertEqual(result, 0)
+
+
 if __name__ == "__main__":
     unittest.main()

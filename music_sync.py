@@ -507,7 +507,7 @@ def _raise_stop_flag():
     STOP_FLAG_FILE.write_text(str(time.time()))
 
 
-def cmd_start():
+def cmd_start(config_path=DEFAULT_CONFIG_PATH):
     """Start music sync as a background process."""
     pid = _get_running_pid()
     if pid is not None:
@@ -554,6 +554,8 @@ def cmd_start():
     cmd = [
         pythonw_exe,
         str(Path(__file__).resolve()),
+        "--config",
+        str(config_path),
         "--log-file",
         str(LOG_FILE),
     ]
@@ -632,13 +634,13 @@ def cmd_stop(config_path=DEFAULT_CONFIG_PATH):
     return 0
 
 
-def cmd_toggle():
+def cmd_toggle(config_path=DEFAULT_CONFIG_PATH):
     """Toggle music sync on/off."""
     pid = _get_running_pid()
     if pid is not None:
-        return cmd_stop()
+        return cmd_stop(config_path)
     else:
-        return cmd_start()
+        return cmd_start(config_path)
 
 
 def cmd_status():
@@ -1122,11 +1124,11 @@ def main():
 
     # Handle subcommands
     if args.command == "start":
-        sys.exit(cmd_start())
+        sys.exit(cmd_start(args.config))
     elif args.command == "stop":
         sys.exit(cmd_stop(args.config))
     elif args.command == "toggle":
-        sys.exit(cmd_toggle())
+        sys.exit(cmd_toggle(args.config))
     elif args.command == "status":
         sys.exit(cmd_status())
 
