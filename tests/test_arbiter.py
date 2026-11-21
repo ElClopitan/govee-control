@@ -420,6 +420,68 @@ class TestCapBrightness(unittest.TestCase):
         cfg = {}
         self.assertEqual(arbiter.cap_brightness(100, cfg), 80)
 
+    def test_max_brightness_true_caps_to_default(self):
+        """max_brightness: true (bool) falls back to default 80."""
+        cfg = {"max_brightness": True}
+        self.assertEqual(arbiter.cap_brightness(90, cfg), 80)
+
+    def test_max_brightness_false_caps_to_default(self):
+        """max_brightness: false (bool) falls back to default 80."""
+        cfg = {"max_brightness": False}
+        self.assertEqual(arbiter.cap_brightness(90, cfg), 80)
+
+    def test_max_brightness_float(self):
+        """max_brightness: 50.0 (float) is accepted and rounded."""
+        cfg = {"max_brightness": 50.0}
+        self.assertEqual(arbiter.cap_brightness(90, cfg), 50)
+
+    def test_max_brightness_float_rounds(self):
+        """max_brightness: 50.6 rounds to 51."""
+        cfg = {"max_brightness": 50.6}
+        self.assertEqual(arbiter.cap_brightness(90, cfg), 51)
+
+    def test_max_brightness_string_falls_back(self):
+        """max_brightness: "70" (string) falls back to default 80."""
+        cfg = {"max_brightness": "70"}
+        self.assertEqual(arbiter.cap_brightness(90, cfg), 80)
+
+    def test_max_brightness_none_falls_back(self):
+        """max_brightness: None falls back to default 80."""
+        cfg = {"max_brightness": None}
+        self.assertEqual(arbiter.cap_brightness(90, cfg), 80)
+
+    def test_value_string_falls_back_with_warning(self):
+        """value: "80" (string) falls back to cap with warning on stderr."""
+        import io
+        import sys
+        cfg = {"max_brightness": 80}
+        stderr = io.StringIO()
+        with mock.patch.object(sys, "stderr", stderr):
+            result = arbiter.cap_brightness("80", cfg)
+        self.assertEqual(result, 80)
+        self.assertIn("warning: invalid brightness '80'", stderr.getvalue())
+
+    def test_value_none_falls_back(self):
+        """value: None falls back to cap."""
+        cfg = {"max_brightness": 80}
+        result = arbiter.cap_brightness(None, cfg)
+        self.assertEqual(result, 80)
+
+    def test_value_float_rounds(self):
+        """value: 55.5 rounds to 56."""
+        cfg = {"max_brightness": 80}
+        self.assertEqual(arbiter.cap_brightness(55.5, cfg), 56)
+
+    def test_allow_flash_non_numeric_value(self):
+        """allow_flash=True with non-numeric value returns max_b."""
+        cfg = {"max_brightness": 80}
+        self.assertEqual(arbiter.cap_brightness("x", cfg, allow_flash=True), 80)
+
+    def test_allow_flash_numeric_value(self):
+        """allow_flash=True with numeric value passes through."""
+        cfg = {"max_brightness": 80}
+        self.assertEqual(arbiter.cap_brightness(100, cfg, allow_flash=True), 100)
+
 
 if __name__ == "__main__":
     unittest.main()

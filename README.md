@@ -199,6 +199,10 @@ the configured `max_brightness` (default 80). This keeps the strips from running
 at full brightness all the time. Manual CLI brightness commands (`govee.py
 brightness N`) are not capped — if you type it, you get it.
 
+If `max_brightness` is not a number (or is a boolean), the default of 80 is used.
+If a script passes a non-numeric brightness value, it falls back to the cap with
+a warning on stderr.
+
 ```json
 {
   "devices": [...],

@@ -52,20 +52,32 @@ def cap_brightness(value, cfg, allow_flash=False):
     """Cap brightness to the configured maximum.
 
     Args:
-        value: The requested brightness (0-100).
+        value: The requested brightness (0-100). Non-numeric values fall back
+            to the cap (with a warning to stderr).
         cfg: The loaded config dict.
         allow_flash: If True, skip the cap (for explicit flashes like thunderstorms).
 
     Returns:
         The capped brightness, clamped to 1..100.
     """
-    if allow_flash:
-        return max(1, min(100, value))
-
     max_b = cfg.get("max_brightness", MAX_BRIGHTNESS_DEFAULT)
-    if not isinstance(max_b, int):
+    # bool is a subclass of int; reject it explicitly
+    if isinstance(max_b, bool) or not isinstance(max_b, (int, float)):
         max_b = MAX_BRIGHTNESS_DEFAULT
+    else:
+        max_b = int(round(max_b))
 
+    if allow_flash:
+        if isinstance(value, bool) or not isinstance(value, (int, float)):
+            return max_b
+        return max(1, min(100, int(round(value))))
+
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        import sys
+        print(f"warning: invalid brightness {value!r}; using {max_b}", file=sys.stderr)
+        return max_b
+
+    value = int(round(value))
     return max(1, min(100, min(value, max_b)))
 
 
