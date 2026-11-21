@@ -49,7 +49,10 @@ def choose(mode_name, config_path, icon):
         mode.switch(mode_name, config)
     except Exception as e:
         log(f"switch to {mode_name} failed: {e}")
-    refresh(icon)
+    try:
+        refresh(icon)
+    except Exception as e:
+        log(f"refresh failed: {e}")
 
 
 def refresh(icon):
@@ -85,9 +88,13 @@ def build_menu(pystray, config_path):
 
 def poll(icon, stop_event, interval=5.0):
     """Periodically refresh the icon to reflect mode changes made elsewhere."""
+    last = arbiter.get_mode()
     while not stop_event.wait(interval):
         try:
-            refresh(icon)
+            m = arbiter.get_mode()
+            if m != last:
+                refresh(icon)
+                last = m
         except Exception as e:
             log(f"poll refresh failed: {e}")
 
@@ -103,24 +110,31 @@ def main():
 
     try:
         import pystray
+        from PIL import Image, ImageDraw
     except ImportError:
-        print("tray needs: python -m pip install --user -r requirements-tray.txt", file=sys.stderr)
+        msg = "tray needs: python -m pip install --user -r requirements-tray.txt"
+        log(msg)
+        print(msg, file=sys.stderr)
         sys.exit(1)
 
-    m = arbiter.get_mode()
-    icon = pystray.Icon(
-        "govee",
-        make_icon_image(m),
-        f"Govee: {m}",
-        build_menu(pystray, args.config),
-    )
+    try:
+        m = arbiter.get_mode()
+        icon = pystray.Icon(
+            "govee",
+            make_icon_image(m),
+            f"Govee: {m}",
+            build_menu(pystray, args.config),
+        )
 
-    stop_event = threading.Event()
-    poll_thread = threading.Thread(target=poll, args=(icon, stop_event), daemon=True)
-    poll_thread.start()
+        stop_event = threading.Event()
+        poll_thread = threading.Thread(target=poll, args=(icon, stop_event), daemon=True)
+        poll_thread.start()
 
-    icon.run()
-    stop_event.set()
+        icon.run()
+        stop_event.set()
+    except Exception as e:
+        log(f"tray failed: {e!r}")
+        raise
 
 
 if __name__ == "__main__":

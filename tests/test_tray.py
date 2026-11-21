@@ -227,16 +227,34 @@ class TestPoll(StateDirMixin, unittest.TestCase):
         """poll() calls refresh() on each interval until the stop event is set."""
         import tray
 
+        arbiter.set_mode("game")
+
         icon = mock.MagicMock()
 
         # Fake stop event: wait() returns False, False, True
         stop_event = mock.MagicMock()
-        stop_event.wait.side_effect = [False, False, True]
+        call_count = [0]
+
+        def wait_side_effect(interval):
+            call_count[0] += 1
+            if call_count[0] == 1:
+                # First wait: change mode, return False (continue)
+                arbiter.set_mode("weather")
+                return False
+            elif call_count[0] == 2:
+                # Second wait: change mode again, return False (continue)
+                arbiter.set_mode("music")
+                return False
+            else:
+                # Third wait: return True (stop)
+                return True
+
+        stop_event.wait.side_effect = wait_side_effect
 
         with mock.patch.object(tray, "refresh") as mock_refresh:
             tray.poll(icon, stop_event, interval=0.01)
 
-        # refresh called twice (on the two False returns)
+        # refresh called twice (once for each mode change)
         self.assertEqual(mock_refresh.call_count, 2)
 
 
@@ -249,6 +267,127 @@ class TestImportWithoutPystray(unittest.TestCase):
 
         # pystray should not be in sys.modules after importing tray
         self.assertNotIn("pystray", sys.modules)
+
+
+class TestMainMissingPIL(StateDirMixin, unittest.TestCase):
+    """Test that main() handles missing PIL gracefully."""
+
+    def test_pil_missing_exits_with_log(self):
+        """When PIL is missing, main() exits 1 and logs the install hint."""
+        import tray
+
+        # Remove PIL from sys.modules to simulate it being missing
+        saved_pil = sys.modules.pop("PIL", None)
+        saved_pil_image = sys.modules.pop("PIL.Image", None)
+        saved_pil_imagedraw = sys.modules.pop("PIL.ImageDraw", None)
+
+        # Also remove pystray to trigger the ImportError path
+        saved_pystray = sys.modules.pop("pystray", None)
+
+        try:
+            with mock.patch.object(tray, "log") as mock_log:
+                with mock.patch.object(sys, "stderr"):
+                    with mock.patch.object(sys, "argv", ["tray.py"]):
+                        # sys.exit raises SystemExit, so we catch it
+                        with self.assertRaises(SystemExit) as cm:
+                            tray.main()
+
+            # Should have exited with code 1
+            self.assertEqual(cm.exception.code, 1)
+            # Should have logged the install hint
+            mock_log.assert_called_once()
+            self.assertIn("requirements-tray.txt", mock_log.call_args[0][0])
+        finally:
+            # Restore modules
+            if saved_pil is not None:
+                sys.modules["PIL"] = saved_pil
+            if saved_pil_image is not None:
+                sys.modules["PIL.Image"] = saved_pil_image
+            if saved_pil_imagedraw is not None:
+                sys.modules["PIL.ImageDraw"] = saved_pil_imagedraw
+            if saved_pystray is not None:
+                sys.modules["pystray"] = saved_pystray
+
+
+class TestChooseRefreshError(StateDirMixin, unittest.TestCase):
+    """Test that choose() handles refresh errors gracefully."""
+
+    def test_refresh_error_logged_not_raised(self):
+        """If refresh raises inside choose, the error is logged and not raised."""
+        import tray
+
+        fake = mock.MagicMock()
+        fake.MenuItem.side_effect = lambda *a, **k: types.SimpleNamespace(args=a, kwargs=k)
+        fake.Menu.side_effect = lambda *items: list(items)
+
+        menu = tray.build_menu(fake, "config.json")
+
+        icon = mock.MagicMock()
+        with mock.patch("mode.switch"):
+            with mock.patch.object(tray, "refresh", side_effect=RuntimeError("refresh boom")):
+                # Should not raise
+                menu[3].args[1](icon, None)
+
+        # Error was logged
+        log_file = Path(self.state_dir) / "tray.log"
+        self.assertTrue(log_file.exists())
+        self.assertIn("refresh failed", log_file.read_text())
+        self.assertIn("refresh boom", log_file.read_text())
+
+
+class TestPollUnchangedMode(StateDirMixin, unittest.TestCase):
+    """Test that poll() only refreshes when the mode changes."""
+
+    def test_poll_unchanged_mode_no_refresh(self):
+        """poll() does not call refresh when the mode hasn't changed."""
+        import tray
+
+        arbiter.set_mode("game")
+
+        icon = mock.MagicMock()
+
+        # Fake stop event: wait() returns False, False, True
+        stop_event = mock.MagicMock()
+        stop_event.wait.side_effect = [False, False, True]
+
+        with mock.patch.object(tray, "refresh") as mock_refresh:
+            tray.poll(icon, stop_event, interval=0.01)
+
+        # refresh should not be called because mode never changed
+        mock_refresh.assert_not_called()
+
+    def test_poll_changed_mode_refreshes_once(self):
+        """poll() calls refresh once when the mode changes."""
+        import tray
+
+        arbiter.set_mode("game")
+
+        icon = mock.MagicMock()
+
+        # Fake stop event: wait() returns False, False, True
+        stop_event = mock.MagicMock()
+        call_count = [0]
+
+        def wait_side_effect(interval):
+            call_count[0] += 1
+            if call_count[0] == 1:
+                # First wait: change mode, return False (continue)
+                arbiter.set_mode("weather")
+                return False
+            elif call_count[0] == 2:
+                # Second wait: return False (continue)
+                return False
+            else:
+                # Third wait: return True (stop)
+                return True
+
+        stop_event.wait.side_effect = wait_side_effect
+
+        with mock.patch.object(tray, "refresh") as mock_refresh:
+            tray.poll(icon, stop_event, interval=0.01)
+
+        # refresh should be called once when mode changed
+        mock_refresh.assert_called_once()
 
 
 if __name__ == "__main__":
