@@ -23,6 +23,7 @@ from pathlib import Path
 import agent_signal
 import arbiter
 import govee
+import log_setup
 
 logger = logging.getLogger(__name__)
 
@@ -342,13 +343,12 @@ def main():
     args = parser.parse_args()
 
     if args.log_file:
-        # Log to file with rotation
-        handler = logging.handlers.RotatingFileHandler(
-            args.log_file, maxBytes=1_000_000, backupCount=2
-        )
-        handler.setFormatter(logging.Formatter("%(asctime)s %(levelname)s %(message)s"))
-        logger.addHandler(handler)
-        logger.setLevel(logging.INFO)
+        log_setup.setup_logging(args.log_file, logging.INFO)
+    else:
+        # Without --log-file, add a NullHandler so logger.warning/error
+        # don't go to logging's "last resort" handler on stderr (which
+        # would duplicate the existing print() calls).
+        logger.addHandler(logging.NullHandler())
 
     try:
         config = govee.load_config(args.config)

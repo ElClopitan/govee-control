@@ -54,6 +54,7 @@ from pathlib import Path
 import agent_signal
 import arbiter
 import govee
+import log_setup
 
 logger = logging.getLogger(__name__)
 
@@ -900,19 +901,7 @@ def main():
     args = parser.parse_args()
 
     log_level = logging.DEBUG if args.verbose else logging.INFO
-    if args.log_file:
-        # Log to file with rotation
-        handler = logging.handlers.RotatingFileHandler(
-            args.log_file, maxBytes=1_000_000, backupCount=2
-        )
-        handler.setFormatter(logging.Formatter("%(asctime)s %(levelname)s %(message)s"))
-        logger.addHandler(handler)
-        logger.setLevel(log_level)
-    else:
-        logging.basicConfig(
-            level=log_level,
-            format="%(asctime)s %(levelname)s %(message)s",
-        )
+    log_setup.setup_logging(args.log_file, log_level)
 
     try:
         config = govee.load_config(args.config)

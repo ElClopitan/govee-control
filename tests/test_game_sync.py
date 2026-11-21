@@ -882,6 +882,45 @@ class TestLogFileArgument(unittest.TestCase):
             # Log file should NOT exist
             self.assertFalse(os.path.exists(log_path))
 
+    def test_no_doubled_warnings_without_log_file(self):
+        """Without --log-file, warnings appear only once on stderr."""
+        import tempfile
+        import os
+        from unittest import mock
+        import io
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            config_path = os.path.join(tmpdir, "config.json")
+
+            # Create a config with an invalid colour
+            config = {
+                "devices": [{"name": "test", "ip": "192.168.1.1"}],
+                "games": [
+                    {"name": "Test Game", "exe": "testgame.exe", "color": "notacolor", "brightness": 50},
+                ],
+            }
+            with open(config_path, "w") as f:
+                json.dump(config, f)
+
+            # Mock running_processes to return the game
+            with mock.patch("game_sync.running_processes") as mock_procs:
+                mock_procs.return_value = {"testgame.exe"}
+
+                # Capture stderr
+                stderr_capture = io.StringIO()
+                with mock.patch("sys.stderr", stderr_capture):
+                    with mock.patch("sys.argv", [
+                        "game_sync.py",
+                        "--once",
+                        "--dry-run",
+                        "--config", config_path,
+                    ]):
+                        game_sync.main()
+
+            stderr_text = stderr_capture.getvalue()
+            # The warning should appear exactly once (from print, not from logger)
+            self.assertEqual(stderr_text.count("invalid colour"), 1)
+
 
 class TestPowerOnAfterBlock(StateDirMixin, unittest.TestCase):
     """Test that game sync powers on strips after being blocked."""
