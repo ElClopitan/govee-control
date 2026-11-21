@@ -3604,10 +3604,11 @@ class TestFetchRetryBackoff(StateDirMixin, unittest.TestCase):
         except KeyboardInterrupt:
             pass
 
-        # First failure: 60s, success, second failure (after success): 60s (reset)
-        self.assertGreaterEqual(len(sleep_intervals), 2)
+        # First failure: 60s, success (sleep 900s until next interval), second failure: 60s (reset)
+        self.assertGreaterEqual(len(sleep_intervals), 3)
         self.assertEqual(sleep_intervals[0], 60)
-        self.assertEqual(sleep_intervals[1], 60)
+        self.assertEqual(sleep_intervals[1], 900)
+        self.assertEqual(sleep_intervals[2], 60)
 
 
 if __name__ == "__main__":
