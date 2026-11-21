@@ -3152,5 +3152,193 @@ class TestFetchErrorRetry(StateDirMixin, unittest.TestCase):
         self.assertGreater(mock_color.call_count, 1)
 
 
+class TestNightBrightnessCeiling(StateDirMixin, unittest.TestCase):
+    """Test that night_brightness is a ceiling, not an override."""
+
+    def setUp(self):
+        super().setUp()
+        self.set_mode("weather")
+        p = mock.patch("agent_signal.sweep_and_restore")
+        p.start()
+        self.addCleanup(p.stop)
+
+    def _make_config(self, night_brightness=30, patterns=None):
+        config = {
+            "devices": [{"name": "left", "ip": "192.168.1.50"}],
+            "weather": {
+                "latitude": 51.5,
+                "longitude": -0.1,
+                "brightness": 80,
+                "night_brightness": night_brightness,
+                "patterns_enabled": True,
+                "frame_interval": 1.0,
+            },
+        }
+        if patterns is not None:
+            config["weather"]["patterns"] = patterns
+        return config
+
+    @mock.patch("weather_sync.fetch_weather")
+    @mock.patch("govee.turn")
+    @mock.patch("govee.color")
+    @mock.patch("govee.brightness")
+    @mock.patch("time.sleep")
+    @mock.patch("time.time")
+    def test_night_pattern_brightness_lower_wins(self, mock_time, mock_sleep, mock_brightness, mock_color, mock_turn, mock_fetch):
+        """Night: pattern brightness 15 < night_brightness 30 -> 15 wins."""
+        mock_time.return_value = 1000.0
+        mock_fetch.return_value = {
+            "temperature_2m": 15.0,
+            "weather_code": 2,  # cloudy
+            "is_day": 0,
+        }
+        # Override cloudy_night to have brightness 15
+        config = self._make_config(night_brightness=30, patterns={
+            "cloudy_night": {
+                "type": "drift",
+                "color1": "#37474f",
+                "color2": "#5c6bc0",
+                "period": 40.0,
+                "brightness": 15,
+                "phase_offset": 0.0,
+            }
+        })
+
+        sleep_count = [0]
+        def sleep_side_effect(seconds):
+            sleep_count[0] += 1
+            mock_time.return_value += 1.0
+            if sleep_count[0] >= 2:
+                raise KeyboardInterrupt()
+
+        mock_sleep.side_effect = sleep_side_effect
+
+        try:
+            weather_sync.run(config, once=False, interval=900)
+        except KeyboardInterrupt:
+            pass
+
+        # Brightness should be 15 (pattern's own), not 30 (night_brightness)
+        brightness_values = [call[0][1] for call in mock_brightness.call_args_list]
+        self.assertIn(15, brightness_values,
+                      f"Expected brightness 15, got {brightness_values}")
+
+    @mock.patch("weather_sync.fetch_weather")
+    @mock.patch("govee.turn")
+    @mock.patch("govee.color")
+    @mock.patch("govee.brightness")
+    @mock.patch("time.sleep")
+    @mock.patch("time.time")
+    def test_night_pattern_brightness_higher_capped(self, mock_time, mock_sleep, mock_brightness, mock_color, mock_turn, mock_fetch):
+        """Night: pattern brightness 80 > night_brightness 30 -> capped to 30."""
+        mock_time.return_value = 1000.0
+        mock_fetch.return_value = {
+            "temperature_2m": 15.0,
+            "weather_code": 2,  # cloudy
+            "is_day": 0,
+        }
+        # Override cloudy_night to have brightness 80
+        config = self._make_config(night_brightness=30, patterns={
+            "cloudy_night": {
+                "type": "drift",
+                "color1": "#37474f",
+                "color2": "#5c6bc0",
+                "period": 40.0,
+                "brightness": 80,
+                "phase_offset": 0.0,
+            }
+        })
+
+        sleep_count = [0]
+        def sleep_side_effect(seconds):
+            sleep_count[0] += 1
+            mock_time.return_value += 1.0
+            if sleep_count[0] >= 2:
+                raise KeyboardInterrupt()
+
+        mock_sleep.side_effect = sleep_side_effect
+
+        try:
+            weather_sync.run(config, once=False, interval=900)
+        except KeyboardInterrupt:
+            pass
+
+        # Brightness should be capped to 30 (night_brightness)
+        brightness_values = [call[0][1] for call in mock_brightness.call_args_list]
+        for b in brightness_values:
+            self.assertLessEqual(b, 30,
+                                 f"Brightness {b} exceeds night_brightness 30")
+
+
+class TestStaticModeBrightnessChange(StateDirMixin, unittest.TestCase):
+    """Test that static mode sends brightness changes on day/night transition."""
+
+    def setUp(self):
+        super().setUp()
+        self.set_mode("weather")
+        p = mock.patch("agent_signal.sweep_and_restore")
+        p.start()
+        self.addCleanup(p.stop)
+
+    @mock.patch("weather_sync.fetch_weather")
+    @mock.patch("govee.turn")
+    @mock.patch("govee.color")
+    @mock.patch("govee.brightness")
+    @mock.patch("time.sleep")
+    @mock.patch("time.time")
+    def test_static_thunderstorm_day_to_night_brightness_change(self, mock_time, mock_sleep, mock_brightness, mock_color, mock_turn, mock_fetch):
+        """Static mode: thunderstorm day->night sends night brightness."""
+        mock_time.return_value = 1000.0
+
+        # First fetch: day, thunderstorm (code 95)
+        # Second fetch: night, thunderstorm (same code, same color)
+        fetch_count = [0]
+        def fetch_side_effect(*args, **kwargs):
+            fetch_count[0] += 1
+            if fetch_count[0] == 1:
+                return {"temperature_2m": 22.0, "weather_code": 95, "is_day": 1}
+            else:
+                return {"temperature_2m": 15.0, "weather_code": 95, "is_day": 0}
+
+        mock_fetch.side_effect = fetch_side_effect
+
+        config = {
+            "devices": [{"name": "left", "ip": "192.168.1.50"}],
+            "weather": {
+                "latitude": 51.5,
+                "longitude": -0.1,
+                "brightness": 80,
+                "night_brightness": 30,
+                "patterns_enabled": False,  # static mode
+                "fetch_on_the_hour": False,  # interval-based
+            },
+        }
+
+        # Advance time past interval on second sleep
+        sleep_count = [0]
+        def sleep_side_effect(seconds):
+            sleep_count[0] += 1
+            if sleep_count[0] == 1:
+                mock_time.return_value = 2000.0  # advance past 900s interval
+            if sleep_count[0] >= 2:
+                raise KeyboardInterrupt()
+
+        mock_sleep.side_effect = sleep_side_effect
+
+        try:
+            weather_sync.run(config, once=False, interval=900)
+        except KeyboardInterrupt:
+            pass
+
+        # Should have fetched twice
+        self.assertEqual(mock_fetch.call_count, 2)
+
+        # Both fetches have the same color (#7b1fa2), but brightness should change
+        # First: day brightness 80, second: night brightness 30
+        self.assertEqual(mock_brightness.call_count, 2)
+        self.assertEqual(mock_brightness.call_args_list[0][0], ("192.168.1.50", 80))
+        self.assertEqual(mock_brightness.call_args_list[1][0], ("192.168.1.50", 30))
+
+
 if __name__ == "__main__":
     unittest.main()
