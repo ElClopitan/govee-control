@@ -303,12 +303,18 @@ Configuration options in the `weather` section:
 - `night_brightness`: brightness at night (default: 30)
 - `fetch_on_the_hour`: fetch weather at the top of every hour (default: true);
   set to false for interval-based fetching
+- `fetch_offset_seconds`: seconds after the hour boundary to fetch (default: 120);
+  avoids SSL handshake timeouts that occur at exactly HH:00:00; clamped to 0–3000
+- `fetch_retry_seconds`: seconds to wait before retrying a failed fetch (default: 60);
+  doubles on each consecutive failure up to the interval (900s); resets on success
 - `patterns`: override default pattern definitions for cloudy/rain/thunderstorm
   (use `_night` suffix for night variants, e.g. `cloudy_night`; thunderstorm
   has no night variant — it uses the same pattern day and night)
 
-Weather is fetched at the top of every hour by default (`fetch_on_the_hour: true`),
-not every frame. Between fetches, the last known weather data is used for animation.
+Weather is fetched 2 minutes after the top of every hour by default
+(`fetch_on_the_hour: true`, `fetch_offset_seconds: 120`), not every frame.
+The offset avoids SSL handshake timeouts that occur at exactly HH:00:00.
+Between fetches, the last known weather data is used for animation.
 When is_day changes (day to night or vice versa), the pattern and brightness
 switch immediately at the next fetch.
 
