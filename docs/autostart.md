@@ -54,6 +54,17 @@ To register the tasks but not start them immediately:
 powershell -NoProfile -File autostart\install.ps1 -NoStart
 ```
 
+To use a specific pythonw.exe (useful if the first one on PATH is the Microsoft
+Store stub or a different Python installation):
+
+```powershell
+powershell -NoProfile -File autostart\install.ps1 -PythonW C:\Python312\pythonw.exe
+```
+
+If the resolved pythonw.exe is the Microsoft Store stub
+(`...\WindowsApps\pythonw.exe`), the script prints a warning suggesting you use
+`-PythonW` to specify the real installation.
+
 ## Uninstall
 
 ```powershell

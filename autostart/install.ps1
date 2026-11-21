@@ -16,6 +16,11 @@
 .PARAMETER NoStart
     Register the tasks but do not start them immediately.
 
+.PARAMETER PythonW
+    Path to pythonw.exe to use. If not given, the first pythonw.exe on PATH
+    is used. If the resolved path is the Microsoft Store stub
+    (...\\WindowsApps\\pythonw.exe), a warning is printed.
+
 .EXAMPLE
     .\install.ps1
     Installs all three tasks and starts them.
@@ -27,12 +32,17 @@
 .EXAMPLE
     .\install.ps1 -Uninstall
     Removes all three tasks.
+
+.EXAMPLE
+    .\install.ps1 -PythonW C:\Python312\pythonw.exe
+    Installs using a specific pythonw.exe.
 #>
 
 param(
     [switch]$Uninstall,
     [switch]$DryRun,
-    [switch]$NoStart
+    [switch]$NoStart,
+    [string]$PythonW
 )
 
 $ErrorActionPreference = "Stop"
@@ -42,15 +52,31 @@ $scriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
 $repoRoot = Split-Path -Parent $scriptDir
 
 # Resolve pythonw.exe
-try {
-    $pythonw = (Get-Command pythonw.exe).Source
-} catch {
-    Write-Error "pythonw.exe not found in PATH. Install Python or add it to PATH."
-    exit 1
+if ($PythonW) {
+    if (-not (Test-Path $PythonW)) {
+        Write-Error "pythonw.exe not found at specified path: $PythonW"
+        exit 1
+    }
+    $pythonw = $PythonW
+} else {
+    try {
+        $pythonw = (Get-Command pythonw.exe).Source
+    } catch {
+        Write-Error "pythonw.exe not found in PATH. Install Python or add it to PATH."
+        exit 1
+    }
 }
 
+if ($pythonw -like "*\WindowsApps\*") {
+    Write-Warning "pythonw.exe resolved to the Microsoft Store stub ($pythonw). " +
+        "This may not work from Task Scheduler. Consider using -PythonW to specify " +
+        "the real Python installation."
+}
+
+Write-Host "Using pythonw: $pythonw"
+
 # Current user for the trigger and registration
-$user = whoami
+$user = [System.Security.Principal.WindowsIdentity]::GetCurrent().Name
 
 $tasks = @(
     @{
@@ -99,6 +125,7 @@ if ($Uninstall) {
     }
 } else {
     Write-Host "Installing Govee autostart tasks..."
+    Write-Host "user $user"
 
     # Ensure state directory exists for log files
     if (-not $DryRun) {
@@ -134,6 +161,17 @@ if ($Uninstall) {
                 Write-Host "  Would start task immediately after registration"
             }
         } else {
+            # Stop any running instance before re-registering
+            $existing = Get-ScheduledTask -TaskName $t.Name -ErrorAction SilentlyContinue
+            if ($existing) {
+                try {
+                    Stop-ScheduledTask -TaskName $t.Name -ErrorAction SilentlyContinue
+                    Write-Host "Stopped running task: $($t.Name)"
+                } catch {
+                    # Task may not be running; ignore
+                }
+            }
+
             try {
                 $action = New-ScheduledTaskAction `
                     -Execute $pythonw `
@@ -148,17 +186,24 @@ if ($Uninstall) {
                     -Description $t.Description `
                     -User $user `
                     -RunLevel Limited `
-                    -Force
+                    -Force | Out-Null
 
                 Write-Host "Registered task: $($t.Name)"
-
-                if (-not $NoStart) {
-                    Start-ScheduledTask -TaskName $t.Name
-                    Write-Host "Started task: $($t.Name)"
-                }
             } catch {
                 Write-Host "ERROR: could not register `"$($t.Name)`": $($_.Exception.Message)" -ForegroundColor Red
                 $anyFailed = $true
+                continue
+            }
+
+            if (-not $NoStart) {
+                try {
+                    Start-ScheduledTask -TaskName $t.Name
+                    $taskInfo = Get-ScheduledTask -TaskName $t.Name
+                    Write-Host "Started task: $($t.Name) (State=$($taskInfo.State))"
+                } catch {
+                    Write-Host "ERROR: registered `"$($t.Name)`" but could not start it: $($_.Exception.Message)" -ForegroundColor Red
+                    $anyFailed = $true
+                }
             }
         }
     }
@@ -167,7 +212,7 @@ if ($Uninstall) {
         Write-Host "[dry-run] Done (no changes made)."
     } else {
         if ($anyFailed) {
-            Write-Host "Some tasks failed to register. Check the errors above." -ForegroundColor Red
+            Write-Host "Some tasks failed. Check the errors above." -ForegroundColor Red
             exit 1
         }
         if ($NoStart) {
