@@ -1144,6 +1144,18 @@ class TestToggleCommands(StateDirMixin, unittest.TestCase):
             "music mode needs" in str(call) for call in mock_print.call_args_list
         ))
 
+    def test_cmd_status_grace_period_shows_starting(self):
+        """cmd_status should show 'starting' during the start grace period."""
+        music_sync.PID_FILE.write_text("55555")
+        # Fresh pid file (age 0), within grace period
+        with mock.patch.object(music_sync, "_is_process_alive", return_value=True):
+            with mock.patch.object(arbiter, "music_active", return_value=False):
+                with mock.patch("builtins.print") as mock_print:
+                    result = music_sync.cmd_status()
+        self.assertEqual(result, 0)
+        self.assertIn("starting", mock_print.call_args[0][0])
+        self.assertNotIn("no heartbeat", mock_print.call_args[0][0])
+
     def test_cmd_status_hung_process_shows_no_heartbeat(self):
         """cmd_status should show 'no heartbeat' for a hung process."""
         music_sync.PID_FILE.write_text("33333")

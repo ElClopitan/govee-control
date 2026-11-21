@@ -678,7 +678,16 @@ def cmd_status():
     if pid is not None:
         # Check if the process is hung (alive but no heartbeat)
         if not arbiter.music_active():
-            print(f"music mode ON (pid {pid}, no heartbeat)")
+            # Check if we're in the start grace period
+            try:
+                pid_age = time.time() - PID_FILE.stat().st_mtime
+            except OSError:
+                pid_age = float("inf")
+
+            if pid_age < START_GRACE_SECONDS:
+                print(f"music mode ON (pid {pid}, starting)")
+            else:
+                print(f"music mode ON (pid {pid}, no heartbeat)")
         else:
             print(f"music mode ON (pid {pid})")
     else:
