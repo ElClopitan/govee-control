@@ -607,8 +607,9 @@ def run(config, once=False, interval=900, dry_run=False, rng=None, time_fn=None)
 
                 # Schedule next fetch
                 if fetch_on_the_hour:
-                    next_fetch_at = next_hour_boundary(now, fetch_offset)
-                    next_local = time.localtime(next_fetch_at)
+                    wall = time.time()
+                    next_fetch_at = now + (next_hour_boundary(wall, fetch_offset) - wall)
+                    next_local = time.localtime(wall + (next_fetch_at - now))
                     logger.info("Next weather fetch at %02d:%02d", next_local.tm_hour, next_local.tm_min)
                 # When not fetch_on_the_hour, next fetch is determined by interval check
 
