@@ -519,6 +519,9 @@ def cmd_start():
               file=sys.stderr)
         return 2
 
+    # Remember previous mode so we can restore it if Popen fails
+    previous = arbiter.get_mode()
+
     # Select music mode before spawning the background process
     try:
         arbiter.set_mode("music")
@@ -550,25 +553,34 @@ def cmd_start():
     ]
 
     # Start detached on Windows
-    if os.name == "nt":
-        CREATE_NO_WINDOW = 0x08000000
-        DETACHED_PROCESS = 0x00000008
-        startupinfo = subprocess.STARTUPINFO()
-        startupinfo.dwFlags |= subprocess.STARTF_USESHOWWINDOW
-        startupinfo.wShowWindow = subprocess.SW_HIDE
-        proc = subprocess.Popen(
-            cmd,
-            creationflags=CREATE_NO_WINDOW | DETACHED_PROCESS,
-            startupinfo=startupinfo,
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
-        )
-    else:
-        proc = subprocess.Popen(
-            cmd,
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
-        )
+    try:
+        if os.name == "nt":
+            CREATE_NO_WINDOW = 0x08000000
+            DETACHED_PROCESS = 0x00000008
+            startupinfo = subprocess.STARTUPINFO()
+            startupinfo.dwFlags |= subprocess.STARTF_USESHOWWINDOW
+            startupinfo.wShowWindow = subprocess.SW_HIDE
+            proc = subprocess.Popen(
+                cmd,
+                creationflags=CREATE_NO_WINDOW | DETACHED_PROCESS,
+                startupinfo=startupinfo,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+            )
+        else:
+            proc = subprocess.Popen(
+                cmd,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+            )
+    except OSError as e:
+        # Popen failed; restore previous mode
+        try:
+            arbiter.set_mode(previous)
+        except OSError:
+            pass
+        print(f"music mode: cannot start: {e}", file=sys.stderr)
+        return 1
 
     _write_pid(proc.pid)
     print(f"music mode ON (pid {proc.pid})")

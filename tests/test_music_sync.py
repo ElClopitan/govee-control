@@ -1065,6 +1065,27 @@ class TestToggleCommands(StateDirMixin, unittest.TestCase):
         mock_popen.assert_called_once()
         self.assertTrue(music_sync.PID_FILE.exists())
 
+    def test_start_popen_failure_restores_mode(self):
+        """cmd_start should restore previous mode if Popen raises OSError."""
+        def fake_find_spec(name):
+            return mock.Mock()
+
+        # Set a previous mode
+        arbiter.set_mode("weather")
+        self.assertEqual(arbiter.get_mode(), "weather")
+
+        with mock.patch("importlib.util.find_spec", side_effect=fake_find_spec):
+            with mock.patch("subprocess.Popen", side_effect=OSError("no such file")):
+                with mock.patch("builtins.print") as mock_print:
+                    result = music_sync.cmd_start()
+        self.assertEqual(result, 1)
+        # Mode should be restored to "weather"
+        self.assertEqual(arbiter.get_mode(), "weather")
+        # Error message should be printed
+        self.assertTrue(any(
+            "cannot start" in str(call) for call in mock_print.call_args_list
+        ))
+
     def test_run_logs_missing_deps(self):
         """run() should log an ERROR when soundcard/numpy are missing."""
         fake_rec = mock.Mock()

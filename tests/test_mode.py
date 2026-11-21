@@ -148,11 +148,40 @@ class TestSwitchMusic(StateDirMixin, unittest.TestCase):
         """switch("music") sends nothing to devices."""
         config = {"devices": [{"ip": "192.168.1.1"}]}
         with mock.patch("govee.turn") as mock_turn:
-            with mock.patch("music_sync.cmd_start"):
+            with mock.patch("music_sync.cmd_start", return_value=0):
                 import mode
                 mode.switch("music", config)
         mock_turn.assert_not_called()
         self.assertEqual(arbiter.get_mode(), "music")
+
+    def test_music_cmd_start_failure_raises(self):
+        """switch("music") raises RuntimeError when cmd_start returns non-zero."""
+        config = {"devices": [{"ip": "192.168.1.1"}]}
+        with mock.patch("music_sync.cmd_start", return_value=2):
+            import mode
+            with self.assertRaises(RuntimeError) as cm:
+                mode.switch("music", config)
+        self.assertIn("exit 2", str(cm.exception))
+        # Mode should not be "music" (cmd_start failed before setting it)
+        self.assertNotEqual(arbiter.get_mode(), "music")
+
+    def test_music_cmd_start_failure_cli_exits_1(self):
+        """mode.py set music exits 1 when cmd_start fails."""
+        import mode
+        with mock.patch("music_sync.cmd_start", return_value=2):
+            with mock.patch("sys.argv", ["mode.py", "set", "music"]):
+                with mock.patch("sys.stderr") as mock_stderr:
+                    with mock.patch("govee.turn"):
+                        with self.assertRaises(SystemExit) as cm:
+                            mode.main()
+                        self.assertEqual(cm.exception.code, 1)
+                stderr_output = "".join(
+                    call[0][0] for call in mock_stderr.write.call_args_list
+                    if call[0]
+                )
+                self.assertIn("could not set mode", stderr_output)
+        # Mode should not be "music"
+        self.assertNotEqual(arbiter.get_mode(), "music")
 
 
 class TestCliGet(StateDirMixin, unittest.TestCase):

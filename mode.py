@@ -12,7 +12,6 @@ Modes: off, weather, game, music
 """
 
 import argparse
-import json
 import sys
 from pathlib import Path
 
@@ -41,12 +40,15 @@ def switch(mode, config, dry_run=False):
                     print(f"would turn off {ip}")
         return
 
-    arbiter.set_mode(mode)
-
     # When switching to music mode, start the music sync background process
+    # FIRST and check its return code. cmd_start sets the mode itself.
     if mode == "music":
-        music_sync.cmd_start()
+        rc = music_sync.cmd_start()
+        if rc != 0:
+            raise RuntimeError(f"music mode did not start (exit {rc})")
         return
+
+    arbiter.set_mode(mode)
 
     # When mode is "off", turn all devices off even if a signal is active.
     # Do this under the agent_signal lock so a concurrent needs-input/clear
@@ -116,12 +118,12 @@ Examples:
         if args.mode == "off":
             try:
                 config = govee.load_config(args.config)
-            except (OSError, json.JSONDecodeError) as e:
+            except (OSError, ValueError) as e:
                 print(f"error: failed to load config {args.config}: {e}", file=sys.stderr)
                 sys.exit(1)
         try:
             switch(args.mode, config, dry_run=args.dry_run)
-        except OSError as e:
+        except (OSError, RuntimeError) as e:
             print(f"error: could not set mode: {e}", file=sys.stderr)
             sys.exit(1)
         if not args.dry_run:
