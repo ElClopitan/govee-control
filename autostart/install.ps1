@@ -68,9 +68,9 @@ if ($PythonW) {
 }
 
 if ($pythonw -like "*\WindowsApps\*") {
-    Write-Warning "pythonw.exe resolved to the Microsoft Store stub ($pythonw). " +
+    Write-Warning ("pythonw.exe resolved to the Microsoft Store stub ($pythonw). " +
         "This may not work from Task Scheduler. Consider using -PythonW to specify " +
-        "the real Python installation."
+        "the real Python installation.")
 }
 
 Write-Host "Using pythonw: $pythonw"
@@ -151,6 +151,10 @@ if ($Uninstall) {
     foreach ($t in $tasks) {
         $arg = "$($t.Script) $($t.Arguments)"
         if ($DryRun) {
+            $existing = Get-ScheduledTask -TaskName $t.Name -ErrorAction SilentlyContinue
+            if ($existing -and $existing.State -eq 'Running') {
+                Write-Host "  Would stop running task first"
+            }
             Write-Host "[dry-run] Would register task: $($t.Name)"
             Write-Host "  Trigger: AtLogOn, user $user"
             Write-Host "  Execute: $pythonw"
@@ -163,7 +167,7 @@ if ($Uninstall) {
         } else {
             # Stop any running instance before re-registering
             $existing = Get-ScheduledTask -TaskName $t.Name -ErrorAction SilentlyContinue
-            if ($existing) {
+            if ($existing -and $existing.State -eq 'Running') {
                 try {
                     Stop-ScheduledTask -TaskName $t.Name -ErrorAction SilentlyContinue
                     Write-Host "Stopped running task: $($t.Name)"
