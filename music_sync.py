@@ -764,18 +764,21 @@ def run(config, fps=None, verbose=False, log_file=None, time_fn=None):
                     logger.warning("Failed to get status from %s: %s", ip, e)
                     initial_states.append({"ip": ip, "state": None})
 
-            # Set brightness once at start
-            brightness = arbiter.cap_brightness(80, config)
-            for dev in devices:
-                ip = dev["ip"]
-                try:
-                    govee.brightness(ip, brightness)
-                    logger.info("Set brightness %d on %s", brightness, ip)
-                except OSError as e:
-                    logger.error("Failed to set brightness on %s: %s", ip, e)
+            # Re-check mode before touching strips: if the owner picked Off (or
+            # another mode) during the status queries, don't override it.
+            if arbiter.get_mode() == "music" and not arbiter.signal_active():
+                # Set brightness once at start
+                brightness = arbiter.cap_brightness(80, config)
+                for dev in devices:
+                    ip = dev["ip"]
+                    try:
+                        govee.brightness(ip, brightness)
+                        logger.info("Set brightness %d on %s", brightness, ip)
+                    except OSError as e:
+                        logger.error("Failed to set brightness on %s: %s", ip, e)
 
-            # Turn all strips on at start (they may have been off from a previous mode)
-            _turn_all(devices, True)
+                # Turn all strips on at start (they may have been off from a previous mode)
+                _turn_all(devices, True)
 
             while True:
                 frame_start = time_fn()

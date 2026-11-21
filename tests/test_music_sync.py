@@ -190,24 +190,27 @@ class TestMusicSignalPriority(StateDirMixin, unittest.TestCase):
         """music_sync.run() should not send frames when signal is active,
         but should send after signal clears. Tests the re-check before sending."""
         self.set_mode("music")
-        # Signal becomes active on the second call (the re-check before sending)
+        # Signal becomes active on the third call (the re-check before sending)
+        # Call 1: start-up guard -> False
+        # Call 2: top of loop (iteration 1) -> False
+        # Call 3: re-check before send (iteration 1) -> True
+        # Call 4: top of loop (iteration 2) -> True
+        # Call 5: top of loop (iteration 3) -> False
+        # Call 6: re-check before send (iteration 3) -> False
         signal_active_count = [0]
 
         def fake_signal_active():
             signal_active_count[0] += 1
-            # First call (top of loop) -> False
-            # Second call (re-check before send) -> True
-            # Third call (top of loop, next iteration) -> True
-            # Fourth call (top of loop, next iteration) -> False
-            # Fifth call (re-check before send) -> False
             if signal_active_count[0] == 1:
-                return False
+                return False  # start-up guard
             elif signal_active_count[0] == 2:
-                return True
+                return False  # top of loop, iteration 1
             elif signal_active_count[0] == 3:
-                return True
+                return True   # re-check before send, iteration 1
+            elif signal_active_count[0] == 4:
+                return True   # top of loop, iteration 2
             else:
-                return False
+                return False  # top of loop, iteration 3 and re-check
 
         # Track colours sent
         colors_sent = []
@@ -348,11 +351,11 @@ class TestMusicRestoreSkippedDuringSignal(StateDirMixin, unittest.TestCase):
         self.assertFalse(arbiter.music_file().exists(),
                          "music_active.json should be removed after exception")
         # No restore calls should have been made (signal was active)
-        # Only the initial brightness set should have happened
+        # With the start-up guard, brightness is also skipped when signal is active
         brightness_calls = [c for c in govee_calls if c[0] == "brightness"]
-        # One brightness call at start (setting to 80), none in finally
-        self.assertEqual(len(brightness_calls), 1,
-                        f"Expected 1 brightness call (initial only), got {len(brightness_calls)}")
+        # No brightness call at start (signal was active), none in finally
+        self.assertEqual(len(brightness_calls), 0,
+                        f"Expected 0 brightness calls (signal active), got {len(brightness_calls)}")
         # No color calls in finally (restore would send color)
         color_calls = [c for c in govee_calls if c[0] == "color"]
         self.assertEqual(len(color_calls), 0,
@@ -866,7 +869,9 @@ class TestToggleCommands(StateDirMixin, unittest.TestCase):
         import inspect
         source = inspect.getsource(music_sync.run)
         stop_flag_pos = source.find("STOP_FLAG_FILE.exists()")
-        signal_pos = source.find("arbiter.signal_active()")
+        # Find the signal check in the loop (after the stop flag check),
+        # not the start-up guard check
+        signal_pos = source.find("arbiter.signal_active()", stop_flag_pos)
         self.assertGreater(stop_flag_pos, -1)
         self.assertGreater(signal_pos, -1)
         self.assertLess(stop_flag_pos, signal_pos)
@@ -3193,6 +3198,151 @@ class TestMusicSyncModeRace(StateDirMixin, unittest.TestCase):
         # Log should contain the mode change exit message
         self.assertTrue(any("mode changed to off; exiting music sync" in log for log in cm.output),
                        f"Expected 'mode changed to off; exiting music sync' in logs, got: {cm.output}")
+
+    def test_mode_off_during_start_queries_no_power_on(self):
+        """If mode changes to 'off' during start-up status queries, no brightness/turn-on sent."""
+        self.set_mode("music")
+
+        # Use a mutable dict so the status query can change the mode
+        mode = {"value": "music"}
+
+        govee_calls = []
+        def fake_color(ip, r, g, b):
+            govee_calls.append(("color", ip, r, g, b))
+        def fake_turn(ip, on):
+            govee_calls.append(("turn", ip, on))
+        def fake_brightness(ip, level):
+            govee_calls.append(("brightness", ip, level))
+
+        fake_time_fn = bounded_clock()
+
+        # Create a fake recorder that returns a loud frame
+        fake_rec = mock.Mock()
+        fake_rec.__enter__ = mock.Mock(return_value=fake_rec)
+        fake_rec.__exit__ = mock.Mock(return_value=False)
+        fake_rec.record = mock.Mock(return_value=mock.Mock(ndim=1, shape=(1024,), dtype="float64"))
+
+        fake_mic = mock.Mock()
+        fake_mic.name = "Stereo Mix (loopback)"
+        fake_mic.isloopback = True
+        fake_mic.recorder = mock.Mock(return_value=fake_rec)
+
+        fake_speaker = mock.Mock()
+        fake_speaker.name = "Stereo Mix (loopback)"
+
+        fake_sc = mock.Mock()
+        fake_sc.default_speaker = mock.Mock(return_value=fake_speaker)
+        fake_sc.get_microphone = mock.Mock(return_value=fake_mic)
+        fake_sc.all_microphones = mock.Mock(return_value=[fake_mic])
+
+        # Mode changes to "off" during the status query
+        def status_side_effect(ip, timeout=2):
+            mode["value"] = "off"
+            return None
+
+        with mock.patch.dict(sys.modules, {
+            "soundcard": fake_sc,
+            "numpy": mock.Mock(),
+        }):
+            with mock.patch.object(arbiter, "get_mode", side_effect=lambda: mode["value"]):
+                with mock.patch.object(music_sync, "govee") as mock_govee:
+                    mock_govee.color = fake_color
+                    mock_govee.turn = fake_turn
+                    mock_govee.brightness = fake_brightness
+                    mock_govee.status = mock.Mock(side_effect=status_side_effect)
+                    with mock.patch("time.sleep"):
+                        with mock.patch.object(music_sync, "STOP_FLAG_FILE", self.state_dir / "music_stop"):
+                            with mock.patch.object(music_sync, "PID_FILE", self.state_dir / "music_sync.pid"):
+                                with mock.patch.object(music_sync, "analyze", return_value={"level": 0.5, "bass": 0.5, "mid": 0.5, "treble": 0.5}):
+                                    music_sync.run(
+                                        {"devices": [{"ip": "1.2.3.4"}]},
+                                        fps=10,
+                                        time_fn=fake_time_fn,
+                                    )
+
+        # No brightness or turn-on calls after mode changed to off
+        brightness_calls = [c for c in govee_calls if c[0] == "brightness"]
+        self.assertEqual(len(brightness_calls), 0,
+                        f"Expected no brightness calls, got {len(brightness_calls)}")
+        turn_on_calls = [c for c in govee_calls if c[0] == "turn" and c[2]]
+        self.assertEqual(len(turn_on_calls), 0,
+                        f"Expected no turn-on calls, got {len(turn_on_calls)}")
+
+    def test_signal_active_during_start_no_power_on(self):
+        """If an agent signal is active during start-up, no brightness/turn-on sent."""
+        self.set_mode("music")
+
+        govee_calls = []
+        def fake_color(ip, r, g, b):
+            govee_calls.append(("color", ip, r, g, b))
+        def fake_turn(ip, on):
+            govee_calls.append(("turn", ip, on))
+        def fake_brightness(ip, level):
+            govee_calls.append(("brightness", ip, level))
+
+        fake_time_fn = bounded_clock()
+
+        # Create a fake recorder that returns a loud frame
+        fake_rec = mock.Mock()
+        fake_rec.__enter__ = mock.Mock(return_value=fake_rec)
+        fake_rec.__exit__ = mock.Mock(return_value=False)
+        fake_rec.record = mock.Mock(return_value=mock.Mock(ndim=1, shape=(1024,), dtype="float64"))
+
+        fake_mic = mock.Mock()
+        fake_mic.name = "Stereo Mix (loopback)"
+        fake_mic.isloopback = True
+        fake_mic.recorder = mock.Mock(return_value=fake_rec)
+
+        fake_speaker = mock.Mock()
+        fake_speaker.name = "Stereo Mix (loopback)"
+
+        fake_sc = mock.Mock()
+        fake_sc.default_speaker = mock.Mock(return_value=fake_speaker)
+        fake_sc.get_microphone = mock.Mock(return_value=fake_mic)
+        fake_sc.all_microphones = mock.Mock(return_value=[fake_mic])
+
+        # Signal is active only during start-up (first call), then inactive
+        signal_calls = [0]
+        def signal_active_side_effect():
+            signal_calls[0] += 1
+            return signal_calls[0] == 1
+
+        # Mode changes to "off" on the second call (at the top of the loop)
+        mode_calls = [0]
+        def get_mode_side_effect():
+            mode_calls[0] += 1
+            if mode_calls[0] == 1:
+                return "music"  # First call: during start-up
+            return "off"  # Second call: at the top of the loop
+
+        with mock.patch.dict(sys.modules, {
+            "soundcard": fake_sc,
+            "numpy": mock.Mock(),
+        }):
+            with mock.patch.object(arbiter, "get_mode", side_effect=get_mode_side_effect):
+                with mock.patch.object(arbiter, "signal_active", side_effect=signal_active_side_effect):
+                    with mock.patch.object(music_sync, "govee") as mock_govee:
+                        mock_govee.color = fake_color
+                        mock_govee.turn = fake_turn
+                        mock_govee.brightness = fake_brightness
+                        mock_govee.status = mock.Mock(return_value={"msg": {"data": {"brightness": 50}}})
+                        with mock.patch("time.sleep"):
+                            with mock.patch.object(music_sync, "STOP_FLAG_FILE", self.state_dir / "music_stop"):
+                                with mock.patch.object(music_sync, "PID_FILE", self.state_dir / "music_sync.pid"):
+                                    with mock.patch.object(music_sync, "analyze", return_value={"level": 0.5, "bass": 0.5, "mid": 0.5, "treble": 0.5}):
+                                        music_sync.run(
+                                            {"devices": [{"ip": "1.2.3.4"}]},
+                                            fps=10,
+                                            time_fn=fake_time_fn,
+                                        )
+
+        # No brightness or turn-on calls when signal was active during start-up
+        brightness_calls = [c for c in govee_calls if c[0] == "brightness"]
+        self.assertEqual(len(brightness_calls), 0,
+                        f"Expected no brightness calls, got {len(brightness_calls)}")
+        turn_on_calls = [c for c in govee_calls if c[0] == "turn" and c[2]]
+        self.assertEqual(len(turn_on_calls), 0,
+                        f"Expected no turn-on calls, got {len(turn_on_calls)}")
 
 
 class TestSilenceOffRetry(StateDirMixin, unittest.TestCase):
