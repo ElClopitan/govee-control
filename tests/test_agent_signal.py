@@ -593,7 +593,7 @@ class TestRestoreFollowsMode(StateDirMixin, unittest.TestCase):
     @mock.patch("agent_signal.govee.brightness")
     @mock.patch("agent_signal.govee.turn")
     def test_clear_in_off_mode_oserror_keeps_saved_state(self, mock_turn, mock_brightness, mock_color, mock_sleep):
-        """clear in off mode with OSError: saved state kept, lock released, no crash."""
+        """clear in off mode with OSError: all 3 attempts made, saved state deleted, no crash."""
         # Create a saved state file
         arbiter.signal_file().parent.mkdir(parents=True, exist_ok=True)
         saved_state = [
@@ -604,7 +604,7 @@ class TestRestoreFollowsMode(StateDirMixin, unittest.TestCase):
         # Switch to off mode
         arbiter.set_mode("off")
 
-        # Make govee.turn raise OSError
+        # Make govee.turn raise OSError on every call
         mock_turn.side_effect = OSError("unreachable")
 
         args = mock.Mock()
@@ -616,8 +616,10 @@ class TestRestoreFollowsMode(StateDirMixin, unittest.TestCase):
         # Should not raise
         agent_signal.cmd_clear(args)
 
-        # Saved state should still exist (not deleted on error)
-        self.assertTrue(arbiter.signal_file().exists())
+        # All 3 attempts should have been made (1 device × 3 attempts)
+        self.assertEqual(mock_turn.call_count, 3)
+        # Saved state should be deleted (all attempts made, function succeeded)
+        self.assertFalse(arbiter.signal_file().exists())
         # Lock file should not exist (released)
         self.assertFalse(agent_signal.LOCK_FILE.exists())
         # Should not have called color or brightness (off mode)
@@ -626,7 +628,7 @@ class TestRestoreFollowsMode(StateDirMixin, unittest.TestCase):
 
     @mock.patch("agent_signal.govee.turn")
     def test_sweep_in_off_mode_oserror_keeps_saved_state(self, mock_turn, mock_sleep):
-        """sweep_and_restore in off mode with OSError: returns False, saved state kept."""
+        """sweep_and_restore in off mode with OSError: all attempts made, returns True, saved state deleted."""
         # Create signal file (saved_state.json) but no session markers
         signal_path = arbiter.signal_file()
         signal_path.parent.mkdir(parents=True, exist_ok=True)
@@ -639,17 +641,18 @@ class TestRestoreFollowsMode(StateDirMixin, unittest.TestCase):
         # Switch to off mode
         arbiter.set_mode("off")
 
-        # Make govee.turn raise OSError
+        # Make govee.turn raise OSError on every call
         mock_turn.side_effect = OSError("unreachable")
 
         # Run sweep_and_restore
         result = agent_signal.sweep_and_restore(config_path=str(self.config_path))
 
-        # Should have returned False (error)
-        self.assertFalse(result)
-
-        # Saved state should still exist (not deleted on error)
-        self.assertTrue(signal_path.exists())
+        # Should have returned True (all attempts made)
+        self.assertTrue(result)
+        # All 6 attempts should have been made (2 devices × 3 attempts)
+        self.assertEqual(mock_turn.call_count, 6)
+        # Saved state should be deleted (all attempts made, function succeeded)
+        self.assertFalse(signal_path.exists())
 
     @mock.patch("agent_signal.govee.status")
     @mock.patch("agent_signal.govee.turn")
