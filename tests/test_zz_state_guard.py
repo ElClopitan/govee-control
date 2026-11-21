@@ -13,19 +13,7 @@ any writes that slip through.
 import unittest
 from pathlib import Path
 
-from tests import helpers
-
-
-def _snapshot_state_dir(state_dir):
-    """Take a snapshot of a state directory: {filename: (size, mtime_ns)}."""
-    if not state_dir.exists():
-        return None
-    snapshot = {}
-    for f in state_dir.iterdir():
-        if f.is_file():
-            stat = f.stat()
-            snapshot[f.name] = (stat.st_size, stat.st_mtime_ns)
-    return snapshot
+import helpers
 
 
 class TestStateDirGuard(unittest.TestCase):
@@ -33,7 +21,7 @@ class TestStateDirGuard(unittest.TestCase):
 
     def test_state_dir_not_written(self):
         """Fail if the repo's real state/ dir differs from the import-time snapshot."""
-        current_snapshot = _snapshot_state_dir(helpers.REAL_STATE_DIR)
+        current_snapshot = helpers._snapshot_state_dir(helpers.REAL_STATE_DIR)
         original_snapshot = helpers.REAL_STATE_SNAPSHOT
 
         # Both None: no state/ dir at either time - good

@@ -21,7 +21,9 @@ takes a snapshot of the real repo state/ dir so test_zz_state_guard.py can
 detect if any test wrote to the real state/ dir.
 """
 
+import atexit
 import inspect
+import shutil
 import socket
 import subprocess
 import sys
@@ -110,14 +112,15 @@ REAL_STATE_DIR = _REPO_ROOT / "state"
 
 
 def _snapshot_state_dir(state_dir):
-    """Take a snapshot of a state directory: {filename: (size, mtime_ns)}."""
+    """Take a snapshot of a state directory: {relpath: (size, mtime_ns)}."""
     if not state_dir.exists():
         return None
     snapshot = {}
-    for f in state_dir.iterdir():
+    for f in state_dir.rglob("*"):
         if f.is_file():
             stat = f.stat()
-            snapshot[f.name] = (stat.st_size, stat.st_mtime_ns)
+            rel = f.relative_to(state_dir).as_posix()
+            snapshot[rel] = (stat.st_size, stat.st_mtime_ns)
     return snapshot
 
 
@@ -125,6 +128,7 @@ REAL_STATE_SNAPSHOT = _snapshot_state_dir(REAL_STATE_DIR)
 
 # Create session tempdir
 _SESSION_STATE_DIR = Path(tempfile.mkdtemp(prefix="govee-test-state-"))
+atexit.register(shutil.rmtree, _SESSION_STATE_DIR, ignore_errors=True)
 
 # Redirect all state path constants to the session tempdir
 arbiter.STATE_DIR = _SESSION_STATE_DIR
