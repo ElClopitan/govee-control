@@ -41,7 +41,6 @@ Colour mapping (WMO weather codes):
 import argparse
 import json
 import logging
-import logging.handlers
 import math
 import random
 import sys

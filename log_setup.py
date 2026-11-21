@@ -55,4 +55,8 @@ def _install_excepthook():
         logger = logging.getLogger("uncaught")
         logger.critical("uncaught exception", exc_info=(exc_type, exc_value, exc_tb))
 
+        # Also show traceback on console if stderr is available
+        if sys.stderr is not None:
+            original_hook(exc_type, exc_value, exc_tb)
+
     sys.excepthook = logging_hook

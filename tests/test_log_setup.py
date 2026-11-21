@@ -4,7 +4,9 @@ import logging
 import sys
 import tempfile
 import unittest
+from io import StringIO
 from pathlib import Path
+from unittest import mock
 
 
 class TestSetupLogging(unittest.TestCase):
@@ -122,6 +124,72 @@ class TestSetupLogging(unittest.TestCase):
 
             content = log_path.read_text(encoding="utf-8")
             self.assertIn("20°C", content)
+        finally:
+            # Close file handlers before removing temp dir
+            for handler in logging.root.handlers[:]:
+                if hasattr(handler, "close"):
+                    handler.close()
+            import shutil
+            shutil.rmtree(tmpdir, ignore_errors=True)
+
+    def test_excepthook_calls_original_when_stderr_present(self):
+        """When stderr is available, the excepthook calls the original hook."""
+        import log_setup
+
+        tmpdir = tempfile.mkdtemp()
+        try:
+            log_path = Path(tmpdir) / "test.log"
+
+            # Patch sys.excepthook with a mock before setup_logging
+            mock_hook = mock.Mock()
+            sys.excepthook = mock_hook
+            log_setup.setup_logging(str(log_path), logging.INFO)
+
+            # Create a traceback from a caught exception
+            try:
+                raise RuntimeError("boom")
+            except RuntimeError:
+                tb = sys.exc_info()[2]
+
+            # Call the excepthook with stderr present
+            with mock.patch.object(sys, "stderr", StringIO()):
+                sys.excepthook(RuntimeError, RuntimeError("boom"), tb)
+
+            # The original hook (our mock) should have been called
+            mock_hook.assert_called_once()
+        finally:
+            # Close file handlers before removing temp dir
+            for handler in logging.root.handlers[:]:
+                if hasattr(handler, "close"):
+                    handler.close()
+            import shutil
+            shutil.rmtree(tmpdir, ignore_errors=True)
+
+    def test_excepthook_skips_original_when_stderr_none(self):
+        """When stderr is None (pythonw), the excepthook does not call the original hook."""
+        import log_setup
+
+        tmpdir = tempfile.mkdtemp()
+        try:
+            log_path = Path(tmpdir) / "test.log"
+
+            # Patch sys.excepthook with a mock before setup_logging
+            mock_hook = mock.Mock()
+            sys.excepthook = mock_hook
+            log_setup.setup_logging(str(log_path), logging.INFO)
+
+            # Create a traceback from a caught exception
+            try:
+                raise RuntimeError("boom")
+            except RuntimeError:
+                tb = sys.exc_info()[2]
+
+            # Call the excepthook with stderr set to None
+            with mock.patch.object(sys, "stderr", None):
+                sys.excepthook(RuntimeError, RuntimeError("boom"), tb)
+
+            # The original hook (our mock) should NOT have been called
+            mock_hook.assert_not_called()
         finally:
             # Close file handlers before removing temp dir
             for handler in logging.root.handlers[:]:
