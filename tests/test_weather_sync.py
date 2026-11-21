@@ -1292,6 +1292,63 @@ class TestPatternFrame(unittest.TestCase):
         self.assertEqual((r, g, b), (176, 190, 197))
         self.assertEqual(brightness, 75)
 
+    def test_thunderstorm_pattern_pulse(self):
+        """Thunderstorm pattern pulses between color1 and color2 with brightness 60-80."""
+        pattern = weather_sync.get_pattern_for_code(95, {})
+        self.assertEqual(pattern["type"], "thunderstorm")
+
+        # Collect frames over one full cycle (12s)
+        frames = []
+        for t in range(0, 25):  # t = 0, 0.5, 1.0, ..., 12.0
+            r, g, b, brightness = weather_sync.pattern_frame(pattern, t * 0.5, 0)
+            frames.append((r, g, b, brightness))
+
+        # At least 3 distinct colours
+        colours = {(r, g, b) for r, g, b, _ in frames}
+        self.assertGreaterEqual(len(colours), 3,
+                                f"Expected >= 3 distinct colours, got {len(colours)}")
+
+        # Every brightness within [60, 80]
+        for r, g, b, brightness in frames:
+            self.assertGreaterEqual(brightness, 60,
+                                    f"Brightness {brightness} < 60 at t={t}")
+            self.assertLessEqual(brightness, 80,
+                                 f"Brightness {brightness} > 80 at t={t}")
+
+        # t=0 gives color1 (74,20,140) at brightness 60
+        r0, g0, b0, b0_bright = frames[0]
+        self.assertEqual((r0, g0, b0), (74, 20, 140),
+                         f"t=0 colour should be color1 (74,20,140), got ({r0},{g0},{b0})")
+        self.assertEqual(b0_bright, 60,
+                         f"t=0 brightness should be 60, got {b0_bright}")
+
+        # t=6 gives color2 (123,31,162) at brightness 80
+        r6, g6, b6, b6_bright = frames[12]  # t=6.0
+        self.assertEqual((r6, g6, b6), (123, 31, 162),
+                         f"t=6 colour should be color2 (123,31,162), got ({r6},{g6},{b6})")
+        self.assertEqual(b6_bright, 80,
+                         f"t=6 brightness should be 80, got {b6_bright}")
+
+    def test_thunderstorm_brightness_min_config(self):
+        """Thunderstorm pattern honours brightness_min from config."""
+        pattern = {
+            "type": "thunderstorm",
+            "color1": "#4a148c",
+            "color2": "#7b1fa2",
+            "period": 12.0,
+            "brightness": 80,
+            "brightness_min": 40,
+            "phase_offset": 0.0,
+        }
+        # At t=0, brightness should be brightness_min (40)
+        r, g, b, brightness = weather_sync.pattern_frame(pattern, 0.0, 0)
+        self.assertEqual(brightness, 40,
+                         f"t=0 brightness should be brightness_min (40), got {brightness}")
+        # At t=6, brightness should be brightness (80)
+        r, g, b, brightness = weather_sync.pattern_frame(pattern, 6.0, 0)
+        self.assertEqual(brightness, 80,
+                         f"t=6 brightness should be 80, got {brightness}")
+
 
 class TestGetPatternForCode(unittest.TestCase):
     """Test pattern selection by weather code."""
@@ -1993,6 +2050,59 @@ class TestThunderstormPattern(StateDirMixin, unittest.TestCase):
         brightness_values = [call[0][1] for call in mock_brightness.call_args_list]
         for b in brightness_values:
             self.assertLessEqual(b, 80, f"Non-flash brightness {b} exceeds 80")
+
+    @mock.patch("weather_sync.fetch_weather")
+    @mock.patch("govee.turn")
+    @mock.patch("govee.color")
+    @mock.patch("govee.brightness")
+    @mock.patch("time.sleep")
+    @mock.patch("time.time")
+    def test_thunderstorm_base_frames_vary_brightness(self, mock_time, mock_sleep, mock_brightness, mock_color, mock_turn, mock_fetch):
+        """Thunderstorm base frames have varying brightness (not all equal)."""
+        import random
+        mock_time.return_value = 1000.0
+        mock_fetch.return_value = {
+            "temperature_2m": 22.0,
+            "weather_code": 95,
+            "is_day": 1,
+        }
+        config = self._make_config(frame_interval=1.0)
+        config["max_brightness"] = 80
+
+        # Seed the RNG
+        rng = random.Random(42)
+
+        # Run for 10 frames (no flash triggered in this short window)
+        sleep_count = [0]
+        def sleep_side_effect(seconds):
+            sleep_count[0] += 1
+            mock_time.return_value += 1.0
+            if sleep_count[0] >= 10:
+                raise KeyboardInterrupt()
+
+        mock_sleep.side_effect = sleep_side_effect
+
+        try:
+            weather_sync.run(config, once=False, interval=900, rng=rng)
+        except KeyboardInterrupt:
+            pass
+
+        # Collect brightness values for base frames (not flash)
+        brightness_values = [call[0][1] for call in mock_brightness.call_args_list]
+        # Filter out flash brightness (100)
+        base_brightness = [b for b in brightness_values if b != 100]
+
+        # Should have multiple base frames
+        self.assertGreater(len(base_brightness), 1,
+                           f"Expected multiple base frames, got {len(base_brightness)}")
+
+        # Not all brightness values should be equal (pulse effect)
+        self.assertGreater(len(set(base_brightness)), 1,
+                           f"All base brightness values are equal: {base_brightness}")
+
+        # All base brightness values should be <= 80
+        for b in base_brightness:
+            self.assertLessEqual(b, 80, f"Base brightness {b} exceeds 80")
 
 
 class TestThunderstormDoubleFlash(StateDirMixin, unittest.TestCase):

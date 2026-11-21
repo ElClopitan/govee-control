@@ -93,10 +93,11 @@ def pattern_frame(pattern, t, strip_index):
 
     Args:
         pattern: Pattern definition dict with keys:
-            - type: 'static', 'drift', or 'wave'
+            - type: 'static', 'drift', 'wave', or 'thunderstorm'
             - color1, color2: hex colors for animation
-            - period: seconds per full cycle (for drift/wave)
+            - period: seconds per full cycle (for drift/wave/thunderstorm)
             - brightness: target brightness (int)
+            - brightness_min: minimum brightness for thunderstorm pulse (default 60)
             - phase_offset: seconds of phase offset per strip (for wave)
         t: Current time in seconds (float)
         strip_index: Index of the strip (int)
@@ -140,6 +141,15 @@ def pattern_frame(pattern, t, strip_index):
         r = int(lerp(r1, r2, interp_t))
         g = int(lerp(g1, g2, interp_t))
         b = int(lerp(b1, b2, interp_t))
+    elif ptype == "thunderstorm":
+        # Thunderstorm: sinusoidal color interpolation like wave,
+        # with brightness pulsing between brightness_min and brightness
+        interp_t = (1.0 - math.cos(2.0 * math.pi * phase)) / 2.0
+        r = int(lerp(r1, r2, interp_t))
+        g = int(lerp(g1, g2, interp_t))
+        b = int(lerp(b1, b2, interp_t))
+        brightness_min = pattern.get("brightness_min", 60)
+        brightness = int(round(lerp(brightness_min, brightness, interp_t)))
     else:
         # Unknown type, fall back to static color1
         r, g, b = r1, g1, b1
@@ -251,6 +261,7 @@ def get_pattern_for_code(code, patterns_cfg, is_day=1):
             "color2": "#7b1fa2",
             "period": 12.0,  # 6s per half cycle
             "brightness": 80,
+            "brightness_min": 60,
             "phase_offset": 0.0,
             "flash_every": [6, 20],  # [min, max] seconds between flashes
             "flash_duration": 0.15,  # 150ms flash

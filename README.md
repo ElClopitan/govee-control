@@ -217,7 +217,9 @@ for certain weather conditions instead of static colours:
 - **Cloudy** (WMO codes 2-3): slow drift between blue-grey tones (40s cycle)
 - **Rain** (WMO codes 51-67, 80-82): wave pattern between blue tones (8s cycle),
   with strips out of phase for a rippling effect
-- **Thunderstorm** (WMO codes 95-99): purple drift with white lightning flashes
+- **Thunderstorm** (WMO codes 95-99): purple pulse between #4a148c and #7b1fa2
+  (12s cycle, brightness 60-80) with random white lightning flashes every 6-20s
+  (flashes may exceed max_brightness)
 
 All other weather conditions use static colours.
 
@@ -296,7 +298,7 @@ Weather conditions are mapped to colours using WMO weather codes:
 | 71-77 | Snow | Pale blue `#e3f2fd` | Indigo `#3949ab` |
 | 80-82 | Showers | Blue `#1e88e5` | Dark blue `#0d47a1` |
 | 85-86 | Snow showers | Pale blue `#e3f2fd` | Indigo `#3949ab` |
-| 95-99 | Thunderstorm | Purple `#7b1fa2` | Purple `#7b1fa2` |
+| 95-99 | Thunderstorm | Purple pulse `#4a148c`↔`#7b1fa2` + flashes | Purple pulse `#4a148c`↔`#7b1fa2` + flashes |
 | Other | Unknown | White `#ffffff` | Dark grey `#37474f` |
 
 ## Modes
