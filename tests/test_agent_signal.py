@@ -493,6 +493,11 @@ class TestRestoreFollowsMode(StateDirMixin, unittest.TestCase):
         # Now switch to off mode
         arbiter.set_mode("off")
 
+        # Reset mocks to only track calls after mode change
+        mock_color.reset_mock()
+        mock_brightness.reset_mock()
+        mock_turn.reset_mock()
+
         # Clear the signal with dry_run
         args.command = "clear"
         args.dry_run = True
