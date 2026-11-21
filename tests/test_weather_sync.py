@@ -2718,7 +2718,7 @@ class TestFetchOnTheHour(StateDirMixin, unittest.TestCase):
     @mock.patch("time.sleep")
     @mock.patch("time.time")
     def test_fetch_at_top_of_hour(self, mock_time, mock_sleep, mock_brightness, mock_color, mock_turn, mock_fetch):
-        """With fetch_on_the_hour=true, fetches at top of the hour, not before."""
+        """With fetch_on_the_hour=true and offset=0, fetches at top of the hour."""
         import arbiter
         import datetime
         arbiter.set_mode("weather")
@@ -2734,7 +2734,7 @@ class TestFetchOnTheHour(StateDirMixin, unittest.TestCase):
             return {"temperature_2m": 20.0, "weather_code": 0, "is_day": 1}
 
         mock_fetch.side_effect = fetch_side_effect
-        config = self._make_config(fetch_on_the_hour=True, interval=900)
+        config = self._make_config(fetch_on_the_hour=True, interval=900, fetch_offset_seconds=0)
 
         # Advance time to 10:59:59 - should not fetch again
         sleep_count = [0]
@@ -2825,7 +2825,7 @@ class TestFetchOnTheHour(StateDirMixin, unittest.TestCase):
             "weather_code": 0,
             "is_day": 1,
         }
-        config = self._make_config(fetch_on_the_hour=True, interval=900, patterns_enabled=False)
+        config = self._make_config(fetch_on_the_hour=True, interval=900, patterns_enabled=False, fetch_offset_seconds=0)
 
         # First sleep should be <= 600 seconds (10 minutes to next hour)
         first_sleep = [None]
@@ -3016,7 +3016,7 @@ class TestFetchErrorRetry(StateDirMixin, unittest.TestCase):
     @mock.patch("time.sleep")
     @mock.patch("time.time")
     def test_static_mode_fetch_error_sleeps_interval(self, mock_time, mock_sleep, mock_brightness, mock_color, mock_turn, mock_fetch):
-        """Static mode: fetch error still sleeps full interval (existing behavior)."""
+        """Static mode: fetch error sleeps backoff interval (60s default)."""
         import urllib.error
 
         mock_time.return_value = 1000.0
@@ -3037,9 +3037,9 @@ class TestFetchErrorRetry(StateDirMixin, unittest.TestCase):
         except KeyboardInterrupt:
             pass
 
-        # Should have slept the full interval
+        # Should have slept the backoff interval (60s), not the full interval
         self.assertEqual(len(sleep_calls), 1)
-        self.assertEqual(sleep_calls[0], 900)
+        self.assertEqual(sleep_calls[0], 60)
 
     @mock.patch("weather_sync.fetch_weather")
     @mock.patch("govee.turn")
@@ -3488,10 +3488,13 @@ class TestFetchRetryBackoff(StateDirMixin, unittest.TestCase):
 
         # Track sleep calls to verify backoff intervals
         sleep_intervals = []
+        sleep_count = [0]
         def sleep_side_effect(seconds):
+            sleep_count[0] += 1
             sleep_intervals.append(seconds)
             mock_time.return_value += seconds
-            if call_count[0] >= 4:
+            # Exit after the sleep following the successful fetch
+            if call_count[0] >= 4 and sleep_count[0] >= 4:
                 raise KeyboardInterrupt()
 
         mock_sleep.side_effect = sleep_side_effect
@@ -3504,7 +3507,8 @@ class TestFetchRetryBackoff(StateDirMixin, unittest.TestCase):
         # Should have failed 3 times and succeeded on 4th
         self.assertEqual(call_count[0], 4)
         # Backoff intervals: 60, 120, 240 (doubles each time)
-        self.assertEqual(len(sleep_intervals), 3)
+        # The 4th sleep is after success (frame interval or next fetch)
+        self.assertGreaterEqual(len(sleep_intervals), 3)
         self.assertEqual(sleep_intervals[0], 60)
         self.assertEqual(sleep_intervals[1], 120)
         self.assertEqual(sleep_intervals[2], 240)
@@ -3533,10 +3537,13 @@ class TestFetchRetryBackoff(StateDirMixin, unittest.TestCase):
         config = self._make_config(fetch_retry_seconds=60)
 
         sleep_intervals = []
+        sleep_count = [0]
         def sleep_side_effect(seconds):
+            sleep_count[0] += 1
             sleep_intervals.append(seconds)
             mock_time.return_value += seconds
-            if call_count[0] >= 6:
+            # Exit after the sleep following the successful fetch
+            if call_count[0] >= 6 and sleep_count[0] >= 6:
                 raise KeyboardInterrupt()
 
         mock_sleep.side_effect = sleep_side_effect
@@ -3547,8 +3554,8 @@ class TestFetchRetryBackoff(StateDirMixin, unittest.TestCase):
             pass
 
         # Backoff: 60, 120, 240, 480, 900 (capped at interval)
-        self.assertEqual(len(sleep_intervals), 5)
-        self.assertLessEqual(sleep_intervals[-1], 900)
+        self.assertGreaterEqual(len(sleep_intervals), 5)
+        self.assertLessEqual(sleep_intervals[4], 900)
 
     @mock.patch("weather_sync.fetch_weather")
     @mock.patch("govee.turn")
@@ -3577,10 +3584,13 @@ class TestFetchRetryBackoff(StateDirMixin, unittest.TestCase):
         config = self._make_config(fetch_retry_seconds=60)
 
         sleep_intervals = []
+        sleep_count = [0]
         def sleep_side_effect(seconds):
+            sleep_count[0] += 1
             sleep_intervals.append(seconds)
             mock_time.return_value += seconds
-            if call_count[0] >= 3:
+            # Exit after the sleep following the second failure
+            if call_count[0] >= 3 and sleep_count[0] >= 3:
                 raise KeyboardInterrupt()
 
         mock_sleep.side_effect = sleep_side_effect
@@ -3590,8 +3600,8 @@ class TestFetchRetryBackoff(StateDirMixin, unittest.TestCase):
         except KeyboardInterrupt:
             pass
 
-        # First failure: 60s, second failure (after success): 60s (reset)
-        self.assertEqual(len(sleep_intervals), 2)
+        # First failure: 60s, success, second failure (after success): 60s (reset)
+        self.assertGreaterEqual(len(sleep_intervals), 2)
         self.assertEqual(sleep_intervals[0], 60)
         self.assertEqual(sleep_intervals[1], 60)
 
