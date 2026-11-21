@@ -339,6 +339,38 @@ class TestDryRun(unittest.TestCase):
         self.assertEqual(mock_turn.call_count, 4)  # 1 on + 3 off
         mock_turn.assert_any_call("192.168.1.1", False)
 
+    @mock.patch("segment_probe.govee.status")
+    @mock.patch("segment_probe.time.sleep")
+    @mock.patch("segment_probe.govee.send")
+    def test_first_turn_off_oserror_does_not_abort_loop(self, mock_send, mock_sleep, mock_status):
+        """OSError on the first turn-off must not abort the remaining turn-offs or status check."""
+        mock_status.return_value = {"msg": {"cmd": "devStatus", "data": {"onOff": 0}}}
+        turn_off_count = [0]
+
+        def side_effect(ip, msg):
+            if msg["msg"]["cmd"] == "turn" and msg["msg"]["data"]["value"] == 0:
+                turn_off_count[0] += 1
+                if turn_off_count[0] == 1:
+                    raise OSError("network unreachable")
+            # All other calls succeed
+
+        mock_send.side_effect = side_effect
+
+        # Must not raise
+        segment_probe.run_probe(
+            ip="192.168.1.1",
+            leds=5,
+            pattern="walk",
+            duration=1,
+            fps=2,
+            dry_run=False,
+        )
+
+        # All three turn-offs must have been attempted
+        self.assertEqual(turn_off_count[0], 3)
+        # Status must have been checked
+        mock_status.assert_called_once_with("192.168.1.1", timeout=1)
+
 
 class TestModeGate(unittest.TestCase):
     """Test that main() checks mode/signal before running."""

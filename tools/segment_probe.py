@@ -177,7 +177,10 @@ def run_probe(ip, leds=20, pattern="walk", duration=10, fps=10, dry_run=False):
             finally:
                 # Turn off the strip 3 times (UDP packets can be lost)
                 for i in range(3):
-                    govee.turn(ip, False)
+                    try:
+                        govee.turn(ip, False)
+                    except OSError as e:
+                        print(f"Warning: turn off failed: {e}", file=sys.stderr)
                     if i < 2:
                         time.sleep(0.2)
                 # Verify the strip is off; if not, send one more turn off
