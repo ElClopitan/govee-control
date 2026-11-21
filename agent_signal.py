@@ -158,6 +158,13 @@ LOG_MAX_BYTES = 200 * 1024  # 200 KB
 LOG_MAX_LINES = 100
 MARKER_MAX_AGE_HOURS_DEFAULT = 2
 
+DEFAULT_SIGNAL = {
+    "color": "#ff6a00",
+    "brightness": 80,
+    "blink": False,
+    "ignore_message_patterns": [r" finished$", r"\bcompleted$"],
+}
+
 
 def signal_log_path():
     """Return the path to the signal log, resolved at call time.
@@ -442,14 +449,6 @@ def sweep_and_restore(config_path=None, dry_run=False):
         return True
     finally:
         release_lock(dry_run=dry_run)
-
-
-DEFAULT_SIGNAL = {
-    "color": "#ff6a00",
-    "brightness": 80,
-    "blink": False,
-    "ignore_message_patterns": [r" finished$", r"\bcompleted$"],
-}
 
 
 def is_unattended(env=None):

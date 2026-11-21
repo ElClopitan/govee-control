@@ -308,6 +308,27 @@ class TestRunOnce(StateDirMixin, unittest.TestCase):
     @mock.patch("govee.turn")
     @mock.patch("govee.color")
     @mock.patch("govee.brightness")
+    @mock.patch("weather_sync.time.monotonic")
+    def test_default_time_fn_is_monotonic(self, mock_monotonic, mock_brightness, mock_color, mock_turn, mock_fetch):
+        """run() uses time.monotonic by default, not time.time."""
+        mock_monotonic.return_value = 1000.0
+        mock_fetch.return_value = {
+            "temperature_2m": 25.0,
+            "weather_code": 0,
+            "is_day": 1,
+        }
+        config = self._make_config()
+
+        weather_sync.run(config, once=True)
+
+        # The patched monotonic should have been called
+        self.assertGreater(mock_monotonic.call_count, 0,
+                           "time.monotonic should be called by run() when time_fn is not provided")
+
+    @mock.patch("weather_sync.fetch_weather")
+    @mock.patch("govee.turn")
+    @mock.patch("govee.color")
+    @mock.patch("govee.brightness")
     @mock.patch("time.sleep")
     @mock.patch("time.time")
     def test_day_night_transition_switches_pattern(self, mock_time, mock_sleep, mock_brightness, mock_color, mock_turn, mock_fetch):

@@ -214,8 +214,6 @@ def next_hour_boundary(now, offset=0):
     return now + seconds_until_next_hour + offset
 
 
-
-
 def get_pattern_for_code(code, patterns_cfg, is_day=1):
     """Get the pattern definition for a weather code.
 
@@ -408,12 +406,12 @@ def run(config, once=False, interval=900, dry_run=False, rng=None, time_fn=None)
         interval: Seconds between updates (default 900 = 15 min)
         dry_run: If True, print instead of sending to lights
         rng: Optional random.Random instance for testability
-        time_fn: Optional time function for testability
+        time_fn: Optional time function for testability (defaults to time.monotonic)
     """
     if rng is None:
         rng = random.Random()
     if time_fn is None:
-        time_fn = time.time
+        time_fn = time.monotonic
     weather_cfg = config.get("weather", {})
     lat = weather_cfg.get("latitude", 0.0)
     lon = weather_cfg.get("longitude", 0.0)
