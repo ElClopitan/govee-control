@@ -3,6 +3,7 @@
 All tests run without soundcard/numpy and without the network.
 """
 
+import contextlib
 import json
 import math
 import os
@@ -17,6 +18,7 @@ sys.path.insert(0, str(Path(__file__).parent))
 
 import music_sync
 import arbiter
+import helpers
 from helpers import StateDirMixin, bounded_clock
 
 
@@ -3786,24 +3788,34 @@ class TestArgparseConfigAfterSubcommand(unittest.TestCase):
 
 
 
+@contextlib.contextmanager
+def mock_start_env():
+    """Shared context manager that patches all cmd_start/main() dependencies.
+
+    Yields the Popen mock so callers can inspect call_args.
+    """
+    with mock.patch("music_sync._get_running_pid", return_value=None):
+        with mock.patch("importlib.util.find_spec", return_value=mock.Mock()):
+            with mock.patch("subprocess.Popen") as mock_popen:
+                with mock.patch("music_sync._write_pid"):
+                    with mock.patch("music_sync._ensure_state_dir"):
+                        with mock.patch("music_sync._remove_stop_flag"):
+                            with mock.patch.object(arbiter, "get_mode", return_value="weather"):
+                                with mock.patch.object(arbiter, "set_mode"):
+                                    mock_proc = mock.Mock()
+                                    mock_proc.pid = 12345
+                                    mock_popen.return_value = mock_proc
+                                    with mock.patch("builtins.print"):
+                                        yield mock_popen
+
+
 class TestForwardingArgs(StateDirMixin, unittest.TestCase):
     """Test that --fps and --verbose are forwarded to the child process."""
 
     def _mock_start(self, **kwargs):
         """Helper to mock cmd_start dependencies and return the Popen mock."""
-        with mock.patch("music_sync._get_running_pid", return_value=None):
-            with mock.patch("importlib.util.find_spec", return_value=mock.Mock()):
-                with mock.patch("subprocess.Popen") as mock_popen:
-                    with mock.patch("music_sync._write_pid"):
-                        with mock.patch("music_sync._ensure_state_dir"):
-                            with mock.patch("music_sync._remove_stop_flag"):
-                                with mock.patch.object(arbiter, "get_mode", return_value="weather"):
-                                    with mock.patch.object(arbiter, "set_mode"):
-                                        mock_proc = mock.Mock()
-                                        mock_proc.pid = 12345
-                                        mock_popen.return_value = mock_proc
-                                        with mock.patch("builtins.print"):
-                                            music_sync.cmd_start("x.json", **kwargs)
+        with mock_start_env() as mock_popen:
+            music_sync.cmd_start("x.json", **kwargs)
         return mock_popen
 
     def test_fps_forwarded_to_child(self):
@@ -3814,6 +3826,7 @@ class TestForwardingArgs(StateDirMixin, unittest.TestCase):
         self.assertIn("--fps", cmd)
         fps_idx = cmd.index("--fps")
         self.assertEqual(cmd[fps_idx + 1], "30")
+        self.assertFalse((helpers._SESSION_STATE_DIR / "mode.json").exists())
 
     def test_verbose_forwarded_to_child(self):
         """--verbose should be forwarded to the child process."""
@@ -3821,6 +3834,7 @@ class TestForwardingArgs(StateDirMixin, unittest.TestCase):
         call_args = mock_popen.call_args
         cmd = call_args[0][0]
         self.assertIn("--verbose", cmd)
+        self.assertFalse((helpers._SESSION_STATE_DIR / "mode.json").exists())
 
     def test_fps_and_verbose_forwarded_to_child(self):
         """Both --fps and --verbose should be forwarded to the child process."""
@@ -3831,6 +3845,7 @@ class TestForwardingArgs(StateDirMixin, unittest.TestCase):
         fps_idx = cmd.index("--fps")
         self.assertEqual(cmd[fps_idx + 1], "30")
         self.assertIn("--verbose", cmd)
+        self.assertFalse((helpers._SESSION_STATE_DIR / "mode.json").exists())
 
 
 class TestMainLevelForwarding(StateDirMixin, unittest.TestCase):
@@ -3839,51 +3854,29 @@ class TestMainLevelForwarding(StateDirMixin, unittest.TestCase):
     def test_main_start_fps_verbose(self):
         """main() with 'start --fps 30 --verbose' should forward to child."""
         with mock.patch("sys.argv", ["music_sync.py", "start", "--fps", "30", "--verbose"]):
-            with mock.patch("music_sync._get_running_pid", return_value=None):
-                with mock.patch("importlib.util.find_spec", return_value=mock.Mock()):
-                    with mock.patch("subprocess.Popen") as mock_popen:
-                        with mock.patch("music_sync._write_pid"):
-                            with mock.patch("music_sync._ensure_state_dir"):
-                                with mock.patch("music_sync._remove_stop_flag"):
-                                    with mock.patch.object(arbiter, "get_mode", return_value="weather"):
-                                        with mock.patch.object(arbiter, "set_mode"):
-                                            mock_proc = mock.Mock()
-                                            mock_proc.pid = 12345
-                                            mock_popen.return_value = mock_proc
-                                            with mock.patch("builtins.print"):
-                                                try:
-                                                    music_sync.main()
-                                                except SystemExit:
-                                                    pass
+            with mock_start_env() as mock_popen:
+                with self.assertRaises(SystemExit) as cm:
+                    music_sync.main()
+                self.assertEqual(cm.exception.code, 0)
         call_args = mock_popen.call_args
         cmd = call_args[0][0]
         self.assertIn("--fps", cmd)
         fps_idx = cmd.index("--fps")
         self.assertEqual(cmd[fps_idx + 1], "30")
         self.assertIn("--verbose", cmd)
+        self.assertFalse((helpers._SESSION_STATE_DIR / "mode.json").exists())
 
     def test_main_verbose_before_start(self):
         """main() with '--verbose start' should forward --verbose to child."""
         with mock.patch("sys.argv", ["music_sync.py", "--verbose", "start"]):
-            with mock.patch("music_sync._get_running_pid", return_value=None):
-                with mock.patch("importlib.util.find_spec", return_value=mock.Mock()):
-                    with mock.patch("subprocess.Popen") as mock_popen:
-                        with mock.patch("music_sync._write_pid"):
-                            with mock.patch("music_sync._ensure_state_dir"):
-                                with mock.patch("music_sync._remove_stop_flag"):
-                                    with mock.patch.object(arbiter, "get_mode", return_value="weather"):
-                                        with mock.patch.object(arbiter, "set_mode"):
-                                            mock_proc = mock.Mock()
-                                            mock_proc.pid = 12345
-                                            mock_popen.return_value = mock_proc
-                                            with mock.patch("builtins.print"):
-                                                try:
-                                                    music_sync.main()
-                                                except SystemExit:
-                                                    pass
+            with mock_start_env() as mock_popen:
+                with self.assertRaises(SystemExit) as cm:
+                    music_sync.main()
+                self.assertEqual(cm.exception.code, 0)
         call_args = mock_popen.call_args
         cmd = call_args[0][0]
         self.assertIn("--verbose", cmd)
+        self.assertFalse((helpers._SESSION_STATE_DIR / "mode.json").exists())
 
 
 if __name__ == "__main__":
