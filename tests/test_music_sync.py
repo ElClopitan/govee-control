@@ -3663,21 +3663,27 @@ class TestCmdStopConfigPath(unittest.TestCase):
 
     def test_cmd_stop_uses_config_path(self):
         """cmd_stop should call govee.load_config with the provided config path."""
-        with mock.patch("govee.load_config") as mock_load_config:
-            mock_load_config.return_value = {"devices": []}
-            with mock.patch("mode.govee.turn"):
-                with mock.patch("builtins.print"):
-                    music_sync.cmd_stop("x.json")
+        with mock.patch("music_sync._get_running_pid", return_value=None):
+            with mock.patch("govee.load_config") as mock_load_config:
+                mock_load_config.return_value = {"devices": []}
+                with mock.patch("mode.switch") as mock_switch:
+                    with mock.patch("builtins.print"):
+                        music_sync.cmd_stop("x.json")
         mock_load_config.assert_called_once_with("x.json")
+        mock_switch.assert_called_once()
+        self.assertEqual(mock_switch.call_args[0][0], "off")
 
     def test_cmd_stop_default_config_path(self):
         """cmd_stop with no argument should use DEFAULT_CONFIG_PATH."""
-        with mock.patch("govee.load_config") as mock_load_config:
-            mock_load_config.return_value = {"devices": []}
-            with mock.patch("mode.govee.turn"):
-                with mock.patch("builtins.print"):
-                    music_sync.cmd_stop()
+        with mock.patch("music_sync._get_running_pid", return_value=None):
+            with mock.patch("govee.load_config") as mock_load_config:
+                mock_load_config.return_value = {"devices": []}
+                with mock.patch("mode.switch") as mock_switch:
+                    with mock.patch("builtins.print"):
+                        music_sync.cmd_stop()
         mock_load_config.assert_called_once_with(music_sync.DEFAULT_CONFIG_PATH)
+        mock_switch.assert_called_once()
+        self.assertEqual(mock_switch.call_args[0][0], "off")
 
 
 if __name__ == "__main__":
