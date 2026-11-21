@@ -501,16 +501,18 @@ class TestCapBrightness(unittest.TestCase):
         self.assertEqual(result, arbiter.MAX_BRIGHTNESS_DEFAULT)
 
     def test_max_brightness_500_clamped(self):
-        """max_brightness: 500 is clamped to 100."""
+        """max_brightness: 500 is clamped to 100 (early-return path)."""
         cfg = {"max_brightness": 500}
-        result = arbiter.cap_brightness(90, cfg)
-        self.assertEqual(result, 90)
+        result = arbiter.cap_brightness(None, cfg, allow_flash=True)
+        self.assertEqual(result, 100)
 
     def test_max_brightness_0_clamped(self):
-        """max_brightness: 0 is clamped to 1."""
+        """max_brightness: 0 is clamped to 1 (early-return path)."""
         cfg = {"max_brightness": 0}
-        result = arbiter.cap_brightness(50, cfg)
+        result = arbiter.cap_brightness("x", cfg)
         self.assertEqual(result, 1)
+        result2 = arbiter.cap_brightness(float("nan"), cfg, allow_flash=True)
+        self.assertEqual(result2, 1)
 
     def test_max_brightness_500_non_numeric_value(self):
         """max_brightness: 500 with non-numeric value returns 100."""
@@ -523,6 +525,12 @@ class TestCapBrightness(unittest.TestCase):
         cfg = {"max_brightness": 80}
         result = arbiter.cap_brightness(float("nan"), cfg, allow_flash=True)
         self.assertEqual(result, 80)
+
+    def test_huge_int_max_brightness_no_overflow(self):
+        """Huge integer max_brightness doesn't raise OverflowError."""
+        cfg = {"max_brightness": 10**400}
+        result = arbiter.cap_brightness(90, cfg)
+        self.assertEqual(result, 90)
 
 
 if __name__ == "__main__":
