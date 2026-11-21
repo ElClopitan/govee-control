@@ -2439,10 +2439,10 @@ class TestModeSwitchStep3(StateDirMixin, unittest.TestCase):
         turn_off_calls = [c for c in govee_calls if c[0] == "turn" and not c[2]]
         self.assertEqual(len(turn_off_calls), 1,
                         f"Expected exactly one turn-off call, got {len(turn_off_calls)}")
-        # Should have turned back on when sound returned
+        # Should have turned on twice: once at start, once when sound returned
         turn_on_calls = [c for c in govee_calls if c[0] == "turn" and c[2]]
-        self.assertEqual(len(turn_on_calls), 1,
-                        f"Expected exactly one turn-on call, got {len(turn_on_calls)}")
+        self.assertEqual(len(turn_on_calls), 2,
+                        f"Expected exactly two turn-on calls (start + sound returned), got {len(turn_on_calls)}")
         # Should have sent colours after sound returned
         color_calls = [c for c in govee_calls if c[0] == "color"]
         self.assertGreater(len(color_calls), 0,
@@ -2769,23 +2769,24 @@ class TestModeSwitchStep3(StateDirMixin, unittest.TestCase):
         turn_off_calls = [c for c in govee_calls if c[0] == "turn" and not c[2]]
         self.assertEqual(len(turn_off_calls), 1,
                         f"Expected exactly one turn-off call, got {len(turn_off_calls)}")
-        # Should have turned on once when device appeared
+        # Should have turned on twice: once at start, once when device appeared
         turn_on_calls = [c for c in govee_calls if c[0] == "turn" and c[2]]
-        self.assertEqual(len(turn_on_calls), 1,
-                        f"Expected exactly one turn-on call, got {len(turn_on_calls)}")
-        # Turn off should come before turn on
+        self.assertEqual(len(turn_on_calls), 2,
+                        f"Expected exactly two turn-on calls (start + device appeared), got {len(turn_on_calls)}")
+        # Turn off should come before the second turn on
         off_idx = next(i for i, c in enumerate(govee_calls) if c[0] == "turn" and not c[2])
-        on_idx = next(i for i, c in enumerate(govee_calls) if c[0] == "turn" and c[2])
-        self.assertLess(off_idx, on_idx,
-                       "Turn off should come before turn on")
+        # Find the index of the second turn-on call
+        on_indices = [i for i, c in enumerate(govee_calls) if c[0] == "turn" and c[2]]
+        self.assertLess(off_idx, on_indices[1],
+                       "Turn off should come before second turn on")
         # Should have sent a colour after turning on
         color_calls = [c for c in govee_calls if c[0] == "color"]
         self.assertGreater(len(color_calls), 0,
                           "Expected colour calls after device appeared")
-        # Colour should come after turn on
+        # Colour should come after the second turn on
         color_idx = next(i for i, c in enumerate(govee_calls) if c[0] == "color")
-        self.assertGreater(color_idx, on_idx,
-                          "Colour should come after turn on")
+        self.assertGreater(color_idx, on_indices[1],
+                          "Colour should come after second turn on")
 
     def test_signal_active_during_silence_no_turn(self):
         """Bug 3: the silence off/turn-on is sent while the agent signal is active.
@@ -2866,10 +2867,11 @@ class TestModeSwitchStep3(StateDirMixin, unittest.TestCase):
                                     except KeyboardInterrupt:
                                         pass
 
-        # No turn calls at all (signal was active at re-check every time)
+        # Only the initial turn-on call (signal was active at re-check every time)
         turn_calls = [c for c in govee_calls if c[0] == "turn"]
-        self.assertEqual(len(turn_calls), 0,
-                        f"Expected no turn calls, got {len(turn_calls)}")
+        self.assertEqual(len(turn_calls), 1,
+                        f"Expected 1 turn call (initial on), got {len(turn_calls)}")
+        self.assertTrue(turn_calls[0][2], "Initial turn should be on")
         # No colour calls either
         color_calls = [c for c in govee_calls if c[0] == "color"]
         self.assertEqual(len(color_calls), 0,
@@ -2972,6 +2974,319 @@ class TestModeSwitchMusic(StateDirMixin, unittest.TestCase):
 
         self.assertEqual(rc, 0)
         self.assertEqual(arbiter.get_mode(), "off")
+
+
+class TestTurnAllErrorHandling(unittest.TestCase):
+    """Test _turn_all error handling and return value."""
+
+    def test_turn_all_returns_true_when_all_succeed(self):
+        """_turn_all returns True when all devices succeed."""
+        devices = [{"ip": "1.2.3.4"}, {"ip": "5.6.7.8"}]
+        with mock.patch.object(music_sync, "govee") as mock_govee:
+            mock_govee.turn = mock.Mock()
+            result = music_sync._turn_all(devices, True)
+        self.assertTrue(result)
+        self.assertEqual(mock_govee.turn.call_count, 2)
+
+    def test_turn_all_returns_false_when_one_fails(self):
+        """_turn_all returns False when one device fails, logs warning, calls others."""
+        devices = [{"ip": "1.2.3.4"}, {"ip": "5.6.7.8"}]
+        turn_calls = []
+        def fake_turn(ip, on):
+            turn_calls.append((ip, on))
+            if ip == "1.2.3.4":
+                raise OSError("connection refused")
+        with mock.patch.object(music_sync, "govee") as mock_govee:
+            mock_govee.turn = fake_turn
+            with self.assertLogs("music_sync", level="WARNING") as cm:
+                result = music_sync._turn_all(devices, True)
+        self.assertFalse(result)
+        # Both devices should have been attempted
+        self.assertEqual(len(turn_calls), 2)
+        # Warning should mention the failed IP
+        self.assertTrue(any("1.2.3.4" in log for log in cm.output))
+
+    def test_turn_all_logs_turn_off_failure(self):
+        """_turn_all logs 'turn off failed' when turning off fails."""
+        devices = [{"ip": "1.2.3.4"}]
+        with mock.patch.object(music_sync, "govee") as mock_govee:
+            mock_govee.turn = mock.Mock(side_effect=OSError("timeout"))
+            with self.assertLogs("music_sync", level="WARNING") as cm:
+                music_sync._turn_all(devices, False)
+        self.assertTrue(any("turn off failed" in log for log in cm.output))
+
+
+class TestMusicSyncStartPowerOn(StateDirMixin, unittest.TestCase):
+    """Test that music sync turns strips on at start."""
+
+    def setUp(self):
+        super().setUp()
+        self.original_state_dir = music_sync.STATE_DIR
+        self.original_pid_file = music_sync.PID_FILE
+        self.original_stop_flag = music_sync.STOP_FLAG_FILE
+        self.original_log_file = music_sync.LOG_FILE
+
+        music_sync.STATE_DIR = self.state_dir
+        music_sync.PID_FILE = self.state_dir / "music_sync.pid"
+        music_sync.STOP_FLAG_FILE = self.state_dir / "music_stop"
+        music_sync.LOG_FILE = self.state_dir / "music_sync.log"
+
+    def tearDown(self):
+        music_sync.STATE_DIR = self.original_state_dir
+        music_sync.PID_FILE = self.original_pid_file
+        music_sync.STOP_FLAG_FILE = self.original_stop_flag
+        music_sync.LOG_FILE = self.original_log_file
+        super().tearDown()
+
+    def test_run_turns_on_at_start(self):
+        """run() calls turn(ip, True) for each device at start."""
+        self.set_mode("music")
+
+        turn_calls = []
+        def fake_turn(ip, on):
+            turn_calls.append((ip, on))
+
+        fake_time_fn = bounded_clock()
+
+        # Create a fake recorder that raises KeyboardInterrupt on first frame
+        fake_rec = mock.Mock()
+        fake_rec.__enter__ = mock.Mock(return_value=fake_rec)
+        fake_rec.__exit__ = mock.Mock(return_value=False)
+        fake_rec.record.side_effect = KeyboardInterrupt()
+
+        fake_mic = mock.Mock()
+        fake_mic.name = "Stereo Mix (loopback)"
+        fake_mic.isloopback = True
+        fake_mic.recorder = mock.Mock(return_value=fake_rec)
+
+        fake_speaker = mock.Mock()
+        fake_speaker.name = "Stereo Mix (loopback)"
+
+        fake_sc = mock.Mock()
+        fake_sc.default_speaker = mock.Mock(return_value=fake_speaker)
+        fake_sc.get_microphone = mock.Mock(return_value=fake_mic)
+        fake_sc.all_microphones = mock.Mock(return_value=[fake_mic])
+
+        with mock.patch.dict(sys.modules, {
+            "soundcard": fake_sc,
+            "numpy": mock.Mock(),
+        }):
+            with mock.patch.object(music_sync, "govee") as mock_govee:
+                mock_govee.turn = fake_turn
+                mock_govee.status = mock.Mock(return_value={"msg": {"data": {"brightness": 50}}})
+                mock_govee.brightness = mock.Mock()
+                with mock.patch("time.sleep"):
+                    with mock.patch.object(music_sync, "STOP_FLAG_FILE", self.state_dir / "music_stop"):
+                        with mock.patch.object(music_sync, "PID_FILE", self.state_dir / "music_sync.pid"):
+                            try:
+                                music_sync.run(
+                                    {"devices": [{"ip": "1.2.3.4"}, {"ip": "5.6.7.8"}]},
+                                    fps=10,
+                                    time_fn=fake_time_fn,
+                                )
+                            except KeyboardInterrupt:
+                                pass
+
+        # Should have turned on both devices at start
+        turn_on_calls = [c for c in turn_calls if c[1] is True]
+        self.assertEqual(len(turn_on_calls), 2,
+                        f"Expected 2 turn-on calls at start, got {len(turn_on_calls)}")
+        self.assertEqual(turn_on_calls[0][0], "1.2.3.4")
+        self.assertEqual(turn_on_calls[1][0], "5.6.7.8")
+
+
+class TestMusicSyncModeRace(StateDirMixin, unittest.TestCase):
+    """Test mode re-check before sends (race condition fix)."""
+
+    def setUp(self):
+        super().setUp()
+        self.original_state_dir = music_sync.STATE_DIR
+        self.original_pid_file = music_sync.PID_FILE
+        self.original_stop_flag = music_sync.STOP_FLAG_FILE
+        self.original_log_file = music_sync.LOG_FILE
+
+        music_sync.STATE_DIR = self.state_dir
+        music_sync.PID_FILE = self.state_dir / "music_sync.pid"
+        music_sync.STOP_FLAG_FILE = self.state_dir / "music_stop"
+        music_sync.LOG_FILE = self.state_dir / "music_sync.log"
+
+    def tearDown(self):
+        music_sync.STATE_DIR = self.original_state_dir
+        music_sync.PID_FILE = self.original_pid_file
+        music_sync.STOP_FLAG_FILE = self.original_stop_flag
+        music_sync.LOG_FILE = self.original_log_file
+        super().tearDown()
+
+    def test_mode_changed_before_send_exits(self):
+        """If mode changes to 'off' between top check and send, no turn/color sent."""
+        self.set_mode("music")
+
+        govee_calls = []
+        def fake_color(ip, r, g, b):
+            govee_calls.append(("color", ip, r, g, b))
+        def fake_turn(ip, on):
+            govee_calls.append(("turn", ip, on))
+
+        # Mode changes to "off" on the second get_mode call (the re-check before send)
+        get_mode_count = [0]
+        def fake_get_mode():
+            get_mode_count[0] += 1
+            if get_mode_count[0] == 1:
+                return "music"  # Top of loop check
+            return "off"  # Re-check before send
+
+        fake_time_fn = bounded_clock()
+
+        # Create a fake recorder
+        fake_rec = mock.Mock()
+        fake_rec.__enter__ = mock.Mock(return_value=fake_rec)
+        fake_rec.__exit__ = mock.Mock(return_value=False)
+
+        frame_count = [0]
+        def fake_record(numframes):
+            frame_count[0] += 1
+            if frame_count[0] >= 2:
+                raise KeyboardInterrupt()
+            return mock.Mock(ndim=1, shape=(1024,), dtype="float64")
+
+        fake_rec.record = mock.Mock(side_effect=fake_record)
+
+        fake_mic = mock.Mock()
+        fake_mic.name = "Stereo Mix (loopback)"
+        fake_mic.isloopback = True
+        fake_mic.recorder = mock.Mock(return_value=fake_rec)
+
+        fake_speaker = mock.Mock()
+        fake_speaker.name = "Stereo Mix (loopback)"
+
+        fake_sc = mock.Mock()
+        fake_sc.default_speaker = mock.Mock(return_value=fake_speaker)
+        fake_sc.get_microphone = mock.Mock(return_value=fake_mic)
+        fake_sc.all_microphones = mock.Mock(return_value=[fake_mic])
+
+        with mock.patch.dict(sys.modules, {
+            "soundcard": fake_sc,
+            "numpy": mock.Mock(),
+        }):
+            with mock.patch.object(arbiter, "get_mode", side_effect=fake_get_mode):
+                with mock.patch.object(music_sync, "govee") as mock_govee:
+                    mock_govee.color = fake_color
+                    mock_govee.turn = fake_turn
+                    mock_govee.status = mock.Mock(return_value={"msg": {"data": {"brightness": 50}}})
+                    mock_govee.brightness = mock.Mock()
+                    with mock.patch("time.sleep"):
+                        with mock.patch.object(music_sync, "STOP_FLAG_FILE", self.state_dir / "music_stop"):
+                            with mock.patch.object(music_sync, "PID_FILE", self.state_dir / "music_sync.pid"):
+                                with mock.patch.object(music_sync, "analyze", return_value={"level": 0.5, "bass": 0.5, "mid": 0.5, "treble": 0.5}):
+                                    music_sync.run(
+                                        {"devices": [{"ip": "1.2.3.4"}]},
+                                        fps=10,
+                                        time_fn=fake_time_fn,
+                                    )
+
+        # Only the initial turn-on should have happened, no color or turn-off
+        turn_calls = [c for c in govee_calls if c[0] == "turn"]
+        # One turn-on at start
+        self.assertEqual(len(turn_calls), 1,
+                        f"Expected 1 turn call (initial on), got {len(turn_calls)}")
+        self.assertTrue(turn_calls[0][2], "Initial turn should be on")
+        # No color calls (mode changed before send)
+        color_calls = [c for c in govee_calls if c[0] == "color"]
+        self.assertEqual(len(color_calls), 0,
+                        f"Expected no color calls, got {len(color_calls)}")
+
+
+class TestSilenceOffRetry(StateDirMixin, unittest.TestCase):
+    """Test that failed silence off is retried on next silent frame."""
+
+    def setUp(self):
+        super().setUp()
+        self.original_state_dir = music_sync.STATE_DIR
+        self.original_pid_file = music_sync.PID_FILE
+        self.original_stop_flag = music_sync.STOP_FLAG_FILE
+        self.original_log_file = music_sync.LOG_FILE
+
+        music_sync.STATE_DIR = self.state_dir
+        music_sync.PID_FILE = self.state_dir / "music_sync.pid"
+        music_sync.STOP_FLAG_FILE = self.state_dir / "music_stop"
+        music_sync.LOG_FILE = self.state_dir / "music_sync.log"
+
+    def tearDown(self):
+        music_sync.STATE_DIR = self.original_state_dir
+        music_sync.PID_FILE = self.original_pid_file
+        music_sync.STOP_FLAG_FILE = self.original_stop_flag
+        music_sync.LOG_FILE = self.original_log_file
+        super().tearDown()
+
+    def test_failed_silence_off_retried(self):
+        """If turn off fails, lights_on stays True and off is retried next silent frame."""
+        self.set_mode("music")
+
+        turn_calls = []
+        def fake_turn(ip, on):
+            turn_calls.append((ip, on))
+            # First turn off fails (turn_calls[0] is the initial turn-on)
+            if not on and len(turn_calls) == 2:
+                raise OSError("connection refused")
+
+        fake_time_fn = bounded_clock(step=0.1)
+
+        # Create a fake recorder
+        fake_rec = mock.Mock()
+        fake_rec.__enter__ = mock.Mock(return_value=fake_rec)
+        fake_rec.__exit__ = mock.Mock(return_value=False)
+
+        frame_count = [0]
+        def fake_record(numframes):
+            frame_count[0] += 1
+            if frame_count[0] >= 30:  # 3 seconds of silence
+                raise KeyboardInterrupt()
+            return mock.Mock(ndim=1, shape=(1024,), dtype="float64")
+
+        fake_rec.record = mock.Mock(side_effect=fake_record)
+
+        fake_mic = mock.Mock()
+        fake_mic.name = "Stereo Mix (loopback)"
+        fake_mic.isloopback = True
+        fake_mic.recorder = mock.Mock(return_value=fake_rec)
+
+        fake_speaker = mock.Mock()
+        fake_speaker.name = "Stereo Mix (loopback)"
+
+        fake_sc = mock.Mock()
+        fake_sc.default_speaker = mock.Mock(return_value=fake_speaker)
+        fake_sc.get_microphone = mock.Mock(return_value=fake_mic)
+        fake_sc.all_microphones = mock.Mock(return_value=[fake_mic])
+
+        # Silent throughout
+        def fake_analyze(samples, rate):
+            return {"level": 0.01, "bass": 0.0, "mid": 0.0, "treble": 0.0}
+
+        with mock.patch.dict(sys.modules, {
+            "soundcard": fake_sc,
+            "numpy": mock.Mock(),
+        }):
+            with mock.patch.object(music_sync, "govee") as mock_govee:
+                mock_govee.turn = fake_turn
+                mock_govee.status = mock.Mock(return_value={"msg": {"data": {"brightness": 50}}})
+                mock_govee.brightness = mock.Mock()
+                with mock.patch("time.sleep"):
+                    with mock.patch.object(music_sync, "STOP_FLAG_FILE", self.state_dir / "music_stop"):
+                        with mock.patch.object(music_sync, "PID_FILE", self.state_dir / "music_sync.pid"):
+                            with mock.patch.object(music_sync, "analyze", side_effect=fake_analyze):
+                                try:
+                                    music_sync.run(
+                                        {"devices": [{"ip": "1.2.3.4"}], "music": {"silence_seconds": 2.0}},
+                                        fps=10,
+                                        time_fn=fake_time_fn,
+                                    )
+                                except KeyboardInterrupt:
+                                    pass
+
+        # Should have attempted turn off multiple times (first fails, later succeeds)
+        turn_off_calls = [c for c in turn_calls if not c[1]]
+        self.assertGreater(len(turn_off_calls), 1,
+                          f"Expected multiple turn-off attempts, got {len(turn_off_calls)}")
 
 
 if __name__ == "__main__":

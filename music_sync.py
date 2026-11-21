@@ -112,13 +112,16 @@ LOG_FILE = STATE_DIR / "music_sync.log"
 
 
 def _turn_all(devices, on):
-    """Turn all devices on or off, swallowing OSError."""
+    """Turn all devices on or off. Returns True only if every device succeeded."""
+    all_ok = True
     for dev in devices:
         ip = dev["ip"]
         try:
             govee.turn(ip, on)
-        except OSError:
-            pass
+        except OSError as e:
+            logger.warning("turn %s failed for %s: %s", "on" if on else "off", ip, e)
+            all_ok = False
+    return all_ok
 
 
 def analyze(samples, rate):
@@ -771,6 +774,9 @@ def run(config, fps=None, verbose=False, log_file=None, time_fn=None):
                 except OSError as e:
                     logger.error("Failed to set brightness on %s: %s", ip, e)
 
+            # Turn all strips on at start (they may have been off from a previous mode)
+            _turn_all(devices, True)
+
             while True:
                 frame_start = time_fn()
 
@@ -810,8 +816,8 @@ def run(config, fps=None, verbose=False, log_file=None, time_fn=None):
                 # Signal just cleared: if we were in silence before signal became active, send off now
                 if signal_was_active and was_silent_before_signal:
                     logger.info("signal cleared during silence; turning lights off")
-                    _turn_all(devices, False)
-                    lights_on = False
+                    if _turn_all(devices, False):
+                        lights_on = False
                     # Reset silence tracking since we just sent off
                     silence_start_time = None
 
@@ -852,9 +858,9 @@ def run(config, fps=None, verbose=False, log_file=None, time_fn=None):
                             # No device: turn off once, keep running
                             if not no_device_off_sent:
                                 logger.info("no audio device; turning lights off")
-                                _turn_all(devices, False)
-                                no_device_off_sent = True
-                                lights_on = False
+                                if _turn_all(devices, False):
+                                    no_device_off_sent = True
+                                    lights_on = False
                             time.sleep(1.0)
                             continue
                     else:
@@ -864,9 +870,9 @@ def run(config, fps=None, verbose=False, log_file=None, time_fn=None):
                         # No device: turn off once, keep running
                         if not no_device_off_sent:
                             logger.info("no audio device; turning lights off")
-                            _turn_all(devices, False)
-                            no_device_off_sent = True
-                            lights_on = False
+                            if _turn_all(devices, False):
+                                no_device_off_sent = True
+                                lights_on = False
                         time.sleep(1.0)
                         continue
 
@@ -932,20 +938,28 @@ def run(config, fps=None, verbose=False, log_file=None, time_fn=None):
                         time.sleep(sleep_time)
                     continue
 
+                # Re-check mode before sending (mode may have changed during
+                # audio capture/analysis). If not "music", exit cleanly.
+                current_mode = arbiter.get_mode()
+                if current_mode != "music":
+                    logger.info("mode changed to %s; exiting music sync", current_mode)
+                    exit_due_to_mode_change = True
+                    break
+
                 # Silence detection - sends (only if signal is not active)
                 if features["level"] < SILENCE_LEVEL_THRESHOLD:
                     if frame_start - silence_start_time >= silence_seconds:
                         # Silent long enough: turn off
                         if lights_on:
                             logger.info("silence detected; turning lights off")
-                            _turn_all(devices, False)
-                            lights_on = False
+                            if _turn_all(devices, False):
+                                lights_on = False
                 else:
                     # If lights were off, turn them back on
                     if not lights_on:
                         logger.info("turning lights back on")
-                        _turn_all(devices, True)
-                        lights_on = True
+                        if _turn_all(devices, True):
+                            lights_on = True
 
                 # Map to colour
                 rgb = features_to_rgb(features, config)
