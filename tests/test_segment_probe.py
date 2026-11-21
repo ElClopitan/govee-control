@@ -98,7 +98,7 @@ class TestDryRun(unittest.TestCase):
     @mock.patch("segment_probe.time.sleep")
     @mock.patch("segment_probe.govee.send")
     def test_live_run_sends(self, mock_send, mock_sleep):
-        """Live run should call govee.send()."""
+        """Live run should call govee.send() with the right sequence."""
         segment_probe.run_probe(
             ip="192.168.1.1",
             leds=5,
@@ -107,8 +107,14 @@ class TestDryRun(unittest.TestCase):
             fps=2,
             dry_run=False,
         )
-        # Should send: enable + 2 frames + disable = 4 calls
-        self.assertGreater(mock_send.call_count, 0)
+        # Should send: turn on, brightness, enable, 2 frames, disable, turn off = 7 calls
+        self.assertEqual(mock_send.call_count, 7)
+        # Verify the sequence of commands
+        cmds = [call[0][1]["msg"]["cmd"] for call in mock_send.call_args_list]
+        self.assertEqual(cmds, ["turn", "brightness", "razer", "razer", "razer", "razer", "turn"])
+        # Last turn should be off (value 0)
+        last_turn = mock_send.call_args_list[-1][0][1]
+        self.assertEqual(last_turn["msg"]["data"]["value"], 0)
 
     @mock.patch("segment_probe.time.sleep")
     @mock.patch("segment_probe.govee.brightness")
@@ -153,9 +159,10 @@ class TestDryRun(unittest.TestCase):
         self.assertLess(turn_on_idx, first_send_idx, "turn on must come before first razer send")
         self.assertLess(brightness_idx, first_send_idx, "brightness must come before first razer send")
 
+    @mock.patch("segment_probe.time.sleep")
     @mock.patch("segment_probe.govee.turn")
     @mock.patch("segment_probe.govee.send")
-    def test_error_during_frames_still_disables(self, mock_send, mock_turn):
+    def test_error_during_frames_still_disables(self, mock_send, mock_turn, mock_sleep):
         """If govee.send raises during frames, disable is still sent and strip is turned off."""
         call_count = [0]
 
@@ -190,6 +197,38 @@ class TestDryRun(unittest.TestCase):
         self.assertEqual(mock_turn.call_count, 2)
         mock_turn.assert_called_with("192.168.1.1", False)
 
+    @mock.patch("segment_probe.time.sleep")
+    @mock.patch("segment_probe.govee.turn")
+    @mock.patch("segment_probe.govee.send")
+    def test_error_on_enable_still_turns_off(self, mock_send, mock_turn, mock_sleep):
+        """If govee.send raises on the enable send, strip is still turned off."""
+        call_count = [0]
+
+        def raise_on_enable(*args, **kwargs):
+            call_count[0] += 1
+            # Call 1: brightness
+            # Call 2: enable (raise here)
+            if call_count[0] == 2:
+                raise OSError("network error")
+
+        mock_send.side_effect = raise_on_enable
+
+        with self.assertRaises(OSError):
+            segment_probe.run_probe(
+                ip="192.168.1.1",
+                leds=5,
+                pattern="walk",
+                duration=1,
+                fps=2,
+                dry_run=False,
+            )
+
+        # Should have sent: brightness (1), raised on enable (2),
+        # then disable in finally (3)
+        self.assertEqual(call_count[0], 3)
+        # Strip should be turned off
+        self.assertEqual(mock_turn.call_count, 2)
+        mock_turn.assert_called_with("192.168.1.1", False)
 
 
 class TestModeGate(unittest.TestCase):
@@ -223,6 +262,15 @@ class TestModeGate(unittest.TestCase):
     def test_off_mode_runs(self, mock_run, mock_signal, mock_mode):
         """main() with mode 'off' and no signal runs the probe."""
         with mock.patch.object(sys, "argv", ["segment_probe.py", "192.168.1.50"]):
+            segment_probe.main()
+        mock_run.assert_called_once()
+
+    @mock.patch("segment_probe.arbiter.get_mode", return_value="music")
+    @mock.patch("segment_probe.arbiter.signal_active", return_value=False)
+    @mock.patch("segment_probe.run_probe")
+    def test_dry_run_skips_mode_gate(self, mock_run, mock_signal, mock_mode):
+        """main() with --dry-run skips the mode/signal gate."""
+        with mock.patch.object(sys, "argv", ["segment_probe.py", "192.168.1.50", "--dry-run"]):
             segment_probe.main()
         mock_run.assert_called_once()
 

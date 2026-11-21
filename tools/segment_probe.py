@@ -125,23 +125,23 @@ def run_probe(ip, leds=20, pattern="walk", duration=10, fps=10, dry_run=False):
     """Run the segment probe against a device."""
     print(f"Probing {ip} with {leds} LEDs, pattern={pattern}, {duration}s")
 
-    # Turn the strip on so the owner can see the probe
-    if not dry_run:
-        govee.turn(ip, True)
-        govee.brightness(ip, 80)
-        print("Turned strip on at 80%")
-
-    # Enable Razer mode
-    enable_pt = razer_enable()
-    if dry_run:
-        print(f"ENABLE: {json.dumps({'msg': {'cmd': 'razer', 'data': {'pt': enable_pt}}})}")
-    else:
-        send_razer(ip, enable_pt)
-        print("Sent enable")
-
     # Send pattern frames
     frames = duration * fps
     try:
+        # Turn the strip on so the owner can see the probe
+        if not dry_run:
+            govee.turn(ip, True)
+            govee.brightness(ip, 80)
+            print("Turned strip on at 80%")
+
+        # Enable Razer mode
+        enable_pt = razer_enable()
+        if dry_run:
+            print(f"ENABLE: {json.dumps({'msg': {'cmd': 'razer', 'data': {'pt': enable_pt}}})}")
+        else:
+            send_razer(ip, enable_pt)
+            print("Sent enable")
+
         for frame in range(frames):
             if pattern == "halves":
                 colors = pattern_halves(leds)
@@ -173,7 +173,6 @@ def run_probe(ip, leds=20, pattern="walk", duration=10, fps=10, dry_run=False):
             print(f"DISABLE: {json.dumps({'msg': {'cmd': 'razer', 'data': {'pt': disable_pt}}})}")
         else:
             send_razer(ip, disable_pt)
-            print("Sent disable")
 
         # Turn off the strip (replaces the old white/80% restore)
         if not dry_run:
