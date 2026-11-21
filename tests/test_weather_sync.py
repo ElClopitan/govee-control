@@ -3343,6 +3343,45 @@ class TestStaticModeBrightnessChange(StateDirMixin, unittest.TestCase):
         self.assertEqual(mock_brightness.call_args_list[1][0], ("192.168.1.50", 30))
 
 
+class TestStaticModeNightBrightnessCeiling(StateDirMixin, unittest.TestCase):
+    """Test that static mode applies night_brightness as a ceiling (min with brightness)."""
+
+    def setUp(self):
+        super().setUp()
+        self.set_mode("weather")
+        p = mock.patch("agent_signal.sweep_and_restore")
+        p.start()
+        self.addCleanup(p.stop)
+
+    @mock.patch("weather_sync.fetch_weather")
+    @mock.patch("govee.turn")
+    @mock.patch("govee.color")
+    @mock.patch("govee.brightness")
+    @mock.patch("time.time")
+    def test_static_night_brightness_is_ceiling(self, mock_time, mock_brightness, mock_color, mock_turn, mock_fetch):
+        """Static mode at night: brightness 20, night_brightness 30 → use 20 (ceiling)."""
+        mock_time.return_value = 1000.0
+        mock_fetch.return_value = {"temperature_2m": 15.0, "weather_code": 1, "is_day": 0}
+
+        config = {
+            "devices": [{"name": "left", "ip": "192.168.1.50"}],
+            "weather": {
+                "latitude": 51.5,
+                "longitude": -0.1,
+                "brightness": 20,
+                "night_brightness": 30,
+                "patterns_enabled": False,
+                "fetch_on_the_hour": False,
+            },
+        }
+
+        weather_sync.run(config, once=True)
+
+        # night_brightness (30) is a ceiling; user's brightness (20) is lower, so 20 wins
+        self.assertEqual(mock_brightness.call_count, 1)
+        self.assertEqual(mock_brightness.call_args_list[0][0], ("192.168.1.50", 20))
+
+
 class TestFetchOffset(StateDirMixin, unittest.TestCase):
     """Test fetch_offset_seconds configuration."""
 

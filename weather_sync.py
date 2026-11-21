@@ -818,8 +818,8 @@ def run(config, once=False, interval=900, dry_run=False, rng=None, time_fn=None)
                 last_color = color_str
         else:
             # Static mode: send if color or effective brightness changed
-            # At night, use night_brightness
-            effective_brightness = night_brightness if current_is_day == 0 else brightness
+            # At night, cap at night_brightness (user's brightness wins if lower)
+            effective_brightness = night_cap(brightness, night_brightness, current_is_day)
             if color_hex != last_color or effective_brightness != last_static_brightness or dry_run:
                 r, g, b = govee.parse_color(color_hex)
                 try:
