@@ -1429,6 +1429,29 @@ class TestGetPatternForCode(unittest.TestCase):
         self.assertEqual(pattern["color1"], "#ff0000")
         self.assertEqual(pattern["color2"], "#00ff00")
 
+    def test_partial_thunderstorm_override_merges(self):
+        """Partial thunderstorm override merges over defaults."""
+        custom = {"thunderstorm": {"flash_every": [3, 8]}}
+        pattern = weather_sync.get_pattern_for_code(95, custom, is_day=1)
+        self.assertEqual(pattern["type"], "thunderstorm")
+        self.assertEqual(pattern["color1"], "#4a148c")
+        self.assertEqual(pattern["flash_every"], [3, 8])
+
+    def test_partial_rain_override_merges(self):
+        """Partial rain override merges over defaults."""
+        custom = {"rain": {"period": 4.0}}
+        pattern = weather_sync.get_pattern_for_code(61, custom, is_day=1)
+        self.assertEqual(pattern["type"], "wave")
+        self.assertEqual(pattern["period"], 4.0)
+        self.assertEqual(pattern["color1"], "#1e88e5")
+
+    def test_non_dict_override_uses_default(self):
+        """Non-dict override is ignored; default is used."""
+        custom = {"thunderstorm": "x"}
+        pattern = weather_sync.get_pattern_for_code(95, custom, is_day=1)
+        self.assertEqual(pattern["type"], "thunderstorm")
+        self.assertEqual(pattern["color1"], "#4a148c")
+
 
 class TestPatternLoop(StateDirMixin, unittest.TestCase):
     """Test the pattern animation loop."""

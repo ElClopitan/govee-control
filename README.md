@@ -245,6 +245,10 @@ Thunderstorm pattern config keys (`weather.patterns.thunderstorm`):
 }
 ```
 
+An override only needs the keys you want to change; missing keys keep their
+defaults. For example, `{"thunderstorm": {"flash_every": [3, 8]}}` changes only
+the flash interval while keeping the default colours and brightness.
+
 All other weather conditions use static colours.
 
 At night (is_day=0), different colours are used for a more atmospheric look,

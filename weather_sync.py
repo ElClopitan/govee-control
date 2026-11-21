@@ -203,6 +203,9 @@ def next_hour_boundary(now):
 def get_pattern_for_code(code, patterns_cfg, is_day=1):
     """Get the pattern definition for a weather code.
 
+    User overrides in patterns_cfg are merged over the defaults, so a
+    partial override (e.g. only flash_every) keeps the other default keys.
+
     Args:
         code: WMO weather code
         patterns_cfg: Config dict for weather.patterns
@@ -214,10 +217,17 @@ def get_pattern_for_code(code, patterns_cfg, is_day=1):
     if code is None:
         return None
 
+    def _merge(key, default):
+        """Merge user override over default; ignore non-dict overrides."""
+        override = patterns_cfg.get(key)
+        if isinstance(override, dict):
+            return {**default, **override}
+        return default
+
     # Cloudy: codes 2-3
     if 2 <= code <= 3:
         if is_day:
-            return patterns_cfg.get("cloudy", {
+            return _merge("cloudy", {
                 "type": "drift",
                 "color1": "#546e7a",
                 "color2": "#90a4ae",
@@ -226,7 +236,7 @@ def get_pattern_for_code(code, patterns_cfg, is_day=1):
                 "phase_offset": 0.0,
             })
         else:
-            return patterns_cfg.get("cloudy_night", {
+            return _merge("cloudy_night", {
                 "type": "drift",
                 "color1": "#37474f",
                 "color2": "#5c6bc0",
@@ -238,7 +248,7 @@ def get_pattern_for_code(code, patterns_cfg, is_day=1):
     # Rain: codes 51-67, 80-82
     if (51 <= code <= 67) or (80 <= code <= 82):
         if is_day:
-            return patterns_cfg.get("rain", {
+            return _merge("rain", {
                 "type": "wave",
                 "color1": "#1e88e5",
                 "color2": "#0d47a1",
@@ -247,7 +257,7 @@ def get_pattern_for_code(code, patterns_cfg, is_day=1):
                 "phase_offset": 4.0,  # half cycle out of phase
             })
         else:
-            return patterns_cfg.get("rain_night", {
+            return _merge("rain_night", {
                 "type": "wave",
                 "color1": "#0d47a1",
                 "color2": "#1a237e",
@@ -258,7 +268,7 @@ def get_pattern_for_code(code, patterns_cfg, is_day=1):
 
     # Thunderstorm: codes 95-99 (same pattern day and night)
     if 95 <= code <= 99:
-        return patterns_cfg.get("thunderstorm", {
+        return _merge("thunderstorm", {
             "type": "thunderstorm",
             "color1": "#4a148c",
             "color2": "#7b1fa2",
