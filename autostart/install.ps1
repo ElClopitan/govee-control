@@ -101,10 +101,16 @@ $tasks = @(
 
 if ($Uninstall) {
     Write-Host "Uninstalling Govee autostart tasks..."
+    $anyFailed = $false
     foreach ($t in $tasks) {
         if ($DryRun) {
             Write-Host "[dry-run] Would remove task: $($t.Name)"
         } else {
+            $existing = Get-ScheduledTask -TaskName $t.Name -ErrorAction SilentlyContinue
+            if ($null -eq $existing) {
+                Write-Host "Task not found (already removed?): $($t.Name)"
+                continue
+            }
             try {
                 Stop-ScheduledTask -TaskName $t.Name -ErrorAction SilentlyContinue
             } catch {
@@ -114,9 +120,13 @@ if ($Uninstall) {
                 Unregister-ScheduledTask -TaskName $t.Name -Confirm:$false
                 Write-Host "Removed task: $($t.Name)"
             } catch {
-                Write-Host "Task not found (already removed?): $($t.Name)"
+                Write-Host "ERROR: could not remove `"$($t.Name)`": $($_.Exception.Message)" -ForegroundColor Red
+                $anyFailed = $true
             }
         }
+    }
+    if (-not $DryRun -and $anyFailed) {
+        exit 1
     }
     if ($DryRun) {
         Write-Host "[dry-run] Done (no changes made)."
@@ -151,11 +161,11 @@ if ($Uninstall) {
     foreach ($t in $tasks) {
         $arg = "$($t.Script) $($t.Arguments)"
         if ($DryRun) {
+            Write-Host "[dry-run] Would register task: $($t.Name)"
             $existing = Get-ScheduledTask -TaskName $t.Name -ErrorAction SilentlyContinue
             if ($existing -and $existing.State -eq 'Running') {
                 Write-Host "  Would stop running task first"
             }
-            Write-Host "[dry-run] Would register task: $($t.Name)"
             Write-Host "  Trigger: AtLogOn, user $user"
             Write-Host "  Execute: $pythonw"
             Write-Host "  Argument: $arg"
