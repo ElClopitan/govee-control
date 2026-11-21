@@ -230,6 +230,27 @@ class TestDryRun(unittest.TestCase):
         self.assertEqual(mock_turn.call_count, 2)
         mock_turn.assert_called_with("192.168.1.1", False)
 
+    @mock.patch("segment_probe.time.sleep")
+    @mock.patch("segment_probe.govee.brightness")
+    @mock.patch("segment_probe.govee.turn")
+    @mock.patch("segment_probe.send_razer")
+    def test_disable_send_raises_still_turns_off(self, mock_send_razer, mock_turn, mock_brightness, mock_sleep):
+        """If send_razer raises during the disable send, strip is still turned off."""
+        mock_send_razer.side_effect = OSError("network drop during disable")
+
+        with self.assertRaises(OSError):
+            segment_probe.run_probe(
+                ip="192.168.1.1",
+                leds=5,
+                pattern="walk",
+                duration=1,
+                fps=1,
+                dry_run=False,
+            )
+
+        # Strip should still be turned off even though disable send raised
+        mock_turn.assert_any_call("192.168.1.1", False)
+
 
 class TestModeGate(unittest.TestCase):
     """Test that main() checks mode/signal before running."""
