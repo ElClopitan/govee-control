@@ -15,7 +15,7 @@ All three tasks:
 - Trigger at logon (current user only)
 - Run hidden (no console window)
 - Have no time limit
-- Restart up to 3 times on failure (1 minute apart)
+- Restart settings: up to 3 times, 1 minute apart (see Troubleshooting: not reliable when the script exits with an error)
 - Don't start a second instance if one is already running
 - Run with the repo root as the working directory
 

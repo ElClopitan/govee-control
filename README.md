@@ -381,6 +381,18 @@ The `--force` flag does not bypass ignore patterns.
 
 When `agent_signal.py clear` runs, it restores each strip that has saved state. For any configured strip that has no saved state — for example, a strip that did not answer `devStatus` when the signal was raised, or every strip when the saved-state marker is `[]` — it applies the config's `"default"` profile. If `"default"` is missing or `null`, it falls back to white at 40%. The lights never stay in the signal colour after `clear`. A strip whose saved colour equals the signal colour is treated as a stale reading and gets the default too, so a strip that really was set to the signal colour comes back as the default after clear.
 
+### State files
+
+The mode system uses file-based state in the `state/` directory:
+- `state/saved_state.json` — exists when an agent signal is active
+- `state/signal_sessions/` — per-session marker files; one file per Claude session that raised the signal
+- `state/music_active.json` — exists when music sync is active (contains pid and timestamp); music sync rewrites this file at least every 5 seconds as a heartbeat, and if it's older than 15 seconds it's considered stale
+- `state/game_active.json` — exists when game sync is active (contains the profile name); game sync rewrites this file every loop iteration as a heartbeat, and if it's older than 60 seconds it's considered stale
+- `state/mode.json` — contains the currently selected mode
+- `state/agent_signal.lock` — lock file used to serialise concurrent agent signal hooks
+
+Concurrent `needs-input` and `clear` hooks are serialised with `state/agent_signal.lock` to prevent race conditions where multiple Claude sessions run the hooks simultaneously.
+
 ## Music mode (optional)
 
 Music mode makes the strips follow the music playing on this PC. It requires
