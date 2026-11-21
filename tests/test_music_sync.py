@@ -3686,7 +3686,7 @@ class TestCmdStopConfigPath(unittest.TestCase):
         self.assertEqual(mock_switch.call_args[0][0], "off")
 
 
-class TestCmdStartConfigPath(unittest.TestCase):
+class TestCmdStartConfigPath(StateDirMixin, unittest.TestCase):
     """Test that cmd_start passes --config to the spawned process."""
 
     def test_cmd_start_passes_config_to_child(self):
@@ -3694,28 +3694,36 @@ class TestCmdStartConfigPath(unittest.TestCase):
         with mock.patch("music_sync._get_running_pid", return_value=None):
             with mock.patch("importlib.util.find_spec", return_value=mock.Mock()):
                 with mock.patch("subprocess.Popen") as mock_popen:
-                    mock_proc = mock.Mock()
-                    mock_proc.pid = 12345
-                    mock_popen.return_value = mock_proc
-                    with mock.patch("builtins.print"):
-                        music_sync.cmd_start("x.json")
+                    with mock.patch("music_sync._write_pid") as mock_write_pid:
+                        with mock.patch("music_sync._ensure_state_dir"):
+                            with mock.patch("music_sync._remove_stop_flag"):
+                                mock_proc = mock.Mock()
+                                mock_proc.pid = 12345
+                                mock_popen.return_value = mock_proc
+                                with mock.patch("builtins.print"):
+                                    music_sync.cmd_start("x.json")
         # Check that Popen was called with --config x.json
         call_args = mock_popen.call_args
         cmd = call_args[0][0]
         self.assertIn("--config", cmd)
         config_idx = cmd.index("--config")
         self.assertEqual(cmd[config_idx + 1], "x.json")
+        # Check that _write_pid was called with the correct pid
+        mock_write_pid.assert_called_once_with(12345)
 
     def test_cmd_start_default_config_path(self):
         """cmd_start with no argument should use DEFAULT_CONFIG_PATH."""
         with mock.patch("music_sync._get_running_pid", return_value=None):
             with mock.patch("importlib.util.find_spec", return_value=mock.Mock()):
                 with mock.patch("subprocess.Popen") as mock_popen:
-                    mock_proc = mock.Mock()
-                    mock_proc.pid = 12345
-                    mock_popen.return_value = mock_proc
-                    with mock.patch("builtins.print"):
-                        music_sync.cmd_start()
+                    with mock.patch("music_sync._write_pid"):
+                        with mock.patch("music_sync._ensure_state_dir"):
+                            with mock.patch("music_sync._remove_stop_flag"):
+                                mock_proc = mock.Mock()
+                                mock_proc.pid = 12345
+                                mock_popen.return_value = mock_proc
+                                with mock.patch("builtins.print"):
+                                    music_sync.cmd_start()
         call_args = mock_popen.call_args
         cmd = call_args[0][0]
         self.assertIn("--config", cmd)
