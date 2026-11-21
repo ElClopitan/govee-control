@@ -616,8 +616,8 @@ class TestRestoreFollowsMode(StateDirMixin, unittest.TestCase):
         # Should not raise
         agent_signal.cmd_clear(args)
 
-        # All 3 attempts should have been made (1 device × 3 attempts)
-        self.assertEqual(mock_turn.call_count, 3)
+        # All 6 attempts should have been made (2 devices × 3 attempts)
+        self.assertEqual(mock_turn.call_count, 6)
         # Saved state should be deleted (all attempts made, function succeeded)
         self.assertFalse(arbiter.signal_file().exists())
         # Lock file should not exist (released)
