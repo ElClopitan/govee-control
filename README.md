@@ -221,6 +221,26 @@ for certain weather conditions instead of static colours:
   (12s cycle, brightness 60-80) with random white lightning flashes every 6-20s
   (flashes may exceed max_brightness)
 
+Thunderstorm pattern config keys (`weather.patterns.thunderstorm`):
+
+```json
+{
+  "type": "thunderstorm",
+  "color1": "#4a148c",
+  "color2": "#7b1fa2",
+  "period": 12.0,
+  "brightness": 80,
+  "brightness_min": 60,
+  "phase_offset": 0.0,
+  "flash_every": [6, 20],
+  "flash_duration": 0.15,
+  "flash_color": "#ffffff",
+  "flash_brightness": 100,
+  "double_flash_prob": 0.3,
+  "flash_both_prob": 0.5
+}
+```
+
 All other weather conditions use static colours.
 
 At night (is_day=0), different colours are used for a more atmospheric look,

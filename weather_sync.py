@@ -21,7 +21,7 @@ Colour mapping (WMO weather codes):
     71-77 snow: pale blue (#e3f2fd)
     80-82 showers: wave #1e88e5 <-> #0d47a1
     85-86 snow showers: pale blue (#e3f2fd)
-    95-99 thunderstorm: purple (#7b1fa2) with flashes
+    95-99 thunderstorm: pulse #4a148c <-> #7b1fa2 (brightness 60-80) with white flashes
     other unknown: white (#ffffff)
   Night (is_day=0):
     0-1   clear: deep blue (#1a237e)
