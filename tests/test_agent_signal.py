@@ -497,6 +497,7 @@ class TestRestoreFollowsMode(StateDirMixin, unittest.TestCase):
         mock_color.reset_mock()
         mock_brightness.reset_mock()
         mock_turn.reset_mock()
+        mock_sleep.reset_mock()
 
         # Clear the signal with dry_run
         args.command = "clear"
