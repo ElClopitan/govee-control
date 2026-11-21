@@ -2872,6 +2872,56 @@ class TestFetchOnTheHour(StateDirMixin, unittest.TestCase):
         # And at least 1 second
         self.assertGreaterEqual(first_sleep[0], 1.0)
 
+    @mock.patch("weather_sync.fetch_weather")
+    @mock.patch("govee.turn")
+    @mock.patch("govee.color")
+    @mock.patch("govee.brightness")
+    @mock.patch("time.sleep")
+    @mock.patch("weather_sync.time.monotonic")
+    @mock.patch("weather_sync.time.time")
+    def test_monotonic_now_with_wall_clock_scheduling(self, mock_time, mock_monotonic, mock_sleep, mock_brightness, mock_color, mock_turn, mock_fetch):
+        """With monotonic time_fn, fetch scheduling uses wall-clock time.
+
+        Regression test for the bug where run() defaulted time_fn to
+        time.monotonic but passed the monotonic value to next_hour_boundary,
+        which calls time.localtime() expecting epoch time.
+        """
+        import arbiter
+        import datetime
+        arbiter.set_mode("weather")
+
+        # Monotonic clock returns 1000.0 (arbitrary, not epoch)
+        mock_monotonic.return_value = 1000.0
+
+        # Wall clock: local HH:59:00 (one minute before the hour)
+        now_dt = datetime.datetime(2026, 1, 15, 10, 59, 0)
+        mock_time.return_value = time.mktime(now_dt.timetuple())
+
+        mock_fetch.return_value = {
+            "temperature_2m": 20.0,
+            "weather_code": 0,
+            "is_day": 1,
+        }
+        config = self._make_config(fetch_on_the_hour=True, interval=900, patterns_enabled=False, fetch_offset_seconds=0)
+
+        # Capture the sleep duration
+        first_sleep = [None]
+        def sleep_side_effect(seconds):
+            if first_sleep[0] is None:
+                first_sleep[0] = seconds
+            raise KeyboardInterrupt()
+
+        mock_sleep.side_effect = sleep_side_effect
+
+        try:
+            weather_sync.run(config, once=False, interval=900)
+        except KeyboardInterrupt:
+            pass
+
+        # Should have slept for ~60 seconds (one minute to the next hour)
+        self.assertIsNotNone(first_sleep[0])
+        self.assertAlmostEqual(first_sleep[0], 60.0, delta=1.0)
+
 
 class TestModeControl(StateDirMixin, unittest.TestCase):
     """Test that weather sync obeys the selected mode."""
