@@ -148,7 +148,11 @@ class TestSwitchMusic(StateDirMixin, unittest.TestCase):
         """switch("music") sends nothing to devices."""
         config = {"devices": [{"ip": "192.168.1.1"}]}
         with mock.patch("govee.turn") as mock_turn:
-            with mock.patch("music_sync.cmd_start", return_value=0):
+            with mock.patch("music_sync.cmd_start") as mock_start:
+                def fake_start():
+                    arbiter.set_mode("music")
+                    return 0
+                mock_start.side_effect = fake_start
                 import mode
                 mode.switch("music", config)
         mock_turn.assert_not_called()

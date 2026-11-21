@@ -2883,6 +2883,10 @@ class TestModeSwitchMusic(StateDirMixin, unittest.TestCase):
         """switch("music") calls music_sync.cmd_start()."""
         config = {"devices": [{"ip": "192.168.1.1"}]}
         with mock.patch("music_sync.cmd_start") as mock_start:
+            def fake_start():
+                arbiter.set_mode("music")
+                return 0
+            mock_start.side_effect = fake_start
             import mode
             mode.switch("music", config)
         mock_start.assert_called_once()
