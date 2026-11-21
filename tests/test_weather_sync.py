@@ -2699,16 +2699,19 @@ class TestFetchOnTheHour(StateDirMixin, unittest.TestCase):
         p.start()
         self.addCleanup(p.stop)
 
-    def _make_config(self, fetch_on_the_hour=True, interval=900, patterns_enabled=False):
+    def _make_config(self, fetch_on_the_hour=True, interval=900, patterns_enabled=False, fetch_offset_seconds=None):
+        weather = {
+            "latitude": 51.5,
+            "longitude": -0.1,
+            "brightness": 50,
+            "fetch_on_the_hour": fetch_on_the_hour,
+            "patterns_enabled": patterns_enabled,
+        }
+        if fetch_offset_seconds is not None:
+            weather["fetch_offset_seconds"] = fetch_offset_seconds
         return {
             "devices": [{"name": "left", "ip": "192.168.1.50"}],
-            "weather": {
-                "latitude": 51.5,
-                "longitude": -0.1,
-                "brightness": 50,
-                "fetch_on_the_hour": fetch_on_the_hour,
-                "patterns_enabled": patterns_enabled,
-            },
+            "weather": weather,
         }
 
     @mock.patch("weather_sync.fetch_weather")
@@ -3581,7 +3584,8 @@ class TestFetchRetryBackoff(StateDirMixin, unittest.TestCase):
 
         mock_fetch.side_effect = fetch_side_effect
 
-        config = self._make_config(fetch_retry_seconds=60)
+        # Use interval-based fetching to avoid hour boundary scheduling
+        config = self._make_config(fetch_retry_seconds=60, fetch_on_the_hour=False)
 
         sleep_intervals = []
         sleep_count = [0]
