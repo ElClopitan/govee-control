@@ -10,10 +10,12 @@ path constants to a session tempdir at import time. This test catches
 any writes that slip through.
 """
 
+import sys
 import unittest
 from pathlib import Path
 
-import helpers
+sys.path.insert(0, str(Path(__file__).parent))
+import helpers  # noqa: F401  installs the socket guard when run on its own
 
 
 class TestStateDirGuard(unittest.TestCase):
