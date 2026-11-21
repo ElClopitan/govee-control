@@ -95,10 +95,13 @@ class TestDryRun(unittest.TestCase):
         )
         mock_send.assert_not_called()
 
+    @mock.patch("segment_probe.govee.status")
     @mock.patch("segment_probe.time.sleep")
     @mock.patch("segment_probe.govee.send")
-    def test_live_run_sends(self, mock_send, mock_sleep):
+    def test_live_run_sends(self, mock_send, mock_sleep, mock_status):
         """Live run should call govee.send() with the right sequence."""
+        # Mock status to report strip is off
+        mock_status.return_value = {"msg": {"cmd": "devStatus", "data": {"onOff": 0}}}
         segment_probe.run_probe(
             ip="192.168.1.1",
             leds=5,
@@ -107,14 +110,40 @@ class TestDryRun(unittest.TestCase):
             fps=2,
             dry_run=False,
         )
-        # Should send: turn on, brightness, enable, 2 frames, disable, turn off = 7 calls
-        self.assertEqual(mock_send.call_count, 7)
+        # Should send: turn on, brightness, enable, 2 frames, disable, 3 turn-offs = 9 calls
+        self.assertEqual(mock_send.call_count, 9)
         # Verify the sequence of commands
         cmds = [call[0][1]["msg"]["cmd"] for call in mock_send.call_args_list]
-        self.assertEqual(cmds, ["turn", "brightness", "razer", "razer", "razer", "razer", "turn"])
-        # Last turn should be off (value 0)
-        last_turn = mock_send.call_args_list[-1][0][1]
-        self.assertEqual(last_turn["msg"]["data"]["value"], 0)
+        self.assertEqual(cmds, ["turn", "brightness", "razer", "razer", "razer", "razer", "turn", "turn", "turn"])
+        # Last three should be turn off (value 0)
+        for i in range(3):
+            turn_call = mock_send.call_args_list[-(i + 1)][0][1]
+            self.assertEqual(turn_call["msg"]["cmd"], "turn")
+            self.assertEqual(turn_call["msg"]["data"]["value"], 0)
+        # Status should have been queried once
+        mock_status.assert_called_once_with("192.168.1.1", timeout=1)
+
+    @mock.patch("segment_probe.govee.status")
+    @mock.patch("segment_probe.time.sleep")
+    @mock.patch("segment_probe.govee.send")
+    def test_strip_still_on_triggers_extra_turn_off(self, mock_send, mock_sleep, mock_status):
+        """If status reports onOff 1, an extra turn off is sent."""
+        # Mock status to report strip is still on
+        mock_status.return_value = {"msg": {"cmd": "devStatus", "data": {"onOff": 1}}}
+        segment_probe.run_probe(
+            ip="192.168.1.1",
+            leds=5,
+            pattern="walk",
+            duration=1,
+            fps=2,
+            dry_run=False,
+        )
+        # Should send: turn on, brightness, enable, 2 frames, disable, 3 turn-offs, 1 extra = 10 calls
+        self.assertEqual(mock_send.call_count, 10)
+        # Last call should be the extra turn off
+        last_call = mock_send.call_args_list[-1][0][1]
+        self.assertEqual(last_call["msg"]["cmd"], "turn")
+        self.assertEqual(last_call["msg"]["data"]["value"], 0)
 
     @mock.patch("segment_probe.time.sleep")
     @mock.patch("segment_probe.govee.brightness")
@@ -159,11 +188,12 @@ class TestDryRun(unittest.TestCase):
         self.assertLess(turn_on_idx, first_send_idx, "turn on must come before first razer send")
         self.assertLess(brightness_idx, first_send_idx, "brightness must come before first razer send")
 
+    @mock.patch("segment_probe.govee.status")
     @mock.patch("segment_probe.time.sleep")
-    @mock.patch("segment_probe.govee.turn")
     @mock.patch("segment_probe.govee.send")
-    def test_error_during_frames_still_disables(self, mock_send, mock_turn, mock_sleep):
+    def test_error_during_frames_still_disables(self, mock_send, mock_sleep, mock_status):
         """If govee.send raises during frames, disable is still sent and strip is turned off."""
+        mock_status.return_value = {"msg": {"cmd": "devStatus", "data": {"onOff": 0}}}
         call_count = [0]
 
         def raise_on_fourth(*args, **kwargs):
@@ -186,22 +216,25 @@ class TestDryRun(unittest.TestCase):
             )
 
         # Should have sent: turn on (1), brightness (2), enable (3),
-        # raised on frame (4), then disable (5)
-        self.assertEqual(call_count[0], 5)
-        # Last send_razer call should be the disable packet
-        last_call = mock_send.call_args_list[-1]
-        msg = last_call[0][1]
+        # raised on frame (4), then disable (5), then 3 turn-offs (6,7,8)
+        self.assertEqual(call_count[0], 8)
+        # The disable packet should be the 5th call
+        disable_call = mock_send.call_args_list[4]
+        msg = disable_call[0][1]
         self.assertEqual(msg["msg"]["cmd"], "razer")
         self.assertEqual(msg["msg"]["data"]["pt"], "uwABsQAL")
-        # Strip should be turned off (second call to turn)
-        self.assertEqual(mock_turn.call_count, 2)
-        mock_turn.assert_called_with("192.168.1.1", False)
+        # Last three calls should be turn off
+        for i in range(3):
+            turn_call = mock_send.call_args_list[-(i + 1)][0][1]
+            self.assertEqual(turn_call["msg"]["cmd"], "turn")
+            self.assertEqual(turn_call["msg"]["data"]["value"], 0)
 
+    @mock.patch("segment_probe.govee.status")
     @mock.patch("segment_probe.time.sleep")
-    @mock.patch("segment_probe.govee.turn")
     @mock.patch("segment_probe.govee.send")
-    def test_error_on_enable_still_turns_off(self, mock_send, mock_turn, mock_sleep):
+    def test_error_on_enable_still_turns_off(self, mock_send, mock_sleep, mock_status):
         """If govee.send raises on the enable send, strip is still turned off."""
+        mock_status.return_value = {"msg": {"cmd": "devStatus", "data": {"onOff": 0}}}
         call_count = [0]
 
         def raise_on_enable(*args, **kwargs):
@@ -224,18 +257,22 @@ class TestDryRun(unittest.TestCase):
             )
 
         # Should have sent: brightness (1), raised on enable (2),
-        # then disable in finally (3)
-        self.assertEqual(call_count[0], 3)
-        # Strip should be turned off
-        self.assertEqual(mock_turn.call_count, 2)
-        mock_turn.assert_called_with("192.168.1.1", False)
+        # then disable in finally (3), then 3 turn-offs (4,5,6)
+        self.assertEqual(call_count[0], 6)
+        # Last three calls should be turn off
+        for i in range(3):
+            turn_call = mock_send.call_args_list[-(i + 1)][0][1]
+            self.assertEqual(turn_call["msg"]["cmd"], "turn")
+            self.assertEqual(turn_call["msg"]["data"]["value"], 0)
 
+    @mock.patch("segment_probe.govee.status")
     @mock.patch("segment_probe.time.sleep")
     @mock.patch("segment_probe.govee.brightness")
     @mock.patch("segment_probe.govee.turn")
     @mock.patch("segment_probe.send_razer")
-    def test_disable_send_raises_still_turns_off(self, mock_send_razer, mock_turn, mock_brightness, mock_sleep):
+    def test_disable_send_raises_still_turns_off(self, mock_send_razer, mock_turn, mock_brightness, mock_sleep, mock_status):
         """If send_razer raises during the disable send, strip is still turned off."""
+        mock_status.return_value = {"msg": {"cmd": "devStatus", "data": {"onOff": 0}}}
         mock_send_razer.side_effect = OSError("network drop during disable")
 
         with self.assertRaises(OSError):
@@ -248,7 +285,8 @@ class TestDryRun(unittest.TestCase):
                 dry_run=False,
             )
 
-        # Strip should still be turned off even though disable send raised
+        # Strip should still be turned off 3 times even though disable send raised
+        self.assertEqual(mock_turn.call_count, 4)  # 1 on + 3 off
         mock_turn.assert_any_call("192.168.1.1", False)
 
 

@@ -175,8 +175,21 @@ def run_probe(ip, leds=20, pattern="walk", duration=10, fps=10, dry_run=False):
             try:
                 send_razer(ip, disable_pt)
             finally:
-                # Turn off the strip (replaces the old white/80% restore)
-                govee.turn(ip, False)
+                # Turn off the strip 3 times (UDP packets can be lost)
+                for i in range(3):
+                    govee.turn(ip, False)
+                    if i < 2:
+                        time.sleep(0.2)
+                # Verify the strip is off; if not, send one more turn off
+                try:
+                    resp = govee.status(ip, timeout=1)
+                    if resp:
+                        on_off = resp.get("msg", {}).get("data", {}).get("onOff", 0)
+                        if on_off == 1:
+                            govee.turn(ip, False)
+                            print("Strip still on after 3 turn-offs; sent one more")
+                except Exception as e:
+                    print(f"Warning: could not verify strip status: {e}", file=sys.stderr)
                 print("Sent disable; strip turned off")
 
 
