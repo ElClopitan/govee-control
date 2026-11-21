@@ -152,6 +152,43 @@ class TestChooseErrors(StateDirMixin, unittest.TestCase):
         # Icon was still refreshed
         icon.update_menu.assert_called()
 
+    def test_switch_error_shows_tray_notification(self):
+        """If mode.switch raises, a tray notification is shown with the error."""
+        import tray
+
+        icon = mock.MagicMock()
+        with mock.patch("mode.switch", side_effect=RuntimeError("boom")):
+            with mock.patch.object(tray, "make_icon_image"):
+                tray.choose("music", "config.json", icon)
+
+        # Notification was shown
+        icon.notify.assert_called_once()
+        msg, title = icon.notify.call_args[0]
+        self.assertIn("music", msg)
+        self.assertIn("boom", msg)
+        self.assertEqual(title, "Govee")
+        # Icon was still refreshed
+        icon.update_menu.assert_called()
+
+    def test_switch_error_notify_failure_is_logged(self):
+        """If icon.notify raises, choose() doesn't raise and logs 'notify failed'."""
+        import tray
+
+        icon = mock.MagicMock()
+        icon.notify.side_effect = RuntimeError("notify boom")
+        with mock.patch("mode.switch", side_effect=RuntimeError("switch boom")):
+            with mock.patch.object(tray, "make_icon_image"):
+                # Should not raise
+                tray.choose("music", "config.json", icon)
+
+        # Error was logged
+        log_file = Path(self.state_dir) / "tray.log"
+        self.assertTrue(log_file.exists())
+        log_text = log_file.read_text()
+        self.assertIn("switch boom", log_text)
+        self.assertIn("notify failed", log_text)
+        self.assertIn("notify boom", log_text)
+
     def test_off_with_missing_config_is_logged(self):
         """If govee.load_config raises for 'off', the error is logged and switch is not called."""
         import tray

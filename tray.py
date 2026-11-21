@@ -49,6 +49,10 @@ def choose(mode_name, config_path, icon):
         mode.switch(mode_name, config)
     except Exception as e:
         log(f"switch to {mode_name} failed: {e}")
+        try:
+            icon.notify(f"Could not switch to {mode_name}: {e}", "Govee")
+        except Exception as notify_err:
+            log(f"notify failed: {notify_err}")
     try:
         refresh(icon)
     except Exception as e:

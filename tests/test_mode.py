@@ -163,11 +163,22 @@ class TestSwitchMusic(StateDirMixin, unittest.TestCase):
     def test_music_cmd_start_failure_raises(self):
         """switch("music") raises RuntimeError when cmd_start returns non-zero."""
         config = {"devices": [{"ip": "192.168.1.1"}]}
+        with mock.patch("music_sync.cmd_start", return_value=3):
+            import mode
+            with self.assertRaises(RuntimeError) as cm:
+                mode.switch("music", config)
+        self.assertIn("exit 3", str(cm.exception))
+        # Mode should not be "music" (cmd_start failed before setting it)
+        self.assertNotEqual(arbiter.get_mode(), "music")
+
+    def test_music_cmd_start_exit_2_gives_specific_message(self):
+        """switch("music") with exit 2 raises RuntimeError mentioning requirements-music.txt."""
+        config = {"devices": [{"ip": "192.168.1.1"}]}
         with mock.patch("music_sync.cmd_start", return_value=2):
             import mode
             with self.assertRaises(RuntimeError) as cm:
                 mode.switch("music", config)
-        self.assertIn("exit 2", str(cm.exception))
+        self.assertIn("requirements-music.txt", str(cm.exception))
         # Mode should not be "music" (cmd_start failed before setting it)
         self.assertNotEqual(arbiter.get_mode(), "music")
 

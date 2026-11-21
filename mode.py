@@ -45,6 +45,11 @@ def switch(mode, config, dry_run=False):
     if mode == "music":
         rc = music_sync.cmd_start()
         if rc != 0:
+            if rc == 2:
+                raise RuntimeError(
+                    "music mode needs soundcard and numpy: "
+                    "python -m pip install --user -r requirements-music.txt"
+                )
             raise RuntimeError(f"music mode did not start (exit {rc})")
         return
 
