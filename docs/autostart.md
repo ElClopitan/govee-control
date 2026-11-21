@@ -23,6 +23,14 @@ The install script is re-runnable: running it again replaces the existing tasks.
 
 ## Install
 
+Before installing, install the tray dependencies:
+
+```powershell
+python -m pip install --user -r requirements-tray.txt
+```
+
+Then register the tasks:
+
 ```powershell
 cd C:\path\to\Govee
 powershell -NoProfile -File autostart\install.ps1
@@ -30,12 +38,6 @@ powershell -NoProfile -File autostart\install.ps1
 
 This registers the tasks and starts them immediately. The tasks will also run
 at each logon.
-
-Before installing, install the tray dependencies:
-
-```powershell
-python -m pip install --user -r requirements-tray.txt
-```
 
 Windows hides new tray icons under the "^" arrow in the taskbar; drag the icon
 out to pin it.
@@ -76,16 +78,17 @@ Start-ScheduledTask -TaskName "Govee weather sync"
 
 ## Logs
 
-The scheduled tasks run `pythonw.exe` directly with `--log-file` arguments,
-so output is written to log files with size rotation (1MB per file, 2 backups):
+The weather and game sync tasks run with `--log-file` arguments, so their output
+is written to log files with size rotation (1MB per file, 2 backups):
 
-- `state/weather_sync.log` — weather sync log
-- `state/game_sync.log` — game sync log
-- `state/tray.log` — tray icon log
+- `state/weather_sync.log` — weather sync log (weather fetches, colour changes, errors)
+- `state/game_sync.log` — game sync log (profile switches, signal priority events, errors)
 
-Both scripts use Python's `logging` module. `weather_sync.py` logs weather
-fetches, colour changes, and errors. `game_sync.py` logs profile switches,
-signal priority events, and errors.
+The tray task does not use `--log-file`. `tray.py` writes to `state/tray.log`
+only when something fails (e.g., an exception in the tray loop).
+
+The `autostart/run_tray.cmd` wrapper writes stdout/stderr to `state/tray.out.log`
+while `tray.py`'s own error log is `state/tray.log`.
 
 To see output in real time, run the scripts manually from a terminal:
 
@@ -105,7 +108,7 @@ The scheduled tasks run `pythonw.exe` processes. To stop them:
 
 ```powershell
 # Find the processes
-Get-Process pythonw | Where-Object { $_.CommandLine -like "*weather_sync*" -or $_.CommandLine -like "*game_sync*" -or $_.CommandLine -like "*tray*" }
+Get-Process pythonw | Where-Object { $_.CommandLine -like "*weather_sync*" -or $_.CommandLine -like "*game_sync*" -or $_.CommandLine -like "*tray.py*" }
 
 # Kill them (replace PID with actual process ID)
 Stop-Process -Id <PID>
@@ -138,3 +141,15 @@ If the tasks don't seem to be running:
 3. If registration failed with "Access is denied", make sure you're running
    the install script as a normal user (not admin) and that the script is
    using the `-User` parameter with the AtLogOn trigger.
+
+4. If the "Govee tray" task exits immediately with no icon appearing, pystray
+   or Pillow may be missing. Check the task result:
+   ```powershell
+   Get-ScheduledTaskInfo -TaskName "Govee tray" | Format-List LastRunTime, LastTaskResult
+   ```
+   A `LastTaskResult` of 1 means the task failed. Install the tray dependencies:
+   ```powershell
+   python -m pip install --user -r requirements-tray.txt
+   ```
+   (Task Scheduler's RestartCount does not reliably restart a task that exits
+   with a non-zero code, so the tray icon will not reappear automatically.)
