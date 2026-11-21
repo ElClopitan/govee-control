@@ -727,8 +727,10 @@ class TestToggleCommands(StateDirMixin, unittest.TestCase):
 
     def test_stop_when_not_running(self):
         """stop should report OFF when not running."""
-        with mock.patch("builtins.print") as mock_print:
-            result = music_sync.cmd_stop()
+        with mock.patch("govee.load_config", return_value={"devices": []}):
+            with mock.patch("mode.govee.turn"):
+                with mock.patch("builtins.print") as mock_print:
+                    result = music_sync.cmd_stop()
         self.assertEqual(result, 0)
         mock_print.assert_called_once()
         self.assertIn("OFF", mock_print.call_args[0][0])
@@ -745,8 +747,10 @@ class TestToggleCommands(StateDirMixin, unittest.TestCase):
         with mock.patch.object(music_sync, "_is_process_alive", side_effect=fake_is_alive):
             with mock.patch.object(arbiter, "music_active", return_value=True):
                 with mock.patch.object(music_sync, "_raise_stop_flag") as mock_raise:
-                    with mock.patch("builtins.print"):
-                        result = music_sync.cmd_stop()
+                    with mock.patch("govee.load_config", return_value={"devices": []}):
+                        with mock.patch("mode.govee.turn"):
+                            with mock.patch("builtins.print"):
+                                result = music_sync.cmd_stop()
         self.assertEqual(result, 0)
         mock_raise.assert_called_once()
 
@@ -757,8 +761,10 @@ class TestToggleCommands(StateDirMixin, unittest.TestCase):
             with mock.patch.object(arbiter, "music_active", return_value=True):
                 with mock.patch("subprocess.run") as mock_run:
                     with mock.patch("time.sleep"):
-                        with mock.patch("builtins.print"):
-                            result = music_sync.cmd_stop()
+                        with mock.patch("govee.load_config", return_value={"devices": []}):
+                            with mock.patch("mode.govee.turn"):
+                                with mock.patch("builtins.print"):
+                                    result = music_sync.cmd_stop()
         self.assertEqual(result, 0)
         self.assertTrue(any(
             "taskkill" in str(call) for call in mock_run.call_args_list
@@ -1010,8 +1016,10 @@ class TestToggleCommands(StateDirMixin, unittest.TestCase):
                 with mock.patch("subprocess.run") as mock_run:
                     with mock.patch("time.monotonic", side_effect=fake_monotonic):
                         with mock.patch("time.sleep"):
-                            with mock.patch("builtins.print"):
-                                result = music_sync.cmd_stop()
+                            with mock.patch("govee.load_config", return_value={"devices": []}):
+                                with mock.patch("mode.govee.turn"):
+                                    with mock.patch("builtins.print"):
+                                        result = music_sync.cmd_stop()
         self.assertEqual(result, 0)
         # Should have called taskkill after deadline
         self.assertTrue(any(
@@ -2914,11 +2922,45 @@ class TestModeSwitchMusic(StateDirMixin, unittest.TestCase):
 
                 with mock.patch.object(music_sync, "_is_process_alive", return_value=False):
                     with mock.patch.object(arbiter, "music_active", return_value=True):
-                        with mock.patch("builtins.print"):
-                            music_sync.cmd_stop()
+                        with mock.patch("govee.load_config", return_value={"devices": []}):
+                            with mock.patch("mode.govee.turn"):
+                                with mock.patch("builtins.print"):
+                                    music_sync.cmd_stop()
 
         self.assertEqual(arbiter.get_mode(), "off",
                         "cmd_stop should set mode to 'off'")
+
+    def test_cmd_stop_turns_off_strips(self):
+        """cmd_stop calls mode.switch('off', config) which turns strips off."""
+        arbiter.set_mode("music")
+
+        with mock.patch.object(music_sync, "PID_FILE", self.state_dir / "music_sync.pid"):
+            with mock.patch.object(music_sync, "STOP_FLAG_FILE", self.state_dir / "music_stop"):
+                with mock.patch.object(music_sync, "_get_running_pid", return_value=None):
+                    with mock.patch("govee.load_config") as mock_load:
+                        mock_load.return_value = {"devices": [{"ip": "192.168.1.50"}]}
+                        with mock.patch("mode.govee.turn") as mock_turn:
+                            with mock.patch("builtins.print"):
+                                rc = music_sync.cmd_stop()
+
+        self.assertEqual(rc, 0)
+        mock_load.assert_called_once()
+        mock_turn.assert_called_once_with("192.168.1.50", False)
+        self.assertEqual(arbiter.get_mode(), "off")
+
+    def test_cmd_stop_config_error_still_sets_mode_off(self):
+        """cmd_stop with config error still sets mode to 'off' and returns 0."""
+        arbiter.set_mode("music")
+
+        with mock.patch.object(music_sync, "PID_FILE", self.state_dir / "music_sync.pid"):
+            with mock.patch.object(music_sync, "STOP_FLAG_FILE", self.state_dir / "music_stop"):
+                with mock.patch.object(music_sync, "_get_running_pid", return_value=None):
+                    with mock.patch("govee.load_config", side_effect=OSError("no config")):
+                        with mock.patch("builtins.print"):
+                            rc = music_sync.cmd_stop()
+
+        self.assertEqual(rc, 0)
+        self.assertEqual(arbiter.get_mode(), "off")
 
     def test_cmd_start_sets_mode_music(self):
         """cmd_start sets mode to 'music' before spawning."""
@@ -2977,8 +3019,10 @@ class TestModeSwitchMusic(StateDirMixin, unittest.TestCase):
                     with mock.patch.object(music_sync, "_get_running_pid", return_value=12345):
                         with mock.patch.object(music_sync, "_is_process_alive", return_value=False):
                             with mock.patch.object(arbiter, "music_active", return_value=True):
-                                with mock.patch("builtins.print"):
-                                    rc = music_sync.cmd_toggle()
+                                with mock.patch("govee.load_config", return_value={"devices": []}):
+                                    with mock.patch("mode.govee.turn"):
+                                        with mock.patch("builtins.print"):
+                                            rc = music_sync.cmd_toggle()
 
         self.assertEqual(rc, 0)
         self.assertEqual(arbiter.get_mode(), "off")

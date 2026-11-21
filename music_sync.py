@@ -49,6 +49,9 @@ START_GRACE_SECONDS = 20
 # Silence detection: turn off after this many seconds of silence
 DEFAULT_SILENCE_SECONDS = 2.0
 
+# Default config path (used by cmd_stop and main)
+DEFAULT_CONFIG_PATH = Path(__file__).parent / "config.json"
+
 # Silence level threshold (below this = silent)
 SILENCE_LEVEL_THRESHOLD = 0.05
 
@@ -613,11 +616,17 @@ def cmd_stop():
         _remove_stop_flag()
         arbiter.clear_music_active()
 
-    # Set mode to "off" so music mode doesn't stay active
+    # Set mode to "off" so music mode doesn't stay active.
+    # Use mode.switch() to actually turn the strips off (not just set the mode).
     try:
-        arbiter.set_mode("off")
-    except OSError as e:
-        print(f"warning: failed to set mode to off: {e}", file=sys.stderr)
+        import mode as mode_mod
+        mode_mod.switch("off", govee.load_config(DEFAULT_CONFIG_PATH))
+    except (OSError, ValueError) as e:
+        print(f"warning: failed to switch to off: {e}", file=sys.stderr)
+        try:
+            arbiter.set_mode("off")
+        except OSError as e2:
+            print(f"warning: failed to set mode to off: {e2}", file=sys.stderr)
 
     print("music mode OFF")
     return 0
@@ -1083,7 +1092,7 @@ def main():
     # Legacy options (for running in foreground)
     parser.add_argument(
         "--config",
-        default=str(Path(__file__).parent / "config.json"),
+        default=str(DEFAULT_CONFIG_PATH),
         help="Path to config.json",
     )
     parser.add_argument(
