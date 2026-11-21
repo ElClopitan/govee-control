@@ -2628,10 +2628,10 @@ class TestLogFileArgument(unittest.TestCase):
                 ]):
                     weather_sync.main()
 
-            # Close logger handlers to release file handles (Windows)
-            for handler in weather_sync.logger.handlers[:]:
+            # Close root logger handlers to release file handles (Windows)
+            for handler in logging.root.handlers[:]:
                 handler.close()
-                weather_sync.logger.removeHandler(handler)
+                logging.root.removeHandler(handler)
 
             # Log file should exist and contain log entries
             self.assertTrue(os.path.exists(log_path))

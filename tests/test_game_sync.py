@@ -835,10 +835,10 @@ class TestLogFileArgument(unittest.TestCase):
                 ]):
                     game_sync.main()
 
-            # Close logger handlers to release file handles (Windows)
-            for handler in game_sync.logger.handlers[:]:
+            # Close root logger handlers to release file handles (Windows)
+            for handler in logging.root.handlers[:]:
                 handler.close()
-                game_sync.logger.removeHandler(handler)
+                logging.root.removeHandler(handler)
 
             # Log file should exist and contain log entries
             self.assertTrue(os.path.exists(log_path))
@@ -888,6 +888,7 @@ class TestLogFileArgument(unittest.TestCase):
         import os
         from unittest import mock
         import io
+        import arbiter
 
         with tempfile.TemporaryDirectory() as tmpdir:
             config_path = os.path.join(tmpdir, "config.json")
@@ -901,6 +902,9 @@ class TestLogFileArgument(unittest.TestCase):
             }
             with open(config_path, "w") as f:
                 json.dump(config, f)
+
+            # Set mode to game so game_sync runs
+            arbiter.set_mode("game")
 
             # Mock running_processes to return the game
             with mock.patch("game_sync.running_processes") as mock_procs:
