@@ -13,8 +13,12 @@ Also installs a socket guard that raises AssertionError if any test tries to
 send to or connect to a non-loopback address. Tests that need real network
 should mock govee functions instead.
 
-The suite-wide state dir guard is in tests/__init__.py and applies to all
-tests automatically.
+At import time, this module creates a session tempdir and redirects all
+production state path constants (arbiter.STATE_DIR, agent_signal.STATE_DIR,
+agent_signal.LOCK_FILE, music_sync.STATE_DIR, music_sync.PID_FILE,
+music_sync.STOP_FLAG_FILE, music_sync.LOG_FILE) to paths inside it. It also
+takes a snapshot of the real repo state/ dir so test_zz_state_guard.py can
+detect if any test wrote to the real state/ dir.
 """
 
 import inspect
@@ -86,6 +90,50 @@ if socket.socket.sendto is not _guarded_sendto:
     socket.socket.sendto = _guarded_sendto
 if socket.socket.connect is not _guarded_connect:
     socket.socket.connect = _guarded_connect
+
+
+# Session-wide state dir redirect: create one tempdir for the entire test
+# session and redirect all production state path constants to it. This is
+# done at import time so it applies to all tests automatically.
+#
+# We also take a snapshot of the real repo state/ dir so that
+# test_zz_state_guard.py can detect if any test wrote to the real state/ dir.
+
+import arbiter
+import agent_signal
+import music_sync
+
+# Find the repo root (parent of tests/)
+_TESTS_DIR = Path(__file__).parent
+_REPO_ROOT = _TESTS_DIR.parent
+REAL_STATE_DIR = _REPO_ROOT / "state"
+
+
+def _snapshot_state_dir(state_dir):
+    """Take a snapshot of a state directory: {filename: (size, mtime_ns)}."""
+    if not state_dir.exists():
+        return None
+    snapshot = {}
+    for f in state_dir.iterdir():
+        if f.is_file():
+            stat = f.stat()
+            snapshot[f.name] = (stat.st_size, stat.st_mtime_ns)
+    return snapshot
+
+
+REAL_STATE_SNAPSHOT = _snapshot_state_dir(REAL_STATE_DIR)
+
+# Create session tempdir
+_SESSION_STATE_DIR = Path(tempfile.mkdtemp(prefix="govee-test-state-"))
+
+# Redirect all state path constants to the session tempdir
+arbiter.STATE_DIR = _SESSION_STATE_DIR
+agent_signal.STATE_DIR = _SESSION_STATE_DIR
+agent_signal.LOCK_FILE = _SESSION_STATE_DIR / "agent_signal.lock"
+music_sync.STATE_DIR = _SESSION_STATE_DIR
+music_sync.PID_FILE = _SESSION_STATE_DIR / "music_sync.pid"
+music_sync.STOP_FLAG_FILE = _SESSION_STATE_DIR / "music_stop"
+music_sync.LOG_FILE = _SESSION_STATE_DIR / "music_sync.log"
 
 
 def bounded_clock(step=0.1, limit=1000.0):
