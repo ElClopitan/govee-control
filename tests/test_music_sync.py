@@ -1045,9 +1045,10 @@ class TestToggleCommands(StateDirMixin, unittest.TestCase):
         self.assertEqual(result, 2)
         mock_popen.assert_not_called()
         self.assertFalse(music_sync.PID_FILE.exists())
-        # Check stderr output
+        # Check stderr output includes the missing module name
         self.assertTrue(any(
-            "requirements-music.txt" in str(call) for call in mock_print.call_args_list
+            "soundcard" in str(call) and "requirements-music.txt" in str(call)
+            for call in mock_print.call_args_list
         ))
 
     def test_start_missing_numpy(self):
@@ -1064,8 +1065,10 @@ class TestToggleCommands(StateDirMixin, unittest.TestCase):
         self.assertEqual(result, 2)
         mock_popen.assert_not_called()
         self.assertFalse(music_sync.PID_FILE.exists())
+        # Check stderr output includes the missing module name
         self.assertTrue(any(
-            "requirements-music.txt" in str(call) for call in mock_print.call_args_list
+            "numpy" in str(call) and "requirements-music.txt" in str(call)
+            for call in mock_print.call_args_list
         ))
 
     def test_start_both_deps_found(self):

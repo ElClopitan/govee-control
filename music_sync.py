@@ -546,8 +546,8 @@ def cmd_start(config_path=DEFAULT_CONFIG_PATH, fps=None, verbose=False):
     if importlib.util.find_spec("numpy") is None:
         missing.append("numpy")
     if missing:
-        print("music mode needs: python -m pip install --user -r requirements-music.txt",
-              file=sys.stderr)
+        print("music mode needs %s: python -m pip install --user -r requirements-music.txt"
+              % " and ".join(missing), file=sys.stderr)
         return 2
 
     # Remember previous mode so we can restore it if Popen fails
