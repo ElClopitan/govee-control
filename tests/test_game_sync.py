@@ -802,6 +802,24 @@ class TestBrightnessCap(StateDirMixin, unittest.TestCase):
 class TestLogFileArgument(unittest.TestCase):
     """Test the --log-file argument with size rotation."""
 
+    def setUp(self):
+        """Save original logging state."""
+        self.original_root_handlers = logging.root.handlers[:]
+        self.original_root_level = logging.root.level
+        self.original_excepthook = sys.excepthook
+
+    def tearDown(self):
+        """Restore original logging state."""
+        # Close and remove handlers added during the test
+        for handler in logging.root.handlers[:]:
+            if handler not in self.original_root_handlers:
+                handler.close()
+                logging.root.removeHandler(handler)
+        # Restore original handlers
+        logging.root.handlers = self.original_root_handlers
+        logging.root.setLevel(self.original_root_level)
+        sys.excepthook = self.original_excepthook
+
     def test_log_file_creates_file(self):
         """Running with --log-file creates the log file."""
         import tempfile
