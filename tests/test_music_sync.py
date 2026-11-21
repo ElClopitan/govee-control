@@ -3833,35 +3833,57 @@ class TestForwardingArgs(StateDirMixin, unittest.TestCase):
         self.assertIn("--verbose", cmd)
 
 
-class TestMainLevelForwarding(unittest.TestCase):
-    """Test that main() forwards --fps and --verbose to cmd_start."""
+class TestMainLevelForwarding(StateDirMixin, unittest.TestCase):
+    """Test that main() forwards --fps and --verbose to the child process."""
 
     def test_main_start_fps_verbose(self):
-        """main() with 'start --fps 30 --verbose' should forward to cmd_start."""
+        """main() with 'start --fps 30 --verbose' should forward to child."""
         with mock.patch("sys.argv", ["music_sync.py", "start", "--fps", "30", "--verbose"]):
-            with mock.patch.object(music_sync, "cmd_start") as mock_start:
-                mock_start.return_value = 0
-                try:
-                    music_sync.main()
-                except SystemExit:
-                    pass
-        mock_start.assert_called_once()
-        call_kwargs = mock_start.call_args[1]
-        self.assertEqual(call_kwargs["fps"], 30)
-        self.assertTrue(call_kwargs["verbose"])
+            with mock.patch("music_sync._get_running_pid", return_value=None):
+                with mock.patch("importlib.util.find_spec", return_value=mock.Mock()):
+                    with mock.patch("subprocess.Popen") as mock_popen:
+                        with mock.patch("music_sync._write_pid"):
+                            with mock.patch("music_sync._ensure_state_dir"):
+                                with mock.patch("music_sync._remove_stop_flag"):
+                                    with mock.patch.object(arbiter, "get_mode", return_value="weather"):
+                                        with mock.patch.object(arbiter, "set_mode"):
+                                            mock_proc = mock.Mock()
+                                            mock_proc.pid = 12345
+                                            mock_popen.return_value = mock_proc
+                                            with mock.patch("builtins.print"):
+                                                try:
+                                                    music_sync.main()
+                                                except SystemExit:
+                                                    pass
+        call_args = mock_popen.call_args
+        cmd = call_args[0][0]
+        self.assertIn("--fps", cmd)
+        fps_idx = cmd.index("--fps")
+        self.assertEqual(cmd[fps_idx + 1], "30")
+        self.assertIn("--verbose", cmd)
 
     def test_main_verbose_before_start(self):
-        """main() with '--verbose start' should forward --verbose to cmd_start."""
+        """main() with '--verbose start' should forward --verbose to child."""
         with mock.patch("sys.argv", ["music_sync.py", "--verbose", "start"]):
-            with mock.patch.object(music_sync, "cmd_start") as mock_start:
-                mock_start.return_value = 0
-                try:
-                    music_sync.main()
-                except SystemExit:
-                    pass
-        mock_start.assert_called_once()
-        call_kwargs = mock_start.call_args[1]
-        self.assertTrue(call_kwargs["verbose"])
+            with mock.patch("music_sync._get_running_pid", return_value=None):
+                with mock.patch("importlib.util.find_spec", return_value=mock.Mock()):
+                    with mock.patch("subprocess.Popen") as mock_popen:
+                        with mock.patch("music_sync._write_pid"):
+                            with mock.patch("music_sync._ensure_state_dir"):
+                                with mock.patch("music_sync._remove_stop_flag"):
+                                    with mock.patch.object(arbiter, "get_mode", return_value="weather"):
+                                        with mock.patch.object(arbiter, "set_mode"):
+                                            mock_proc = mock.Mock()
+                                            mock_proc.pid = 12345
+                                            mock_popen.return_value = mock_proc
+                                            with mock.patch("builtins.print"):
+                                                try:
+                                                    music_sync.main()
+                                                except SystemExit:
+                                                    pass
+        call_args = mock_popen.call_args
+        cmd = call_args[0][0]
+        self.assertIn("--verbose", cmd)
 
 
 if __name__ == "__main__":
