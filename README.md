@@ -388,7 +388,12 @@ The mode system uses file-based state in the `state/` directory:
 - `state/signal_sessions/` — per-session marker files; one file per Claude session that raised the signal
 - `state/music_active.json` — exists when music sync is active (contains pid and timestamp); music sync rewrites this file at least every 5 seconds as a heartbeat, and if it's older than 15 seconds it's considered stale
 - `state/game_active.json` — exists when game sync is active (contains the profile name); game sync rewrites this file every loop iteration as a heartbeat, and if it's older than 60 seconds it's considered stale
-- `state/mode.json` — contains the currently selected mode
+- `state/mode.json` — contains the currently selected mode (weather | game | music | off); if it is missing the mode is "off"
+- `state/music_sync.pid` — pid of the background music process started by `music_sync.py start` / the tray
+- `state/music_stop` — stop flag; `music_sync.py stop` creates it and the music process exits when it sees it
+- `state/music_sync.log` — log of the background music process (rotated at 1 MB, 2 backups)
+- `state/signal.log` — log of agent signal hooks
+- `state/tray.log` — tray errors (failed mode switches, refresh errors)
 - `state/agent_signal.lock` — lock file used to serialise concurrent agent signal hooks
 
 Concurrent `needs-input` and `clear` hooks are serialised with `state/agent_signal.lock` to prevent race conditions where multiple Claude sessions run the hooks simultaneously.
