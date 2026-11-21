@@ -79,17 +79,31 @@ class TestDominantColor(unittest.TestCase):
         self.assertLess(b, 50)
 
     def test_few_survivors_fallback(self):
-        """If fewer than 5% survive filtering, use all pixels."""
+        """If fewer than 5% survive filtering, return mean of all pixels."""
         pixels = []
-        # All near-black (will be filtered)
+        # 99 near-black pixels (will be filtered)
         for _ in range(99):
             pixels.append((10, 10, 10))
-        # One bright pixel
-        pixels.append((255, 0, 0))
+        # 1 bright blue pixel (would win hue binning without fallback)
+        pixels.append((0, 0, 255))
         # Only 1% survives, so fallback to mean of all
         r, g, b = screen_color.dominant_color(pixels, 10, 10)
-        # Mean of all pixels should be low
-        self.assertLess(r, 50)
+        # Mean: r=(990+0)//100=9, g=9, b=(990+255)//100=12
+        self.assertEqual((r, g, b), (9, 9, 12))
+
+    def test_few_survivors_grey_fallback(self):
+        """Fallback works with near-grey pixels too."""
+        pixels = []
+        # 97 near-grey pixels (will be filtered)
+        for _ in range(97):
+            pixels.append((128, 128, 128))
+        # 3 bright green pixels
+        for _ in range(3):
+            pixels.append((0, 200, 0))
+        # Only 3% survives, so fallback to mean of all
+        r, g, b = screen_color.dominant_color(pixels, 10, 10)
+        # Mean: r=(97*128)//100=124, g=(97*128+3*200)//100=130, b=124
+        self.assertEqual((r, g, b), (124, 130, 124))
 
 
 class TestGrabSmall(unittest.TestCase):

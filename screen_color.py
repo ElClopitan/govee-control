@@ -73,9 +73,16 @@ def dominant_color(pixels, width, height):
             continue  # near-grey
         colored.append((r, g, b))
 
-    # If fewer than 5% survive, use all pixels
+    # If fewer than 5% survive, return mean of all pixels (no binning)
     if len(colored) < total * 0.05:
-        colored = pixels
+        r_sum = sum(p[0] for p in pixels)
+        g_sum = sum(p[1] for p in pixels)
+        b_sum = sum(p[2] for p in pixels)
+        return (
+            int(r_sum / total),
+            int(g_sum / total),
+            int(b_sum / total),
+        )
 
     # Bucket into 12 hue bins (30 degrees each), weighted by saturation
     bins = [[] for _ in range(12)]
@@ -95,17 +102,6 @@ def dominant_color(pixels, width, height):
 
     # Return mean colour of the heaviest bin
     bin_pixels = bins[best_bin]
-    if not bin_pixels:
-        # Fallback: mean of all pixels
-        r_sum = sum(p[0] for p in pixels)
-        g_sum = sum(p[1] for p in pixels)
-        b_sum = sum(p[2] for p in pixels)
-        return (
-            int(r_sum / total),
-            int(g_sum / total),
-            int(b_sum / total),
-        )
-
     r_sum = sum(p[0] for p in bin_pixels)
     g_sum = sum(p[1] for p in bin_pixels)
     b_sum = sum(p[2] for p in bin_pixels)
