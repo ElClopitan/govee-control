@@ -13,6 +13,7 @@ Modes: off, weather, game, music
 
 import argparse
 import sys
+import time
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent))
@@ -61,13 +62,16 @@ def switch(mode, config, dry_run=False):
     if mode == "off":
         got_lock = agent_signal.acquire_lock()
         try:
-            for dev in config.get("devices", []):
-                ip = dev.get("ip")
-                if ip:
-                    try:
-                        govee.turn(ip, False)
-                    except OSError as e:
-                        print(f"warning: failed to turn off {ip}: {e}", file=sys.stderr)
+            for attempt in range(3):
+                for dev in config.get("devices", []):
+                    ip = dev.get("ip")
+                    if ip:
+                        try:
+                            govee.turn(ip, False)
+                        except OSError as e:
+                            print(f"warning: failed to turn off {ip}: {e}", file=sys.stderr)
+                if attempt < 2:
+                    time.sleep(0.2)
         finally:
             if got_lock:
                 agent_signal.release_lock()

@@ -19,12 +19,13 @@ class TestSwitchOff(StateDirMixin, unittest.TestCase):
     """Test switch("off") behaviour."""
 
     def test_off_sends_turn_off_per_device(self):
-        """switch("off") sends turn off once per device."""
+        """switch("off") sends turn off 3 times per device."""
         config = {"devices": [{"ip": "192.168.1.1"}, {"ip": "192.168.1.2"}]}
         with mock.patch("govee.turn") as mock_turn:
-            import mode
-            mode.switch("off", config)
-        self.assertEqual(mock_turn.call_count, 2)
+            with mock.patch("time.sleep"):
+                import mode
+                mode.switch("off", config)
+        self.assertEqual(mock_turn.call_count, 6)
         mock_turn.assert_any_call("192.168.1.1", False)
         mock_turn.assert_any_call("192.168.1.2", False)
 
@@ -34,9 +35,10 @@ class TestSwitchOff(StateDirMixin, unittest.TestCase):
         # Create saved_state.json to simulate active signal
         (arbiter.STATE_DIR / "saved_state.json").write_text("[]")
         with mock.patch("govee.turn") as mock_turn:
-            import mode
-            mode.switch("off", config)
-        self.assertEqual(mock_turn.call_count, 2)
+            with mock.patch("time.sleep"):
+                import mode
+                mode.switch("off", config)
+        self.assertEqual(mock_turn.call_count, 6)
         mock_turn.assert_any_call("192.168.1.1", False)
         mock_turn.assert_any_call("192.168.1.2", False)
         # saved_state.json should still exist (clear handles it)
@@ -48,9 +50,10 @@ class TestSwitchOff(StateDirMixin, unittest.TestCase):
         with mock.patch("agent_signal.acquire_lock", return_value=False):
             with mock.patch("agent_signal.release_lock") as mock_release:
                 with mock.patch("govee.turn") as mock_turn:
-                    import mode
-                    mode.switch("off", config)
-        self.assertEqual(mock_turn.call_count, 2)
+                    with mock.patch("time.sleep"):
+                        import mode
+                        mode.switch("off", config)
+        self.assertEqual(mock_turn.call_count, 6)
         mock_turn.assert_any_call("192.168.1.1", False)
         mock_turn.assert_any_call("192.168.1.2", False)
         mock_release.assert_not_called()
@@ -112,9 +115,36 @@ class TestSwitchOff(StateDirMixin, unittest.TestCase):
         """switch("off") catches OSError per device and continues."""
         config = {"devices": [{"ip": "192.168.1.1"}, {"ip": "192.168.1.2"}]}
         import mode
-        with mock.patch("govee.turn", side_effect=[OSError("fail"), None]) as mock_turn:
-            mode.switch("off", config)
-        self.assertEqual(mock_turn.call_count, 2)
+        with mock.patch("govee.turn", side_effect=[OSError("fail")] * 6) as mock_turn:
+            with mock.patch("time.sleep"):
+                mode.switch("off", config)
+        self.assertEqual(mock_turn.call_count, 6)
+
+    def test_off_sends_three_times_per_device(self):
+        """switch("off") sends turn off 3 times per device with 0.2s sleep between attempts."""
+        config = {"devices": [{"ip": "192.168.1.1"}, {"ip": "192.168.1.2"}]}
+        with mock.patch("govee.turn") as mock_turn:
+            with mock.patch("time.sleep") as mock_sleep:
+                import mode
+                mode.switch("off", config)
+        # 2 devices × 3 attempts = 6 calls
+        self.assertEqual(mock_turn.call_count, 6)
+        # All calls should be turn off (False)
+        for call in mock_turn.call_args_list:
+            self.assertEqual(call[0][1], False)
+        # Sleep called twice (between attempts 1-2 and 2-3)
+        self.assertEqual(mock_sleep.call_count, 2)
+        for call in mock_sleep.call_args_list:
+            self.assertEqual(call[0][0], 0.2)
+
+    def test_off_oserror_first_call_still_sends_all(self):
+        """switch("off") with OSError on first call still sends all 6 attempts."""
+        config = {"devices": [{"ip": "192.168.1.1"}, {"ip": "192.168.1.2"}]}
+        import mode
+        with mock.patch("govee.turn", side_effect=[OSError("fail")] + [None] * 5) as mock_turn:
+            with mock.patch("time.sleep"):
+                mode.switch("off", config)
+        self.assertEqual(mock_turn.call_count, 6)
 
 
 class TestSwitchWeather(StateDirMixin, unittest.TestCase):
