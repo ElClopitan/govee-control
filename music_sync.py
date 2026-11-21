@@ -507,7 +507,7 @@ def _raise_stop_flag():
     STOP_FLAG_FILE.write_text(str(time.time()))
 
 
-def cmd_start(config_path=DEFAULT_CONFIG_PATH):
+def cmd_start(config_path=DEFAULT_CONFIG_PATH, fps=None, verbose=False):
     """Start music sync as a background process."""
     pid = _get_running_pid()
     if pid is not None:
@@ -559,6 +559,10 @@ def cmd_start(config_path=DEFAULT_CONFIG_PATH):
         "--log-file",
         str(LOG_FILE),
     ]
+    if fps is not None:
+        cmd.extend(["--fps", str(fps)])
+    if verbose:
+        cmd.append("--verbose")
 
     # Start detached on Windows
     try:
@@ -634,13 +638,13 @@ def cmd_stop(config_path=DEFAULT_CONFIG_PATH):
     return 0
 
 
-def cmd_toggle(config_path=DEFAULT_CONFIG_PATH):
+def cmd_toggle(config_path=DEFAULT_CONFIG_PATH, fps=None, verbose=False):
     """Toggle music sync on/off."""
     pid = _get_running_pid()
     if pid is not None:
         return cmd_stop(config_path)
     else:
-        return cmd_start(config_path)
+        return cmd_start(config_path, fps=fps, verbose=verbose)
 
 
 def cmd_status():
@@ -1076,6 +1080,8 @@ def main():
   python music_sync.py --fps 15 --verbose
   python music_sync.py --log-file music.log
   python music_sync.py start
+  python music_sync.py start --config x.json
+  python music_sync.py --config x.json start
   python music_sync.py stop
   python music_sync.py toggle
   python music_sync.py status
@@ -1085,19 +1091,48 @@ def main():
     # Subcommands
     subparsers = parser.add_subparsers(dest="command", help="Command to run")
 
+    # Common options for subcommands (accepted after the subcommand)
+    def add_common_args(subparser):
+        subparser.add_argument(
+            "--config",
+            default=argparse.SUPPRESS,
+            help="Path to config.json",
+        )
+        subparser.add_argument(
+            "--fps",
+            type=int,
+            default=argparse.SUPPRESS,
+            help="Frames per second (default: 10, range 2-20)",
+        )
+        subparser.add_argument(
+            "--verbose",
+            action="store_true",
+            default=argparse.SUPPRESS,
+            help="Enable verbose logging",
+        )
+        subparser.add_argument(
+            "--log-file",
+            default=argparse.SUPPRESS,
+            help="Log to this file with size rotation (1MB, 2 backups)",
+        )
+
     # start
-    subparsers.add_parser("start", help="Start music sync in background")
+    start_parser = subparsers.add_parser("start", help="Start music sync in background")
+    add_common_args(start_parser)
 
     # stop
-    subparsers.add_parser("stop", help="Stop music sync")
+    stop_parser = subparsers.add_parser("stop", help="Stop music sync")
+    add_common_args(stop_parser)
 
     # toggle
-    subparsers.add_parser("toggle", help="Toggle music sync on/off")
+    toggle_parser = subparsers.add_parser("toggle", help="Toggle music sync on/off")
+    add_common_args(toggle_parser)
 
     # status
-    subparsers.add_parser("status", help="Show music sync status")
+    status_parser = subparsers.add_parser("status", help="Show music sync status")
+    add_common_args(status_parser)
 
-    # Legacy options (for running in foreground)
+    # Legacy options (for running in foreground, accepted before the subcommand)
     parser.add_argument(
         "--config",
         default=str(DEFAULT_CONFIG_PATH),
@@ -1122,13 +1157,24 @@ def main():
 
     args = parser.parse_args()
 
+    # If a subcommand was given and it has its own --config, use that
+    # (argparse.SUPPRESS means the attribute doesn't exist if not given)
+    if args.command in ("start", "stop", "toggle"):
+        config_path = getattr(args, "config", args.config)
+        fps = getattr(args, "fps", args.fps)
+        verbose = getattr(args, "verbose", args.verbose)
+    else:
+        config_path = args.config
+        fps = args.fps
+        verbose = args.verbose
+
     # Handle subcommands
     if args.command == "start":
-        sys.exit(cmd_start(args.config))
+        sys.exit(cmd_start(config_path, fps=fps, verbose=verbose))
     elif args.command == "stop":
-        sys.exit(cmd_stop(args.config))
+        sys.exit(cmd_stop(config_path))
     elif args.command == "toggle":
-        sys.exit(cmd_toggle(args.config))
+        sys.exit(cmd_toggle(config_path, fps=fps, verbose=verbose))
     elif args.command == "status":
         sys.exit(cmd_status())
 

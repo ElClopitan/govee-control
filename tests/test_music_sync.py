@@ -3749,8 +3749,96 @@ class TestCmdToggleConfigPath(unittest.TestCase):
             with mock.patch.object(music_sync, "cmd_start") as mock_start:
                 mock_start.return_value = 0
                 result = music_sync.cmd_toggle("x.json")
-        mock_start.assert_called_once_with("x.json")
+        mock_start.assert_called_once_with("x.json", fps=None, verbose=False)
         self.assertEqual(result, 0)
+
+
+class TestArgparseConfigAfterSubcommand(unittest.TestCase):
+    """Test that --config is accepted both before and after the subcommand."""
+
+    def test_config_before_subcommand(self):
+        """--config before subcommand should work."""
+        with mock.patch("sys.argv", ["music_sync.py", "--config", "x.json", "start"]):
+            with mock.patch("music_sync.cmd_start") as mock_start:
+                mock_start.return_value = 0
+                try:
+                    music_sync.main()
+                except SystemExit:
+                    pass
+        mock_start.assert_called_once()
+        call_args = mock_start.call_args
+        # First positional arg is config_path
+        self.assertEqual(call_args[0][0], "x.json")
+
+    def test_config_after_subcommand(self):
+        """--config after subcommand should work."""
+        with mock.patch("sys.argv", ["music_sync.py", "start", "--config", "x.json"]):
+            with mock.patch("music_sync.cmd_start") as mock_start:
+                mock_start.return_value = 0
+                try:
+                    music_sync.main()
+                except SystemExit:
+                    pass
+        mock_start.assert_called_once()
+        call_args = mock_start.call_args
+        # First positional arg is config_path
+        self.assertEqual(call_args[0][0], "x.json")
+
+    def test_fps_forwarded_to_child(self):
+        """--fps should be forwarded to the child process."""
+        with mock.patch("music_sync._get_running_pid", return_value=None):
+            with mock.patch("importlib.util.find_spec", return_value=mock.Mock()):
+                with mock.patch("subprocess.Popen") as mock_popen:
+                    with mock.patch("music_sync._write_pid"):
+                        with mock.patch("music_sync._ensure_state_dir"):
+                            with mock.patch("music_sync._remove_stop_flag"):
+                                mock_proc = mock.Mock()
+                                mock_proc.pid = 12345
+                                mock_popen.return_value = mock_proc
+                                with mock.patch("builtins.print"):
+                                    music_sync.cmd_start("x.json", fps=30)
+        call_args = mock_popen.call_args
+        cmd = call_args[0][0]
+        self.assertIn("--fps", cmd)
+        fps_idx = cmd.index("--fps")
+        self.assertEqual(cmd[fps_idx + 1], "30")
+
+    def test_verbose_forwarded_to_child(self):
+        """--verbose should be forwarded to the child process."""
+        with mock.patch("music_sync._get_running_pid", return_value=None):
+            with mock.patch("importlib.util.find_spec", return_value=mock.Mock()):
+                with mock.patch("subprocess.Popen") as mock_popen:
+                    with mock.patch("music_sync._write_pid"):
+                        with mock.patch("music_sync._ensure_state_dir"):
+                            with mock.patch("music_sync._remove_stop_flag"):
+                                mock_proc = mock.Mock()
+                                mock_proc.pid = 12345
+                                mock_popen.return_value = mock_proc
+                                with mock.patch("builtins.print"):
+                                    music_sync.cmd_start("x.json", verbose=True)
+        call_args = mock_popen.call_args
+        cmd = call_args[0][0]
+        self.assertIn("--verbose", cmd)
+
+    def test_fps_and_verbose_forwarded_to_child(self):
+        """Both --fps and --verbose should be forwarded to the child process."""
+        with mock.patch("music_sync._get_running_pid", return_value=None):
+            with mock.patch("importlib.util.find_spec", return_value=mock.Mock()):
+                with mock.patch("subprocess.Popen") as mock_popen:
+                    with mock.patch("music_sync._write_pid"):
+                        with mock.patch("music_sync._ensure_state_dir"):
+                            with mock.patch("music_sync._remove_stop_flag"):
+                                mock_proc = mock.Mock()
+                                mock_proc.pid = 12345
+                                mock_popen.return_value = mock_proc
+                                with mock.patch("builtins.print"):
+                                    music_sync.cmd_start("x.json", fps=30, verbose=True)
+        call_args = mock_popen.call_args
+        cmd = call_args[0][0]
+        self.assertIn("--fps", cmd)
+        fps_idx = cmd.index("--fps")
+        self.assertEqual(cmd[fps_idx + 1], "30")
+        self.assertIn("--verbose", cmd)
 
 
 if __name__ == "__main__":
