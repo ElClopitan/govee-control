@@ -2942,12 +2942,15 @@ class TestModeSwitchMusic(StateDirMixin, unittest.TestCase):
                     with mock.patch("govee.load_config") as mock_load:
                         mock_load.return_value = {"devices": [{"ip": "192.168.1.50"}]}
                         with mock.patch("mode.govee.turn") as mock_turn:
-                            with mock.patch("builtins.print"):
-                                rc = music_sync.cmd_stop()
+                            with mock.patch("time.sleep"):
+                                with mock.patch("builtins.print"):
+                                    rc = music_sync.cmd_stop()
 
         self.assertEqual(rc, 0)
         mock_load.assert_called_once()
-        mock_turn.assert_called_once_with("192.168.1.50", False)
+        # mode.switch("off") now sends turn off 3 times per device
+        self.assertEqual(mock_turn.call_count, 3)
+        mock_turn.assert_called_with("192.168.1.50", False)
         self.assertEqual(arbiter.get_mode(), "off")
 
     def test_cmd_stop_config_error_still_sets_mode_off(self):
