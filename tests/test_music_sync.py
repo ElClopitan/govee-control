@@ -1323,10 +1323,10 @@ class TestToggleCommands(StateDirMixin, unittest.TestCase):
                                 mock_stop_flag.exists = fake_stop_flag_exists
                                 music_sync.run({"devices": [{"ip": "1.2.3.4"}]}, fps=10, time_fn=fake_time_fn)
 
-        # Should have turned off once due to no device
+        # Should have turned off once due to no device, plus once more when exiting due to stop flag
         turn_off_calls = [c for c in govee_calls if c[0] == "turn" and not c[2]]
-        self.assertEqual(len(turn_off_calls), 1,
-                        "Expected exactly one turn-off call due to no device")
+        self.assertEqual(len(turn_off_calls), 2,
+                        "Expected two turn-off calls (no device + stop flag exit)")
         # PID file should be removed
         self.assertFalse(music_sync.PID_FILE.exists(),
                         "run() should have removed its own PID file")
@@ -2575,10 +2575,10 @@ class TestModeSwitchStep3(StateDirMixin, unittest.TestCase):
                                 mock_stop_flag.exists = fake_stop_flag_exists
                                 music_sync.run({"devices": [{"ip": "1.2.3.4"}]}, fps=10, time_fn=fake_time_fn)
 
-        # Should have turned off once due to no device
+        # Should have turned off once due to no device, plus once more when exiting due to stop flag
         turn_off_calls = [c for c in govee_calls if c[0] == "turn" and not c[2]]
-        self.assertEqual(len(turn_off_calls), 1,
-                        f"Expected exactly one turn-off call, got {len(turn_off_calls)}")
+        self.assertEqual(len(turn_off_calls), 2,
+                        f"Expected two turn-off calls (no device + stop flag exit), got {len(turn_off_calls)}")
         # Mode should still be "music"
         self.assertEqual(arbiter.get_mode(), "music",
                         "Mode should still be 'music' after no-device exit")
@@ -3483,6 +3483,197 @@ class TestSilenceOffRetry(StateDirMixin, unittest.TestCase):
         turn_off_calls = [c for c in turn_calls if not c[1]]
         self.assertGreater(len(turn_off_calls), 1,
                           f"Expected multiple turn-off attempts, got {len(turn_off_calls)}")
+
+
+class TestStopFlagNoRestore(StateDirMixin, unittest.TestCase):
+    """Test that run() does not restore initial state when exiting due to stop flag."""
+
+    def test_stop_flag_no_restore_turns_off(self):
+        """When run() exits due to stop flag, it should turn strips off, not restore."""
+        self.set_mode("music")
+
+        # Track govee calls
+        govee_calls = []
+
+        def fake_color(ip, r, g, b):
+            govee_calls.append(("color", ip, r, g, b))
+
+        def fake_brightness(ip, b):
+            govee_calls.append(("brightness", ip, b))
+
+        def fake_turn(ip, on):
+            govee_calls.append(("turn", ip, on))
+
+        fake_time_fn = bounded_clock()
+
+        # Create a fake recorder
+        fake_rec = mock.Mock()
+        fake_rec.__enter__ = mock.Mock(return_value=fake_rec)
+        fake_rec.__exit__ = mock.Mock(return_value=False)
+
+        frame_count = [0]
+
+        def fake_record(numframes):
+            frame_count[0] += 1
+            # Stop flag will be raised after first frame
+            if frame_count[0] >= 2:
+                raise KeyboardInterrupt()
+            return mock.Mock(ndim=1, shape=(1024,), dtype="float64")
+
+        fake_rec.record = mock.Mock(side_effect=fake_record)
+
+        fake_mic = mock.Mock()
+        fake_mic.name = "Stereo Mix (loopback)"
+        fake_mic.isloopback = True
+        fake_mic.recorder = mock.Mock(return_value=fake_rec)
+
+        fake_speaker = mock.Mock()
+        fake_speaker.name = "Stereo Mix (loopback)"
+
+        fake_sc = mock.Mock()
+        fake_sc.default_speaker = mock.Mock(return_value=fake_speaker)
+        fake_sc.get_microphone = mock.Mock(return_value=fake_mic)
+        fake_sc.all_microphones = mock.Mock(return_value=[fake_mic])
+
+        # Stop flag appears after first frame
+        stop_flag_raised = [False]
+
+        def fake_stop_flag_exists():
+            return stop_flag_raised[0]
+
+        with mock.patch.dict(sys.modules, {
+            "soundcard": fake_sc,
+            "numpy": mock.Mock(),
+        }):
+            with mock.patch.object(music_sync, "govee") as mock_govee:
+                mock_govee.color = fake_color
+                mock_govee.brightness = fake_brightness
+                mock_govee.turn = fake_turn
+                mock_govee.status = mock.Mock(return_value={"msg": {"data": {"brightness": 50, "color": {"r": 255, "g": 0, "b": 0}}}})
+                with mock.patch("time.sleep"):
+                    with mock.patch.object(music_sync, "STOP_FLAG_FILE") as mock_stop_flag:
+                        with mock.patch.object(music_sync, "PID_FILE", self.state_dir / "music_sync.pid"):
+                            mock_stop_flag.exists = fake_stop_flag_exists
+                            # Raise stop flag after first frame
+                            def raise_flag_after_first():
+                                if frame_count[0] == 1:
+                                    stop_flag_raised[0] = True
+                            with mock.patch.object(music_sync, "analyze", side_effect=lambda s, r: (raise_flag_after_first(), {"level": 0.5, "bass": 0.5, "mid": 0.5, "treble": 0.5})[1]):
+                                music_sync.run(
+                                    {"devices": [{"ip": "1.2.3.4"}]},
+                                    fps=10,
+                                    time_fn=fake_time_fn,
+                                )
+
+        # Should have turned off (not restored)
+        turn_off_calls = [c for c in govee_calls if c[0] == "turn" and not c[2]]
+        self.assertGreater(len(turn_off_calls), 0,
+                          "Expected turn-off call when exiting due to stop flag")
+        # Should NOT have restored brightness or color
+        # Initial brightness call is expected (setting to 80 at start)
+        # But no restore brightness call (which would be a second brightness call)
+        brightness_calls = [c for c in govee_calls if c[0] == "brightness"]
+        # Only the initial brightness call, no restore
+        self.assertEqual(len(brightness_calls), 1,
+                        f"Expected 1 brightness call (initial only), got {len(brightness_calls)}")
+        # One color call from the first frame is expected; no restore color call
+        color_calls = [c for c in govee_calls if c[0] == "color"]
+        self.assertEqual(len(color_calls), 1,
+                        f"Expected 1 color call (first frame only, no restore), got {len(color_calls)}")
+
+    def test_keyboard_interrupt_still_restores(self):
+        """KeyboardInterrupt from the recorder should still restore initial state."""
+        self.set_mode("music")
+
+        # Track govee calls
+        govee_calls = []
+
+        def fake_color(ip, r, g, b):
+            govee_calls.append(("color", ip, r, g, b))
+
+        def fake_brightness(ip, b):
+            govee_calls.append(("brightness", ip, b))
+
+        def fake_turn(ip, on):
+            govee_calls.append(("turn", ip, on))
+
+        fake_time_fn = bounded_clock()
+
+        # Create a fake recorder that raises KeyboardInterrupt on first frame
+        fake_rec = mock.Mock()
+        fake_rec.__enter__ = mock.Mock(return_value=fake_rec)
+        fake_rec.__exit__ = mock.Mock(return_value=False)
+        fake_rec.record.side_effect = KeyboardInterrupt()
+
+        fake_mic = mock.Mock()
+        fake_mic.name = "Stereo Mix (loopback)"
+        fake_mic.isloopback = True
+        fake_mic.recorder = mock.Mock(return_value=fake_rec)
+
+        fake_speaker = mock.Mock()
+        fake_speaker.name = "Stereo Mix (loopback)"
+
+        fake_sc = mock.Mock()
+        fake_sc.default_speaker = mock.Mock(return_value=fake_speaker)
+        fake_sc.get_microphone = mock.Mock(return_value=fake_mic)
+        fake_sc.all_microphones = mock.Mock(return_value=[fake_mic])
+
+        with mock.patch.dict(sys.modules, {
+            "soundcard": fake_sc,
+            "numpy": mock.Mock(),
+        }):
+            with mock.patch.object(music_sync, "govee") as mock_govee:
+                mock_govee.color = fake_color
+                mock_govee.brightness = fake_brightness
+                mock_govee.turn = fake_turn
+                mock_govee.status = mock.Mock(return_value={"msg": {"data": {"brightness": 50, "color": {"r": 255, "g": 0, "b": 0}}}})
+                with mock.patch("time.sleep"):
+                    with mock.patch.object(music_sync, "STOP_FLAG_FILE", self.state_dir / "music_stop"):
+                        with mock.patch.object(music_sync, "PID_FILE", self.state_dir / "music_sync.pid"):
+                            try:
+                                music_sync.run(
+                                    {"devices": [{"ip": "1.2.3.4"}]},
+                                    fps=10,
+                                    time_fn=fake_time_fn,
+                                )
+                            except KeyboardInterrupt:
+                                pass
+
+        # Should have restored brightness and color
+        brightness_calls = [c for c in govee_calls if c[0] == "brightness"]
+        # Initial brightness call (setting to 80) + restore call (back to 50)
+        self.assertEqual(len(brightness_calls), 2,
+                        f"Expected 2 brightness calls (initial + restore), got {len(brightness_calls)}")
+        # Restore color call
+        color_calls = [c for c in govee_calls if c[0] == "color"]
+        self.assertEqual(len(color_calls), 1,
+                        f"Expected 1 color call (restore), got {len(color_calls)}")
+        # No turn-off call (restore, not turn off)
+        turn_off_calls = [c for c in govee_calls if c[0] == "turn" and not c[2]]
+        self.assertEqual(len(turn_off_calls), 0,
+                        f"Expected no turn-off call (restore, not turn off), got {len(turn_off_calls)}")
+
+
+class TestCmdStopConfigPath(unittest.TestCase):
+    """Test that cmd_stop respects the --config path."""
+
+    def test_cmd_stop_uses_config_path(self):
+        """cmd_stop should call govee.load_config with the provided config path."""
+        with mock.patch("govee.load_config") as mock_load_config:
+            mock_load_config.return_value = {"devices": []}
+            with mock.patch("mode.govee.turn"):
+                with mock.patch("builtins.print"):
+                    music_sync.cmd_stop("x.json")
+        mock_load_config.assert_called_once_with("x.json")
+
+    def test_cmd_stop_default_config_path(self):
+        """cmd_stop with no argument should use DEFAULT_CONFIG_PATH."""
+        with mock.patch("govee.load_config") as mock_load_config:
+            mock_load_config.return_value = {"devices": []}
+            with mock.patch("mode.govee.turn"):
+                with mock.patch("builtins.print"):
+                    music_sync.cmd_stop()
+        mock_load_config.assert_called_once_with(music_sync.DEFAULT_CONFIG_PATH)
 
 
 if __name__ == "__main__":

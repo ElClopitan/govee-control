@@ -593,7 +593,7 @@ def cmd_start():
     return 0
 
 
-def cmd_stop():
+def cmd_stop(config_path=DEFAULT_CONFIG_PATH):
     """Stop the running music sync process and set mode to off."""
     pid = _get_running_pid()
     if pid is not None:
@@ -620,7 +620,7 @@ def cmd_stop():
     # Use mode.switch() to actually turn the strips off (not just set the mode).
     try:
         import mode as mode_mod
-        mode_mod.switch("off", govee.load_config(DEFAULT_CONFIG_PATH))
+        mode_mod.switch("off", govee.load_config(config_path))
     except (OSError, ValueError) as e:
         print(f"warning: failed to switch to off: {e}", file=sys.stderr)
         try:
@@ -729,6 +729,7 @@ def run(config, fps=None, verbose=False, log_file=None, time_fn=None):
 
         # Track exit reason to decide whether to restore
         exit_due_to_mode_change = False
+        exit_due_to_stop_flag = False
 
         # Track if we were in silence before signal became active
         was_silent_before_signal = False
@@ -796,6 +797,7 @@ def run(config, fps=None, verbose=False, log_file=None, time_fn=None):
                 # even while an agent signal is active
                 if STOP_FLAG_FILE.exists():
                     logger.info("stop flag detected; exiting")
+                    exit_due_to_stop_flag = True
                     break
 
                 # Check mode: if not "music", exit cleanly (new mode's script will light strips)
@@ -1030,10 +1032,14 @@ def run(config, fps=None, verbose=False, log_file=None, time_fn=None):
 
             # Don't restore over an active signal (agent_signal clear will handle it)
             # Also don't restore when exiting due to mode change (new mode's script will light strips)
+            # Also don't restore when exiting due to stop flag (cmd_stop will turn strips off)
             if arbiter.signal_active():
                 logger.info("signal active; not restoring (agent_signal clear will)")
             elif exit_due_to_mode_change:
                 logger.info("exiting due to mode change; not restoring (new mode will light strips)")
+            elif exit_due_to_stop_flag:
+                logger.info("stop requested; turning strips off")
+                _turn_all(devices, False)
             else:
                 # Restore initial state
                 for state in initial_states:
@@ -1118,7 +1124,7 @@ def main():
     if args.command == "start":
         sys.exit(cmd_start())
     elif args.command == "stop":
-        sys.exit(cmd_stop())
+        sys.exit(cmd_stop(args.config))
     elif args.command == "toggle":
         sys.exit(cmd_toggle())
     elif args.command == "status":
