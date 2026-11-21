@@ -178,9 +178,10 @@ class TestRunOnce(StateDirMixin, unittest.TestCase):
         }
 
     @mock.patch("weather_sync.fetch_weather")
+    @mock.patch("govee.turn")
     @mock.patch("govee.color")
     @mock.patch("govee.brightness")
-    def test_weather_color_applied(self, mock_brightness, mock_color, mock_fetch):
+    def test_weather_color_applied(self, mock_brightness, mock_color, mock_turn, mock_fetch):
         """Weather colour is applied to devices."""
         mock_fetch.return_value = {
             "temperature_2m": 25.0,
@@ -198,9 +199,10 @@ class TestRunOnce(StateDirMixin, unittest.TestCase):
         mock_brightness.assert_called_with("192.168.1.50", 50)
 
     @mock.patch("weather_sync.fetch_weather")
+    @mock.patch("govee.turn")
     @mock.patch("govee.color")
     @mock.patch("govee.brightness")
-    def test_night_color(self, mock_brightness, mock_color, mock_fetch):
+    def test_night_color(self, mock_brightness, mock_color, mock_turn, mock_fetch):
         """Night clear sky uses deep blue."""
         mock_fetch.return_value = {
             "temperature_2m": 15.0,
@@ -215,9 +217,10 @@ class TestRunOnce(StateDirMixin, unittest.TestCase):
         mock_color.assert_called_with("192.168.1.50", 26, 35, 126)
 
     @mock.patch("weather_sync.fetch_weather")
+    @mock.patch("govee.turn")
     @mock.patch("govee.color")
     @mock.patch("govee.brightness")
-    def test_rain_color(self, mock_brightness, mock_color, mock_fetch):
+    def test_rain_color(self, mock_brightness, mock_color, mock_turn, mock_fetch):
         """Rain uses blue (static, patterns disabled)."""
         mock_fetch.return_value = {
             "temperature_2m": 12.0,
@@ -233,9 +236,10 @@ class TestRunOnce(StateDirMixin, unittest.TestCase):
         mock_color.assert_called_with("192.168.1.50", 30, 136, 229)
 
     @mock.patch("weather_sync.fetch_weather")
+    @mock.patch("govee.turn")
     @mock.patch("govee.color")
     @mock.patch("govee.brightness")
-    def test_multiple_devices(self, mock_brightness, mock_color, mock_fetch):
+    def test_multiple_devices(self, mock_brightness, mock_color, mock_turn, mock_fetch):
         """All devices get the colour."""
         mock_fetch.return_value = {
             "temperature_2m": 20.0,
@@ -262,9 +266,10 @@ class TestRunOnce(StateDirMixin, unittest.TestCase):
         self.assertGreaterEqual(mock_brightness.call_count, 1)
 
     @mock.patch("weather_sync.fetch_weather")
+    @mock.patch("govee.turn")
     @mock.patch("govee.color")
     @mock.patch("govee.brightness")
-    def test_night_brightness_default(self, mock_brightness, mock_color, mock_fetch):
+    def test_night_brightness_default(self, mock_brightness, mock_color, mock_turn, mock_fetch):
         """Night mode uses default night_brightness of 30."""
         mock_fetch.return_value = {
             "temperature_2m": 15.0,
@@ -280,9 +285,10 @@ class TestRunOnce(StateDirMixin, unittest.TestCase):
         mock_brightness.assert_called_with("192.168.1.50", 30)
 
     @mock.patch("weather_sync.fetch_weather")
+    @mock.patch("govee.turn")
     @mock.patch("govee.color")
     @mock.patch("govee.brightness")
-    def test_night_brightness_configured(self, mock_brightness, mock_color, mock_fetch):
+    def test_night_brightness_configured(self, mock_brightness, mock_color, mock_turn, mock_fetch):
         """Night mode uses configured night_brightness."""
         mock_fetch.return_value = {
             "temperature_2m": 15.0,
@@ -299,11 +305,12 @@ class TestRunOnce(StateDirMixin, unittest.TestCase):
         mock_brightness.assert_called_with("192.168.1.50", 40)
 
     @mock.patch("weather_sync.fetch_weather")
+    @mock.patch("govee.turn")
     @mock.patch("govee.color")
     @mock.patch("govee.brightness")
     @mock.patch("time.sleep")
     @mock.patch("time.time")
-    def test_day_night_transition_switches_pattern(self, mock_time, mock_sleep, mock_brightness, mock_color, mock_fetch):
+    def test_day_night_transition_switches_pattern(self, mock_time, mock_sleep, mock_brightness, mock_color, mock_turn, mock_fetch):
         """When is_day changes, pattern and brightness switch."""
         mock_time.return_value = 1000.0
 
@@ -402,8 +409,9 @@ class TestNetworkError(StateDirMixin, unittest.TestCase):
         self.addCleanup(p.stop)
 
     @mock.patch("weather_sync.fetch_weather")
+    @mock.patch("govee.turn")
     @mock.patch("time.sleep")
-    def test_network_error_once_mode(self, mock_sleep, mock_fetch):
+    def test_network_error_once_mode(self, mock_sleep, mock_turn, mock_fetch):
         """Network error in --once mode exits non-zero."""
         import arbiter
         import urllib.error
@@ -418,11 +426,12 @@ class TestNetworkError(StateDirMixin, unittest.TestCase):
             weather_sync.run(config, once=True)
         self.assertEqual(ctx.exception.code, 1)
 
+    @mock.patch("govee.turn")
     @mock.patch("govee.color")
     @mock.patch("govee.brightness")
     @mock.patch("weather_sync.fetch_weather")
     @mock.patch("time.sleep")
-    def test_network_error_loop_mode(self, mock_sleep, mock_fetch, mock_brightness, mock_color):
+    def test_network_error_loop_mode(self, mock_sleep, mock_fetch, mock_brightness, mock_color, mock_turn):
         """Network error in loop mode retries (doesn't crash)."""
         import arbiter
         import urllib.error
@@ -465,8 +474,9 @@ class TestNetworkError(StateDirMixin, unittest.TestCase):
 
 
     @mock.patch("weather_sync.fetch_weather")
+    @mock.patch("govee.turn")
     @mock.patch("time.sleep")
-    def test_connection_reset_once_mode(self, mock_sleep, mock_fetch):
+    def test_connection_reset_once_mode(self, mock_sleep, mock_turn, mock_fetch):
         """ConnectionResetError in --once mode exits non-zero."""
         import arbiter
         arbiter.set_mode("weather")
@@ -480,11 +490,12 @@ class TestNetworkError(StateDirMixin, unittest.TestCase):
             weather_sync.run(config, once=True)
         self.assertEqual(ctx.exception.code, 1)
 
+    @mock.patch("govee.turn")
     @mock.patch("govee.color")
     @mock.patch("govee.brightness")
     @mock.patch("weather_sync.fetch_weather")
     @mock.patch("time.sleep")
-    def test_govee_color_oserror_loop_mode(self, mock_sleep, mock_fetch, mock_brightness, mock_color):
+    def test_govee_color_oserror_loop_mode(self, mock_sleep, mock_fetch, mock_brightness, mock_color, mock_turn):
         """govee.color OSError in loop mode retries (doesn't crash)."""
         mock_fetch.return_value = {
             "temperature_2m": 20.0,
@@ -523,8 +534,9 @@ class TestNetworkError(StateDirMixin, unittest.TestCase):
         self.assertEqual(call_count[0], 2)
 
     @mock.patch("weather_sync.fetch_weather")
+    @mock.patch("govee.turn")
     @mock.patch("time.sleep")
-    def test_null_weather_code_once_mode(self, mock_sleep, mock_fetch):
+    def test_null_weather_code_once_mode(self, mock_sleep, mock_turn, mock_fetch):
         """Null weather_code in --once mode exits non-zero."""
         mock_fetch.return_value = {
             "temperature_2m": 20.0,
@@ -540,10 +552,11 @@ class TestNetworkError(StateDirMixin, unittest.TestCase):
         self.assertEqual(ctx.exception.code, 1)
 
     @mock.patch("weather_sync.fetch_weather")
+    @mock.patch("govee.turn")
     @mock.patch("govee.color")
     @mock.patch("govee.brightness")
     @mock.patch("time.sleep")
-    def test_null_temperature_once_mode(self, mock_sleep, mock_brightness, mock_color, mock_fetch):
+    def test_null_temperature_once_mode(self, mock_sleep, mock_brightness, mock_color, mock_turn, mock_fetch):
         """Null temperature_2m in --once mode exits non-zero and does not send color."""
         mock_fetch.return_value = {
             "temperature_2m": None,
@@ -636,9 +649,10 @@ class TestPriority(StateDirMixin, unittest.TestCase):
         }
 
     @mock.patch("weather_sync.fetch_weather")
+    @mock.patch("govee.turn")
     @mock.patch("govee.color")
     @mock.patch("govee.brightness")
-    def test_mode_not_weather_skips_send(self, mock_brightness, mock_color, mock_fetch):
+    def test_mode_not_weather_skips_send(self, mock_brightness, mock_color, mock_turn, mock_fetch):
         """When mode is not weather, weather sync does not send to lights."""
         import arbiter
         arbiter.set_mode("game")
@@ -657,9 +671,10 @@ class TestPriority(StateDirMixin, unittest.TestCase):
         mock_brightness.assert_not_called()
 
     @mock.patch("weather_sync.fetch_weather")
+    @mock.patch("govee.turn")
     @mock.patch("govee.color")
     @mock.patch("govee.brightness")
-    def test_signal_active_skips_send(self, mock_brightness, mock_color, mock_fetch):
+    def test_signal_active_skips_send(self, mock_brightness, mock_color, mock_turn, mock_fetch):
         """When signal is active, weather sync does not send to lights."""
         import arbiter
         arbiter.set_mode("weather")
@@ -679,9 +694,10 @@ class TestPriority(StateDirMixin, unittest.TestCase):
         mock_brightness.assert_not_called()
 
     @mock.patch("weather_sync.fetch_weather")
+    @mock.patch("govee.turn")
     @mock.patch("govee.color")
     @mock.patch("govee.brightness")
-    def test_mode_weather_sends_color(self, mock_brightness, mock_color, mock_fetch):
+    def test_mode_weather_sends_color(self, mock_brightness, mock_color, mock_turn, mock_fetch):
         """When mode is weather and no signal, weather sync sends color."""
         import arbiter
         arbiter.set_mode("weather")
@@ -700,9 +716,10 @@ class TestPriority(StateDirMixin, unittest.TestCase):
         mock_color.assert_called_with("192.168.1.50", 255, 210, 127)
 
     @mock.patch("weather_sync.fetch_weather")
+    @mock.patch("govee.turn")
     @mock.patch("govee.color")
     @mock.patch("govee.brightness")
-    def test_mode_weather_allows_weather(self, mock_brightness, mock_color, mock_fetch):
+    def test_mode_weather_allows_weather(self, mock_brightness, mock_color, mock_turn, mock_fetch):
         """When mode is weather, weather sync sends color."""
         import arbiter
         arbiter.set_mode("weather")
@@ -721,10 +738,11 @@ class TestPriority(StateDirMixin, unittest.TestCase):
         mock_color.assert_called_with("192.168.1.50", 255, 210, 127)
 
     @mock.patch("weather_sync.fetch_weather")
+    @mock.patch("govee.turn")
     @mock.patch("govee.color")
     @mock.patch("govee.brightness")
     @mock.patch("time.sleep")
-    def test_reapply_after_priority_clear_survives_failure(self, mock_sleep, mock_brightness, mock_color, mock_fetch):
+    def test_reapply_after_priority_clear_survives_failure(self, mock_sleep, mock_brightness, mock_color, mock_turn, mock_fetch):
         """After priority clears, re-apply even if first attempt fails.
 
         Pass 1: sends colour X
@@ -794,10 +812,11 @@ class TestBlockedPollInterval(StateDirMixin, unittest.TestCase):
         }
 
     @mock.patch("weather_sync.fetch_weather")
+    @mock.patch("govee.turn")
     @mock.patch("govee.color")
     @mock.patch("govee.brightness")
     @mock.patch("time.sleep")
-    def test_blocked_uses_shorter_interval(self, mock_sleep, mock_brightness, mock_color, mock_fetch):
+    def test_blocked_uses_shorter_interval(self, mock_sleep, mock_brightness, mock_color, mock_turn, mock_fetch):
         """When blocked by signal, sleep uses min(interval, 10) not full interval."""
         import arbiter
         # Create signal file to block weather sync
@@ -828,10 +847,11 @@ class TestBlockedPollInterval(StateDirMixin, unittest.TestCase):
         mock_sleep.assert_called_with(10)
 
     @mock.patch("weather_sync.fetch_weather")
+    @mock.patch("govee.turn")
     @mock.patch("govee.color")
     @mock.patch("govee.brightness")
     @mock.patch("time.sleep")
-    def test_blocked_recheck_uses_shorter_interval(self, mock_sleep, mock_brightness, mock_color, mock_fetch):
+    def test_blocked_recheck_uses_shorter_interval(self, mock_sleep, mock_brightness, mock_color, mock_turn, mock_fetch):
         """When blocked during re-check before send, sleep uses min(interval, 10)."""
         import arbiter
 
@@ -881,9 +901,10 @@ class TestPriorityRecheckBeforeSend(StateDirMixin, unittest.TestCase):
         }
 
     @mock.patch("weather_sync.fetch_weather")
+    @mock.patch("govee.turn")
     @mock.patch("govee.color")
     @mock.patch("govee.brightness")
-    def test_signal_during_fetch_skips_send(self, mock_brightness, mock_color, mock_fetch):
+    def test_signal_during_fetch_skips_send(self, mock_brightness, mock_color, mock_turn, mock_fetch):
         """If signal becomes active during weather fetch, skip sending.
 
         This tests the re-check just before the send loop. The signal file
@@ -911,9 +932,10 @@ class TestPriorityRecheckBeforeSend(StateDirMixin, unittest.TestCase):
         mock_brightness.assert_not_called()
 
     @mock.patch("weather_sync.fetch_weather")
+    @mock.patch("govee.turn")
     @mock.patch("govee.color")
     @mock.patch("govee.brightness")
-    def test_mode_change_during_fetch_skips_send(self, mock_brightness, mock_color, mock_fetch):
+    def test_mode_change_during_fetch_skips_send(self, mock_brightness, mock_color, mock_turn, mock_fetch):
         """If mode changes during weather fetch, skip sending."""
         import arbiter
 
@@ -936,10 +958,11 @@ class TestPriorityRecheckBeforeSend(StateDirMixin, unittest.TestCase):
         mock_brightness.assert_not_called()
 
     @mock.patch("weather_sync.fetch_weather")
+    @mock.patch("govee.turn")
     @mock.patch("govee.color")
     @mock.patch("govee.brightness")
     @mock.patch("time.sleep")
-    def test_one_skip_log_per_block(self, mock_sleep, mock_brightness, mock_color, mock_fetch):
+    def test_one_skip_log_per_block(self, mock_sleep, mock_brightness, mock_color, mock_turn, mock_fetch):
         """Only one 'skipped:' log line per blocked period, not two.
 
         When the re-check branch fires (signal/game became active during
@@ -984,6 +1007,139 @@ class TestPriorityRecheckBeforeSend(StateDirMixin, unittest.TestCase):
                          + "; ".join(r.getMessage() for r in skipped_records))
 
 
+class TestPowerOnAfterBlock(StateDirMixin, unittest.TestCase):
+    """Test that weather sync powers on strips after being blocked."""
+
+    def setUp(self):
+        super().setUp()
+        self.set_mode("weather")
+        p = mock.patch("agent_signal.sweep_and_restore")
+        p.start()
+        self.addCleanup(p.stop)
+
+    def _make_config(self):
+        return {
+            "devices": [{"name": "left", "ip": "192.168.1.50"}],
+            "weather": {"latitude": 51.5, "longitude": -0.1, "brightness": 50},
+        }
+
+    @mock.patch("weather_sync.fetch_weather")
+    @mock.patch("govee.turn")
+    @mock.patch("govee.color")
+    @mock.patch("govee.brightness")
+    @mock.patch("time.sleep")
+    def test_power_on_after_mode_block(self, mock_sleep, mock_brightness, mock_color, mock_turn, mock_fetch):
+        """Mode off -> mode weather -> first pass calls turn(True) before color."""
+        import arbiter
+
+        # Start in off mode
+        arbiter.set_mode("off")
+
+        mock_fetch.return_value = {
+            "temperature_2m": 20.0,
+            "weather_code": 0,
+            "is_day": 1,
+        }
+        config = self._make_config()
+
+        # Switch to weather mode on first sleep
+        sleep_count = [0]
+        def sleep_side_effect(seconds):
+            sleep_count[0] += 1
+            if sleep_count[0] == 1:
+                arbiter.set_mode("weather")
+            if sleep_count[0] >= 2:
+                raise KeyboardInterrupt()
+
+        mock_sleep.side_effect = sleep_side_effect
+
+        try:
+            weather_sync.run(config, once=False, interval=1)
+        except KeyboardInterrupt:
+            pass
+
+        # Should have called turn(True) once before color
+        self.assertEqual(mock_turn.call_count, 1)
+        mock_turn.assert_called_with("192.168.1.50", True)
+        # Color should have been sent
+        self.assertEqual(mock_color.call_count, 1)
+
+    @mock.patch("weather_sync.fetch_weather")
+    @mock.patch("govee.turn")
+    @mock.patch("govee.color")
+    @mock.patch("govee.brightness")
+    @mock.patch("time.sleep")
+    def test_power_on_not_repeated(self, mock_sleep, mock_brightness, mock_color, mock_turn, mock_fetch):
+        """turn(True) is called only once, not on every pass."""
+        import arbiter
+
+        arbiter.set_mode("weather")
+
+        mock_fetch.return_value = {
+            "temperature_2m": 20.0,
+            "weather_code": 0,
+            "is_day": 1,
+        }
+        config = self._make_config()
+
+        sleep_count = [0]
+        def sleep_side_effect(seconds):
+            sleep_count[0] += 1
+            if sleep_count[0] >= 3:
+                raise KeyboardInterrupt()
+
+        mock_sleep.side_effect = sleep_side_effect
+
+        try:
+            weather_sync.run(config, once=False, interval=1)
+        except KeyboardInterrupt:
+            pass
+
+        # turn(True) should be called only once
+        self.assertEqual(mock_turn.call_count, 1)
+        mock_turn.assert_called_with("192.168.1.50", True)
+
+    @mock.patch("weather_sync.fetch_weather")
+    @mock.patch("govee.turn")
+    @mock.patch("govee.color")
+    @mock.patch("govee.brightness")
+    @mock.patch("time.sleep")
+    def test_turn_oserror_retried(self, mock_sleep, mock_brightness, mock_color, mock_turn, mock_fetch):
+        """OSError on turn -> retried next pass."""
+        import arbiter
+
+        arbiter.set_mode("weather")
+
+        mock_fetch.return_value = {
+            "temperature_2m": 20.0,
+            "weather_code": 0,
+            "is_day": 1,
+        }
+        config = self._make_config()
+
+        # First turn call fails, second succeeds
+        mock_turn.side_effect = [OSError("network unreachable"), None]
+
+        sleep_count = [0]
+        def sleep_side_effect(seconds):
+            sleep_count[0] += 1
+            if sleep_count[0] >= 2:
+                raise KeyboardInterrupt()
+
+        mock_sleep.side_effect = sleep_side_effect
+
+        try:
+            weather_sync.run(config, once=False, interval=1)
+        except KeyboardInterrupt:
+            pass
+
+        # turn should have been called twice (failed first, succeeded second)
+        self.assertEqual(mock_turn.call_count, 2)
+        # Both calls should be turn on
+        self.assertEqual(mock_turn.call_args_list[0][0], ("192.168.1.50", True))
+        self.assertEqual(mock_turn.call_args_list[1][0], ("192.168.1.50", True))
+
+
 class TestBrightnessCap(StateDirMixin, unittest.TestCase):
     """Test that brightness is capped at max_brightness (default 80)."""
 
@@ -991,10 +1147,11 @@ class TestBrightnessCap(StateDirMixin, unittest.TestCase):
         super().setUp()
         self.set_mode("weather")
 
+    @mock.patch("weather_sync.govee.turn")
     @mock.patch("weather_sync.govee.color")
     @mock.patch("weather_sync.govee.brightness")
     @mock.patch("weather_sync.fetch_weather")
-    def test_weather_brightness_capped_at_80(self, mock_fetch, mock_brightness, mock_color):
+    def test_weather_brightness_capped_at_80(self, mock_fetch, mock_brightness, mock_color, mock_turn):
         """Weather brightness of 100 is capped to 80 (default max_brightness)."""
 
         mock_fetch.return_value = {
@@ -1242,11 +1399,12 @@ class TestPatternLoop(StateDirMixin, unittest.TestCase):
         }
 
     @mock.patch("weather_sync.fetch_weather")
+    @mock.patch("govee.turn")
     @mock.patch("govee.color")
     @mock.patch("govee.brightness")
     @mock.patch("time.sleep")
     @mock.patch("time.time")
-    def test_pattern_sends_frames(self, mock_time, mock_sleep, mock_brightness, mock_color, mock_fetch):
+    def test_pattern_sends_frames(self, mock_time, mock_sleep, mock_brightness, mock_color, mock_turn, mock_fetch):
         """Pattern mode sends frames at frame_interval."""
         mock_time.return_value = 1000.0
         mock_fetch.return_value = {
@@ -1275,11 +1433,12 @@ class TestPatternLoop(StateDirMixin, unittest.TestCase):
         self.assertGreaterEqual(mock_color.call_count, 2)
 
     @mock.patch("weather_sync.fetch_weather")
+    @mock.patch("govee.turn")
     @mock.patch("govee.color")
     @mock.patch("govee.brightness")
     @mock.patch("time.sleep")
     @mock.patch("time.time")
-    def test_pattern_blocked_by_signal(self, mock_time, mock_sleep, mock_brightness, mock_color, mock_fetch):
+    def test_pattern_blocked_by_signal(self, mock_time, mock_sleep, mock_brightness, mock_color, mock_turn, mock_fetch):
         """Pattern sends nothing while signal is active."""
         import arbiter
         mock_time.return_value = 1000.0
@@ -1299,11 +1458,12 @@ class TestPatternLoop(StateDirMixin, unittest.TestCase):
         mock_brightness.assert_not_called()
 
     @mock.patch("weather_sync.fetch_weather")
+    @mock.patch("govee.turn")
     @mock.patch("govee.color")
     @mock.patch("govee.brightness")
     @mock.patch("time.sleep")
     @mock.patch("time.time")
-    def test_pattern_resumes_after_signal(self, mock_time, mock_sleep, mock_brightness, mock_color, mock_fetch):
+    def test_pattern_resumes_after_signal(self, mock_time, mock_sleep, mock_brightness, mock_color, mock_turn, mock_fetch):
         """Pattern resumes after signal clears."""
         import arbiter
         mock_time.return_value = 1000.0
@@ -1339,11 +1499,12 @@ class TestPatternLoop(StateDirMixin, unittest.TestCase):
         self.assertGreater(mock_color.call_count, 0)
 
     @mock.patch("weather_sync.fetch_weather")
+    @mock.patch("govee.turn")
     @mock.patch("govee.color")
     @mock.patch("govee.brightness")
     @mock.patch("time.sleep")
     @mock.patch("time.time")
-    def test_pattern_brightness_capped(self, mock_time, mock_sleep, mock_brightness, mock_color, mock_fetch):
+    def test_pattern_brightness_capped(self, mock_time, mock_sleep, mock_brightness, mock_color, mock_turn, mock_fetch):
         """Pattern brightness never exceeds max_brightness (80)."""
         mock_time.return_value = 1000.0
         mock_fetch.return_value = {
@@ -1373,11 +1534,12 @@ class TestPatternLoop(StateDirMixin, unittest.TestCase):
             self.assertLessEqual(call[0][1], 80)
 
     @mock.patch("weather_sync.fetch_weather")
+    @mock.patch("govee.turn")
     @mock.patch("govee.color")
     @mock.patch("govee.brightness")
     @mock.patch("time.sleep")
     @mock.patch("time.time")
-    def test_patterns_disabled_uses_static(self, mock_time, mock_sleep, mock_brightness, mock_color, mock_fetch):
+    def test_patterns_disabled_uses_static(self, mock_time, mock_sleep, mock_brightness, mock_color, mock_turn, mock_fetch):
         """When patterns_enabled is false, use static color."""
         mock_time.return_value = 1000.0
         mock_fetch.return_value = {
@@ -1422,11 +1584,12 @@ class TestPatternFetchInterval(StateDirMixin, unittest.TestCase):
         }
 
     @mock.patch("weather_sync.fetch_weather")
+    @mock.patch("govee.turn")
     @mock.patch("govee.color")
     @mock.patch("govee.brightness")
     @mock.patch("time.sleep")
     @mock.patch("time.time")
-    def test_pattern_mode_fetches_once_per_interval(self, mock_time, mock_sleep, mock_brightness, mock_color, mock_fetch):
+    def test_pattern_mode_fetches_once_per_interval(self, mock_time, mock_sleep, mock_brightness, mock_color, mock_turn, mock_fetch):
         """In pattern mode, fetch_weather is called once per interval, not per frame."""
         mock_time.return_value = 1000.0
         mock_fetch.return_value = {
@@ -1457,11 +1620,12 @@ class TestPatternFetchInterval(StateDirMixin, unittest.TestCase):
         self.assertGreater(mock_color.call_count, 10)
 
     @mock.patch("weather_sync.fetch_weather")
+    @mock.patch("govee.turn")
     @mock.patch("govee.color")
     @mock.patch("govee.brightness")
     @mock.patch("time.sleep")
     @mock.patch("time.time")
-    def test_pattern_mode_refetches_after_interval(self, mock_time, mock_sleep, mock_brightness, mock_color, mock_fetch):
+    def test_pattern_mode_refetches_after_interval(self, mock_time, mock_sleep, mock_brightness, mock_color, mock_turn, mock_fetch):
         """After interval elapses, weather is fetched again (interval-based mode)."""
         mock_time.return_value = 1000.0
         mock_fetch.return_value = {
@@ -1517,11 +1681,12 @@ class TestPerStripBrightness(StateDirMixin, unittest.TestCase):
         }
 
     @mock.patch("weather_sync.fetch_weather")
+    @mock.patch("govee.turn")
     @mock.patch("govee.color")
     @mock.patch("govee.brightness")
     @mock.patch("time.sleep")
     @mock.patch("time.time")
-    def test_both_strips_receive_brightness(self, mock_time, mock_sleep, mock_brightness, mock_color, mock_fetch):
+    def test_both_strips_receive_brightness(self, mock_time, mock_sleep, mock_brightness, mock_color, mock_turn, mock_fetch):
         """Both strips receive a brightness command in pattern mode."""
         mock_time.return_value = 1000.0
         mock_fetch.return_value = {
@@ -1552,9 +1717,10 @@ class TestPerStripBrightness(StateDirMixin, unittest.TestCase):
         self.assertIn("192.168.1.51", brightness_ips)
 
     @mock.patch("weather_sync.fetch_weather")
+    @mock.patch("govee.turn")
     @mock.patch("govee.color")
     @mock.patch("govee.brightness")
-    def test_both_strips_receive_brightness_static(self, mock_brightness, mock_color, mock_fetch):
+    def test_both_strips_receive_brightness_static(self, mock_brightness, mock_color, mock_turn, mock_fetch):
         """Both strips receive a brightness command in static mode."""
         mock_fetch.return_value = {
             "temperature_2m": 20.0,
@@ -1608,11 +1774,12 @@ class TestFrameErrorRateLimit(StateDirMixin, unittest.TestCase):
         }
 
     @mock.patch("weather_sync.fetch_weather")
+    @mock.patch("govee.turn")
     @mock.patch("govee.color")
     @mock.patch("govee.brightness")
     @mock.patch("time.sleep")
     @mock.patch("time.time")
-    def test_frame_errors_rate_limited(self, mock_time, mock_sleep, mock_brightness, mock_color, mock_fetch):
+    def test_frame_errors_rate_limited(self, mock_time, mock_sleep, mock_brightness, mock_color, mock_turn, mock_fetch):
         """10 consecutive frame errors within 60s produce at most one error log."""
         import arbiter
         arbiter.set_mode("weather")
@@ -1676,10 +1843,11 @@ class TestThunderstormPattern(StateDirMixin, unittest.TestCase):
         }
 
     @mock.patch("weather_sync.fetch_weather")
+    @mock.patch("govee.turn")
     @mock.patch("govee.color")
     @mock.patch("govee.brightness")
     @mock.patch("time.sleep")
-    def test_thunderstorm_pattern_selected(self, mock_sleep, mock_brightness, mock_color, mock_fetch):
+    def test_thunderstorm_pattern_selected(self, mock_sleep, mock_brightness, mock_color, mock_turn, mock_fetch):
         """Thunderstorm weather code selects thunderstorm pattern."""
         mock_fetch.return_value = {
             "temperature_2m": 22.0,
@@ -1706,10 +1874,11 @@ class TestThunderstormPattern(StateDirMixin, unittest.TestCase):
         self.assertGreater(mock_color.call_count, 0)
 
     @mock.patch("weather_sync.fetch_weather")
+    @mock.patch("govee.turn")
     @mock.patch("govee.color")
     @mock.patch("govee.brightness")
     @mock.patch("time.sleep")
-    def test_flash_sends_100_then_returns_to_80(self, mock_sleep, mock_brightness, mock_color, mock_fetch):
+    def test_flash_sends_100_then_returns_to_80(self, mock_sleep, mock_brightness, mock_color, mock_turn, mock_fetch):
         """A flash sends brightness 100 then returns to <= 80."""
         import random
         mock_fetch.return_value = {
@@ -1760,10 +1929,11 @@ class TestThunderstormPattern(StateDirMixin, unittest.TestCase):
                                 "After flash, brightness should return to <= 80")
 
     @mock.patch("weather_sync.fetch_weather")
+    @mock.patch("govee.turn")
     @mock.patch("govee.color")
     @mock.patch("govee.brightness")
     @mock.patch("time.sleep")
-    def test_no_flash_when_arbiter_blocks(self, mock_sleep, mock_brightness, mock_color, mock_fetch):
+    def test_no_flash_when_arbiter_blocks(self, mock_sleep, mock_brightness, mock_color, mock_turn, mock_fetch):
         """No flash when signal/game has priority."""
         import arbiter
         import random
@@ -1787,10 +1957,11 @@ class TestThunderstormPattern(StateDirMixin, unittest.TestCase):
         mock_brightness.assert_not_called()
 
     @mock.patch("weather_sync.fetch_weather")
+    @mock.patch("govee.turn")
     @mock.patch("govee.color")
     @mock.patch("govee.brightness")
     @mock.patch("time.sleep")
-    def test_non_flash_frames_never_exceed_80(self, mock_sleep, mock_brightness, mock_color, mock_fetch):
+    def test_non_flash_frames_never_exceed_80(self, mock_sleep, mock_brightness, mock_color, mock_turn, mock_fetch):
         """Non-flash frames never exceed brightness 80."""
         import random
         mock_fetch.return_value = {
@@ -1850,10 +2021,11 @@ class TestThunderstormDoubleFlash(StateDirMixin, unittest.TestCase):
         }
 
     @mock.patch("weather_sync.fetch_weather")
+    @mock.patch("govee.turn")
     @mock.patch("govee.color")
     @mock.patch("govee.brightness")
     @mock.patch("time.sleep")
-    def test_double_flash_sends_base_frame_in_gap(self, mock_sleep, mock_brightness, mock_color, mock_fetch):
+    def test_double_flash_sends_base_frame_in_gap(self, mock_sleep, mock_brightness, mock_color, mock_turn, mock_fetch):
         """Double flash: flash 100 -> base <= 80 -> flash 100 -> base <= 80.
 
         Uses a seeded RNG where random() < 0.3 forces the double flash.
@@ -1926,10 +2098,11 @@ class TestThunderstormDoubleFlash(StateDirMixin, unittest.TestCase):
                              f"Expected base frame <= 80 between flashes, got {last_before_second[1]}")
 
     @mock.patch("weather_sync.fetch_weather")
+    @mock.patch("govee.turn")
     @mock.patch("govee.color")
     @mock.patch("govee.brightness")
     @mock.patch("time.sleep")
-    def test_flash_intervals_within_range(self, mock_sleep, mock_brightness, mock_color, mock_fetch):
+    def test_flash_intervals_within_range(self, mock_sleep, mock_brightness, mock_color, mock_turn, mock_fetch):
         """Across >= 50 flashes, every gap is within [6, 20] seconds."""
         import random
 
@@ -1985,10 +2158,11 @@ class TestThunderstormDoubleFlash(StateDirMixin, unittest.TestCase):
                                  f"Flash interval {interval} > 20.0 at flash {i}")
 
     @mock.patch("weather_sync.fetch_weather")
+    @mock.patch("govee.turn")
     @mock.patch("govee.color")
     @mock.patch("govee.brightness")
     @mock.patch("time.sleep")
-    def test_arbiter_blocks_second_flash(self, mock_sleep, mock_brightness, mock_color, mock_fetch):
+    def test_arbiter_blocks_second_flash(self, mock_sleep, mock_brightness, mock_color, mock_turn, mock_fetch):
         """If arbiter activates between flashes, second flash is skipped."""
         import random
         import arbiter
@@ -2071,10 +2245,11 @@ class TestThunderstormSignalRace(StateDirMixin, unittest.TestCase):
         }
 
     @mock.patch("weather_sync.fetch_weather")
+    @mock.patch("govee.turn")
     @mock.patch("govee.color")
     @mock.patch("govee.brightness")
     @mock.patch("time.sleep")
-    def test_signal_during_flash_stops_writes(self, mock_sleep, mock_brightness, mock_color, mock_fetch):
+    def test_signal_during_flash_stops_writes(self, mock_sleep, mock_brightness, mock_color, mock_turn, mock_fetch):
         """Signal raised during flash_duration sleep: no writes after signal."""
         import random
         import arbiter
@@ -2142,10 +2317,11 @@ class TestThunderstormSignalRace(StateDirMixin, unittest.TestCase):
                          f"Expected 0 calls after signal, got {calls_after_signal[0]}")
 
     @mock.patch("weather_sync.fetch_weather")
+    @mock.patch("govee.turn")
     @mock.patch("govee.color")
     @mock.patch("govee.brightness")
     @mock.patch("time.sleep")
-    def test_signal_during_double_flash_gap_stops_writes(self, mock_sleep, mock_brightness, mock_color, mock_fetch):
+    def test_signal_during_double_flash_gap_stops_writes(self, mock_sleep, mock_brightness, mock_color, mock_turn, mock_fetch):
         """Signal raised during double-flash gap: no writes after signal."""
         import random
         import arbiter
@@ -2197,10 +2373,11 @@ class TestThunderstormSignalRace(StateDirMixin, unittest.TestCase):
                          f"Expected 1 flash, got {len(flash_calls)}")
 
     @mock.patch("weather_sync.fetch_weather")
+    @mock.patch("govee.turn")
     @mock.patch("govee.color")
     @mock.patch("govee.brightness")
     @mock.patch("time.sleep")
-    def test_signal_before_first_flash_recheck(self, mock_sleep, mock_brightness, mock_color, mock_fetch):
+    def test_signal_before_first_flash_recheck(self, mock_sleep, mock_brightness, mock_color, mock_turn, mock_fetch):
         """Signal active before first flash re-check: no flash, no base frame."""
         import random
         import arbiter
@@ -2402,11 +2579,12 @@ class TestFetchOnTheHour(StateDirMixin, unittest.TestCase):
         }
 
     @mock.patch("weather_sync.fetch_weather")
+    @mock.patch("govee.turn")
     @mock.patch("govee.color")
     @mock.patch("govee.brightness")
     @mock.patch("time.sleep")
     @mock.patch("time.time")
-    def test_fetch_at_top_of_hour(self, mock_time, mock_sleep, mock_brightness, mock_color, mock_fetch):
+    def test_fetch_at_top_of_hour(self, mock_time, mock_sleep, mock_brightness, mock_color, mock_turn, mock_fetch):
         """With fetch_on_the_hour=true, fetches at top of the hour, not before."""
         import arbiter
         import datetime
@@ -2455,11 +2633,12 @@ class TestFetchOnTheHour(StateDirMixin, unittest.TestCase):
         self.assertEqual(fetch_times[1], expected_second_fetch)
 
     @mock.patch("weather_sync.fetch_weather")
+    @mock.patch("govee.turn")
     @mock.patch("govee.color")
     @mock.patch("govee.brightness")
     @mock.patch("time.sleep")
     @mock.patch("time.time")
-    def test_interval_based_fetching(self, mock_time, mock_sleep, mock_brightness, mock_color, mock_fetch):
+    def test_interval_based_fetching(self, mock_time, mock_sleep, mock_brightness, mock_color, mock_turn, mock_fetch):
         """With fetch_on_the_hour=false, fetches every interval seconds."""
         import arbiter
         arbiter.set_mode("weather")
@@ -2493,11 +2672,12 @@ class TestFetchOnTheHour(StateDirMixin, unittest.TestCase):
         self.assertEqual(mock_fetch.call_count, 2)
 
     @mock.patch("weather_sync.fetch_weather")
+    @mock.patch("govee.turn")
     @mock.patch("govee.color")
     @mock.patch("govee.brightness")
     @mock.patch("time.sleep")
     @mock.patch("time.time")
-    def test_static_mode_sleep_until_next_hour(self, mock_time, mock_sleep, mock_brightness, mock_color, mock_fetch):
+    def test_static_mode_sleep_until_next_hour(self, mock_time, mock_sleep, mock_brightness, mock_color, mock_turn, mock_fetch):
         """In static mode with fetch_on_the_hour, sleep until next hour boundary."""
         import arbiter
         import datetime
@@ -2577,9 +2757,10 @@ class TestModeControl(StateDirMixin, unittest.TestCase):
         mock_brightness.assert_not_called()
 
     @mock.patch("weather_sync.fetch_weather")
+    @mock.patch("govee.turn")
     @mock.patch("govee.color")
     @mock.patch("govee.brightness")
-    def test_mode_weather_allows_weather(self, mock_brightness, mock_color, mock_fetch):
+    def test_mode_weather_allows_weather(self, mock_brightness, mock_color, mock_turn, mock_fetch):
         """When mode is weather, weather sync should send."""
         import arbiter
         arbiter.set_mode("weather")

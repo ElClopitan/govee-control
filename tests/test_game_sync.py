@@ -130,9 +130,10 @@ class TestRunOnce(StateDirMixin, unittest.TestCase):
 
     @mock.patch("agent_signal.sweep_and_restore")
     @mock.patch("game_sync.running_processes")
+    @mock.patch("govee.turn")
     @mock.patch("govee.color")
     @mock.patch("govee.brightness")
-    def test_game_detected(self, mock_brightness, mock_color, mock_processes, mock_sweep):
+    def test_game_detected(self, mock_brightness, mock_color, mock_turn, mock_processes, mock_sweep):
         """When a game is running, its profile is applied."""
         import arbiter
         arbiter.set_mode("game")
@@ -151,9 +152,10 @@ class TestRunOnce(StateDirMixin, unittest.TestCase):
 
     @mock.patch("agent_signal.sweep_and_restore")
     @mock.patch("game_sync.running_processes")
+    @mock.patch("govee.turn")
     @mock.patch("govee.color")
     @mock.patch("govee.brightness")
-    def test_no_game_default(self, mock_brightness, mock_color, mock_processes, mock_sweep):
+    def test_no_game_default(self, mock_brightness, mock_color, mock_turn, mock_processes, mock_sweep):
         """When no game is running, default profile is applied."""
         import arbiter
         arbiter.set_mode("game")
@@ -172,10 +174,11 @@ class TestRunOnce(StateDirMixin, unittest.TestCase):
 
     @mock.patch("agent_signal.sweep_and_restore")
     @mock.patch("game_sync.running_processes")
+    @mock.patch("govee.turn")
     @mock.patch("govee.color")
     @mock.patch("govee.brightness")
     @mock.patch("time.sleep")
-    def test_same_game_no_spam(self, mock_sleep, mock_brightness, mock_color, mock_processes, mock_sweep):
+    def test_same_game_no_spam(self, mock_sleep, mock_brightness, mock_color, mock_turn, mock_processes, mock_sweep):
         """Two iterations with the same game send commands only once."""
         import arbiter
         arbiter.set_mode("game")
@@ -232,10 +235,14 @@ class TestRunOnce(StateDirMixin, unittest.TestCase):
             pass
 
         # Should have sent game profile once, then off (not default profile)
+        # turn is called twice: once to power on at start, once to turn off when game ends
         self.assertEqual(mock_color.call_count, 1)
         self.assertEqual(mock_brightness.call_count, 1)
-        self.assertEqual(mock_turn.call_count, 1)
-        mock_turn.assert_called_with("192.168.1.50", False)
+        self.assertEqual(mock_turn.call_count, 2)
+        # First call: turn on
+        self.assertEqual(mock_turn.call_args_list[0][0], ("192.168.1.50", True))
+        # Second call: turn off
+        self.assertEqual(mock_turn.call_args_list[1][0], ("192.168.1.50", False))
 
 
 class TestConfigValidation(unittest.TestCase):
@@ -301,10 +308,11 @@ class TestNetworkErrorRecovery(StateDirMixin, unittest.TestCase):
 
     @mock.patch("agent_signal.sweep_and_restore")
     @mock.patch("game_sync.running_processes")
+    @mock.patch("govee.turn")
     @mock.patch("govee.color")
     @mock.patch("govee.brightness")
     @mock.patch("time.sleep")
-    def test_oserror_retried_next_iteration(self, mock_sleep, mock_brightness, mock_color, mock_processes, mock_sweep):
+    def test_oserror_retried_next_iteration(self, mock_sleep, mock_brightness, mock_color, mock_turn, mock_processes, mock_sweep):
         """OSError in apply_profile is caught; next iteration retries."""
         import arbiter
         arbiter.set_mode("game")
@@ -417,9 +425,10 @@ class TestDefaultNull(StateDirMixin, unittest.TestCase):
 
     @mock.patch("agent_signal.sweep_and_restore")
     @mock.patch("game_sync.running_processes")
+    @mock.patch("govee.turn")
     @mock.patch("govee.color")
     @mock.patch("govee.brightness")
-    def test_default_missing_uses_builtin(self, mock_brightness, mock_color, mock_processes, mock_sweep):
+    def test_default_missing_uses_builtin(self, mock_brightness, mock_color, mock_turn, mock_processes, mock_sweep):
         """With "default" key missing, built-in white/40 is used."""
         import arbiter
         arbiter.set_mode("game")
@@ -443,9 +452,10 @@ class TestDefaultNull(StateDirMixin, unittest.TestCase):
 
     @mock.patch("agent_signal.sweep_and_restore")
     @mock.patch("game_sync.running_processes")
+    @mock.patch("govee.turn")
     @mock.patch("govee.color")
     @mock.patch("govee.brightness")
-    def test_default_null_game_still_applies(self, mock_brightness, mock_color, mock_processes, mock_sweep):
+    def test_default_null_game_still_applies(self, mock_brightness, mock_color, mock_turn, mock_processes, mock_sweep):
         """With "default": null, a running game still applies its profile."""
         import arbiter
         arbiter.set_mode("game")
@@ -506,11 +516,12 @@ class TestSignalPriority(StateDirMixin, unittest.TestCase):
 
     @mock.patch("agent_signal.sweep_and_restore")
     @mock.patch("game_sync.running_processes")
+    @mock.patch("govee.turn")
     @mock.patch("govee.color")
     @mock.patch("govee.brightness")
     @mock.patch("time.sleep")
     @mock.patch("agent_signal.pid_alive")
-    def test_signal_cleared_reapplies_profile(self, mock_pid_alive, mock_sleep, mock_brightness, mock_color, mock_processes, mock_sweep):
+    def test_signal_cleared_reapplies_profile(self, mock_pid_alive, mock_sleep, mock_brightness, mock_color, mock_turn, mock_processes, mock_sweep):
         """After signal clears, game sync re-applies profile even if unchanged."""
         import arbiter
         import agent_signal
@@ -587,9 +598,10 @@ class TestGameActiveState(StateDirMixin, unittest.TestCase):
 
     @mock.patch("agent_signal.sweep_and_restore")
     @mock.patch("game_sync.running_processes")
+    @mock.patch("govee.turn")
     @mock.patch("govee.color")
     @mock.patch("govee.brightness")
-    def test_game_profile_writes_game_active(self, mock_brightness, mock_color, mock_processes, mock_sweep):
+    def test_game_profile_writes_game_active(self, mock_brightness, mock_color, mock_turn, mock_processes, mock_sweep):
         """When a game profile is active in loop mode, game_active.json is written."""
         import arbiter
         arbiter.set_mode("game")
@@ -616,10 +628,11 @@ class TestGameActiveState(StateDirMixin, unittest.TestCase):
 
     @mock.patch("agent_signal.sweep_and_restore")
     @mock.patch("game_sync.running_processes")
+    @mock.patch("govee.turn")
     @mock.patch("govee.color")
     @mock.patch("govee.brightness")
     @mock.patch("time.sleep")
-    def test_loop_mode_clears_on_exit(self, mock_sleep, mock_brightness, mock_color, mock_processes, mock_sweep):
+    def test_loop_mode_clears_on_exit(self, mock_sleep, mock_brightness, mock_color, mock_turn, mock_processes, mock_sweep):
         """Loop mode clears game_active.json on exit (finally block)."""
         import arbiter
         arbiter.set_mode("game")
@@ -644,9 +657,10 @@ class TestGameActiveState(StateDirMixin, unittest.TestCase):
 
     @mock.patch("agent_signal.sweep_and_restore")
     @mock.patch("game_sync.running_processes")
+    @mock.patch("govee.turn")
     @mock.patch("govee.color")
     @mock.patch("govee.brightness")
-    def test_once_mode_does_not_set_game_active(self, mock_brightness, mock_color, mock_processes, mock_sweep):
+    def test_once_mode_does_not_set_game_active(self, mock_brightness, mock_color, mock_turn, mock_processes, mock_sweep):
         """Once mode does not write game_active.json."""
         import arbiter
         arbiter.set_mode("game")
@@ -697,11 +711,12 @@ class TestGameActiveState(StateDirMixin, unittest.TestCase):
 
     @mock.patch("agent_signal.sweep_and_restore")
     @mock.patch("game_sync.running_processes")
+    @mock.patch("govee.turn")
     @mock.patch("govee.color")
     @mock.patch("govee.brightness")
     @mock.patch("time.sleep")
     @mock.patch("agent_signal.pid_alive")
-    def test_reapply_after_signal_clear_survives_failure(self, mock_pid_alive, mock_sleep, mock_brightness, mock_color, mock_processes, mock_sweep):
+    def test_reapply_after_signal_clear_survives_failure(self, mock_pid_alive, mock_sleep, mock_brightness, mock_color, mock_turn, mock_processes, mock_sweep):
         """After signal clears, re-apply even if first attempt fails.
 
         Pass 1: applies profile
@@ -868,6 +883,58 @@ class TestLogFileArgument(unittest.TestCase):
             self.assertFalse(os.path.exists(log_path))
 
 
+class TestPowerOnAfterBlock(StateDirMixin, unittest.TestCase):
+    """Test that game sync powers on strips after being blocked."""
+
+    def _make_config(self):
+        return {
+            "devices": [{"name": "left", "ip": "192.168.1.50"}],
+            "games": [
+                {"name": "Test Game", "exe": "testgame.exe", "color": "red", "brightness": 80},
+            ],
+            "default": None,
+        }
+
+    @mock.patch("agent_signal.sweep_and_restore")
+    @mock.patch("game_sync.running_processes")
+    @mock.patch("govee.turn")
+    @mock.patch("govee.color")
+    @mock.patch("govee.brightness")
+    @mock.patch("time.sleep")
+    def test_power_on_after_mode_block(self, mock_sleep, mock_brightness, mock_color, mock_turn, mock_processes, mock_sweep):
+        """Mode off -> mode game with game running -> turn(True) before color."""
+        import arbiter
+
+        # Start in off mode
+        arbiter.set_mode("off")
+
+        mock_processes.return_value = {"testgame.exe"}
+        config = self._make_config()
+
+        # Switch to game mode on first sleep
+        sleep_count = [0]
+        def sleep_side_effect(seconds):
+            sleep_count[0] += 1
+            if sleep_count[0] == 1:
+                arbiter.set_mode("game")
+            if sleep_count[0] >= 2:
+                raise KeyboardInterrupt()
+
+        mock_sleep.side_effect = sleep_side_effect
+
+        try:
+            game_sync.run(config, interval=1)
+        except KeyboardInterrupt:
+            pass
+
+        # Should have called turn(True) once before color
+        self.assertEqual(mock_turn.call_count, 1)
+        mock_turn.assert_called_with("192.168.1.50", True)
+        # Color should have been sent
+        self.assertEqual(mock_color.call_count, 1)
+        mock_color.assert_called_with("192.168.1.50", 255, 0, 0)
+
+
 class TestModeControl(StateDirMixin, unittest.TestCase):
     """Test that game sync obeys the selected mode."""
 
@@ -882,9 +949,10 @@ class TestModeControl(StateDirMixin, unittest.TestCase):
 
     @mock.patch("agent_signal.sweep_and_restore")
     @mock.patch("game_sync.running_processes")
+    @mock.patch("govee.turn")
     @mock.patch("govee.color")
     @mock.patch("govee.brightness")
-    def test_mode_game_with_game_running(self, mock_brightness, mock_color, mock_processes, mock_sweep):
+    def test_mode_game_with_game_running(self, mock_brightness, mock_color, mock_turn, mock_processes, mock_sweep):
         """Mode=game + game running -> profile applied."""
         import arbiter
         arbiter.set_mode("game")
@@ -1018,10 +1086,11 @@ class TestModeControl(StateDirMixin, unittest.TestCase):
 
     @mock.patch("agent_signal.sweep_and_restore")
     @mock.patch("game_sync.running_processes")
+    @mock.patch("govee.turn")
     @mock.patch("govee.color")
     @mock.patch("govee.brightness")
     @mock.patch("time.sleep")
-    def test_mode_switch_weather_to_game(self, mock_sleep, mock_brightness, mock_color, mock_processes, mock_sweep):
+    def test_mode_switch_weather_to_game(self, mock_sleep, mock_brightness, mock_color, mock_turn, mock_processes, mock_sweep):
         """Mode switches weather->game mid-run -> profile applied on the next loop."""
         import arbiter
         arbiter.set_mode("weather")

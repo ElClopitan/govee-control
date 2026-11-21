@@ -160,6 +160,7 @@ def run(config, interval=5, once=False, dry_run=False):
     blocked_was_active = False
     last_sweep_time = None  # for rate-limiting sweep_and_restore (monotonic)
     last_off_sent = False  # track if we already sent "off" for no-game state
+    need_power_on = True  # track if we need to power on when starting to drive
 
     try:
         while True:
@@ -192,6 +193,7 @@ def run(config, interval=5, once=False, dry_run=False):
                 # the signal clears always sends, even if the profile hasn't changed.
                 last_profile_name = None
                 last_off_sent = False
+                need_power_on = True
                 # Sweep stale session markers at most once every 60s while blocked
                 now = time.monotonic()
                 if last_sweep_time is None or (now - last_sweep_time) >= 60:
@@ -209,6 +211,7 @@ def run(config, interval=5, once=False, dry_run=False):
                 signal_was_active = False
                 last_profile_name = None
                 last_off_sent = False
+                need_power_on = True
             else:
                 signal_was_active = False
                 blocked_was_active = False
@@ -220,11 +223,13 @@ def run(config, interval=5, once=False, dry_run=False):
                         print("signal active; skipping game sync")
                         last_profile_name = None
                         last_off_sent = False
+                        need_power_on = True
                     elif arbiter.game_blocked():
                         logger.info("not in game mode; skipping game sync")
                         print("not in game mode; skipping game sync")
                         last_profile_name = None
                         last_off_sent = False
+                        need_power_on = True
                     else:
                         # In game mode with no game running: turn off once
                         # (except in --once mode, where we apply the default profile)
@@ -240,8 +245,7 @@ def run(config, interval=5, once=False, dry_run=False):
                                 else:
                                     last_off_sent = True
                                     last_profile_name = profile_name
-                            elif last_off_sent:
-                                last_profile_name = profile_name
+                                    need_power_on = True
                         elif profile is None and once:
                             if default is None:
                                 # --once mode with "default": null -> turn off
@@ -267,7 +271,7 @@ def run(config, interval=5, once=False, dry_run=False):
                                     last_profile_name = profile_name
                         else:
                             # Game started: turn on first, then apply profile
-                            if last_off_sent:
+                            if last_off_sent or need_power_on:
                                 logger.info("game started; turning lights on")
                                 print("game started; turning lights on")
                                 try:
@@ -285,6 +289,7 @@ def run(config, interval=5, once=False, dry_run=False):
                             else:
                                 last_profile_name = profile_name
                                 last_off_sent = False
+                                need_power_on = False
 
             if once:
                 break

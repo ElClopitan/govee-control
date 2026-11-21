@@ -3,7 +3,8 @@
 Determines which light source (agent signal, music sync, game sync, weather sync)
 should control the lights based on file-based state.
 
-Priority: agent signal > music sync > game sync > weather sync.
+The owner picks one mode (off/weather/game/music); only that mode may drive the strips.
+Agent signal wins over every mode except off.
 
 State files:
 - state/saved_state.json: exists when agent signal is active

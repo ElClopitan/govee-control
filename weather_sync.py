@@ -405,6 +405,7 @@ def run(config, once=False, interval=900, dry_run=False, rng=None, time_fn=None)
     last_color = None
     last_brightness = {}  # ip -> brightness (per-strip tracking)
     priority_was_active = False
+    need_power_on = True
     current_pattern = None
     pattern_start_time = None
     last_frame_time = {}  # ip -> last frame send time
@@ -423,8 +424,9 @@ def run(config, once=False, interval=900, dry_run=False, rng=None, time_fn=None)
         # Check signal/game priority
         if arbiter.weather_blocked():
             if not priority_was_active:
-                logger.info("skipped: signal/game active")
+                logger.info("skipped: signal active or mode is not weather")
             priority_was_active = True
+            need_power_on = True
             # Reset state so the first successful pass after the block
             # always sends, even if the colour hasn't changed.
             last_color = None
@@ -445,6 +447,26 @@ def run(config, once=False, interval=900, dry_run=False, rng=None, time_fn=None)
             continue
 
         priority_was_active = False
+
+        # Power on the strips if they were off/blocked
+        if need_power_on:
+            powered_on = True
+            for dev in devices:
+                ip = dev["ip"]
+                if dry_run:
+                    logger.info("[dry-run] on -> %s", ip)
+                    print(f"[dry-run] on -> {ip}")
+                else:
+                    try:
+                        govee.turn(ip, True)
+                        logger.info("on -> %s", ip)
+                        print(f"on -> {ip}")
+                    except OSError as e:
+                        logger.warning("failed to turn on %s: %s", ip, e)
+                        print(f"warning: failed to turn on {ip}: {e}", file=sys.stderr)
+                        powered_on = False
+            if powered_on:
+                need_power_on = False
 
         # Determine if we need to fetch weather
         if fetch_on_the_hour:
@@ -527,8 +549,9 @@ def run(config, once=False, interval=900, dry_run=False, rng=None, time_fn=None)
         # Re-check priority just before sending (race condition fix).
         # A signal or game could have become active during the weather fetch.
         if arbiter.weather_blocked():
-            logger.info("skipped: signal/game became active during fetch")
+            logger.info("skipped: signal active or mode is not weather during fetch")
             priority_was_active = True
+            need_power_on = True
             last_color = None
             last_brightness = {}
             current_pattern = None
