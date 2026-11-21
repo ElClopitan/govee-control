@@ -110,18 +110,63 @@ class TestDryRun(unittest.TestCase):
         # Should send: enable + 2 frames + disable = 4 calls
         self.assertGreater(mock_send.call_count, 0)
 
+    @mock.patch("segment_probe.time.sleep")
+    @mock.patch("segment_probe.govee.brightness")
+    @mock.patch("segment_probe.govee.turn")
+    @mock.patch("segment_probe.govee.send")
+    def test_turn_on_before_razer_enable(self, mock_send, mock_turn, mock_brightness, mock_sleep):
+        """Strip must be turned on at 80% before the first razer send."""
+        # Use a single mock manager to track call order
+        manager = mock.Mock()
+        manager.attach_mock(mock_turn, "turn")
+        manager.attach_mock(mock_brightness, "brightness")
+        manager.attach_mock(mock_send, "send")
+
+        segment_probe.run_probe(
+            ip="192.168.1.50",
+            leds=5,
+            pattern="walk",
+            duration=1,
+            fps=2,
+            dry_run=False,
+        )
+
+        # Verify brightness was called once with 80%
+        mock_brightness.assert_called_once_with("192.168.1.50", 80)
+
+        # Verify order: turn on and brightness must come before the first send
+        calls = manager.mock_calls
+        turn_on_idx = None
+        brightness_idx = None
+        first_send_idx = None
+        for i, call in enumerate(calls):
+            if call[0] == "turn" and call[1][1] is True and turn_on_idx is None:
+                turn_on_idx = i
+            if call[0] == "brightness" and brightness_idx is None:
+                brightness_idx = i
+            if call[0] == "send" and first_send_idx is None:
+                first_send_idx = i
+
+        self.assertIsNotNone(turn_on_idx, "turn on was never called")
+        self.assertIsNotNone(brightness_idx, "brightness was never called")
+        self.assertIsNotNone(first_send_idx, "send was never called")
+        self.assertLess(turn_on_idx, first_send_idx, "turn on must come before first razer send")
+        self.assertLess(brightness_idx, first_send_idx, "brightness must come before first razer send")
+
     @mock.patch("segment_probe.govee.turn")
     @mock.patch("segment_probe.govee.send")
     def test_error_during_frames_still_disables(self, mock_send, mock_turn):
         """If govee.send raises during frames, disable is still sent and strip is turned off."""
         call_count = [0]
 
-        def raise_on_second(*args, **kwargs):
+        def raise_on_fourth(*args, **kwargs):
             call_count[0] += 1
-            if call_count[0] == 2:
+            # Calls 1-3: turn on, brightness, enable
+            # Call 4: first frame (raise here)
+            if call_count[0] == 4:
                 raise OSError("network error")
 
-        mock_send.side_effect = raise_on_second
+        mock_send.side_effect = raise_on_fourth
 
         with self.assertRaises(OSError):
             segment_probe.run_probe(
@@ -133,15 +178,17 @@ class TestDryRun(unittest.TestCase):
                 dry_run=False,
             )
 
-        # Should have sent: enable (1), then raised on frame (2), then disable (3)
-        self.assertEqual(call_count[0], 3)
+        # Should have sent: turn on (1), brightness (2), enable (3),
+        # raised on frame (4), then disable (5)
+        self.assertEqual(call_count[0], 5)
         # Last send_razer call should be the disable packet
         last_call = mock_send.call_args_list[-1]
         msg = last_call[0][1]
         self.assertEqual(msg["msg"]["cmd"], "razer")
         self.assertEqual(msg["msg"]["data"]["pt"], "uwABsQAL")
-        # Strip should be turned off
-        mock_turn.assert_called_once_with("192.168.1.1", False)
+        # Strip should be turned off (second call to turn)
+        self.assertEqual(mock_turn.call_count, 2)
+        mock_turn.assert_called_with("192.168.1.1", False)
 
 
 

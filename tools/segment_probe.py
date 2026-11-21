@@ -125,6 +125,12 @@ def run_probe(ip, leds=20, pattern="walk", duration=10, fps=10, dry_run=False):
     """Run the segment probe against a device."""
     print(f"Probing {ip} with {leds} LEDs, pattern={pattern}, {duration}s")
 
+    # Turn the strip on so the owner can see the probe
+    if not dry_run:
+        govee.turn(ip, True)
+        govee.brightness(ip, 80)
+        print("Turned strip on at 80%")
+
     # Enable Razer mode
     enable_pt = razer_enable()
     if dry_run:
